@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\UIAMovie.Domain\UIAMovie.Domain.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="BCrypt.Net-Next" Version="4.1.0"/>
+        <PackageReference Include="FluentValidation" Version="12.1.1" />
+        <PackageReference Include="MailKit" Version="4.15.1" />
+        <PackageReference Include="Microsoft.AspNetCore.Http" Version="2.3.9" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.3" />
+    </ItemGroup>
+
+</Project>

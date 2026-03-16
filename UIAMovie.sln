@@ -1,0 +1,45 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIAMovie.API", "UIAMovie.API\UIAMovie.API.csproj", "{CCEC86F5-64B1-423C-BCBC-55BB7CF590B4}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{D1EF08EC-481F-423A-95FB-EC6362ACC68B}"
+	ProjectSection(SolutionItems) = preProject
+		compose.yaml = compose.yaml
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIAMovie.Domain", "UIAMovie.Domain\UIAMovie.Domain.csproj", "{529B3512-FCD0-4617-ADE4-A727DC110C2F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIAMovie.Application", "UIAMovie.Application\UIAMovie.Application.csproj", "{C9D652F2-1E52-49CC-871C-E1E94494E877}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIAMovie.Infrastructure", "UIAMovie.Infrastructure\UIAMovie.Infrastructure.csproj", "{C10BF152-6272-476A-9787-97F7DD5994CA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIAMovie.Tests", "UIAMovie.Tests\UIAMovie.Tests.csproj", "{C39DEE2B-62E4-4175-9209-80E79859F688}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{CCEC86F5-64B1-423C-BCBC-55BB7CF590B4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CCEC86F5-64B1-423C-BCBC-55BB7CF590B4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CCEC86F5-64B1-423C-BCBC-55BB7CF590B4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CCEC86F5-64B1-423C-BCBC-55BB7CF590B4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{529B3512-FCD0-4617-ADE4-A727DC110C2F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{529B3512-FCD0-4617-ADE4-A727DC110C2F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{529B3512-FCD0-4617-ADE4-A727DC110C2F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{529B3512-FCD0-4617-ADE4-A727DC110C2F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C9D652F2-1E52-49CC-871C-E1E94494E877}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C9D652F2-1E52-49CC-871C-E1E94494E877}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C9D652F2-1E52-49CC-871C-E1E94494E877}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C9D652F2-1E52-49CC-871C-E1E94494E877}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C10BF152-6272-476A-9787-97F7DD5994CA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C10BF152-6272-476A-9787-97F7DD5994CA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C10BF152-6272-476A-9787-97F7DD5994CA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C10BF152-6272-476A-9787-97F7DD5994CA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C39DEE2B-62E4-4175-9209-80E79859F688}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C39DEE2B-62E4-4175-9209-80E79859F688}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C39DEE2B-62E4-4175-9209-80E79859F688}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C39DEE2B-62E4-4175-9209-80E79859F688}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
