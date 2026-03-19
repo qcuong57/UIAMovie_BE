@@ -9,64 +9,69 @@ namespace UIAMovie.Application.Services;
 
 public interface IMovieService
 {
-    // ─── Movies ──────────────────────────────────────────────────────────────
     Task<PaginatedDTO<MovieDTO>> GetMoviesAsync(FilterMoviesDTO filter);
     Task<IEnumerable<MovieDTO>> GetTrendingMoviesAsync();
     Task<MovieDTO?> GetMovieByIdAsync(Guid movieId);
-    Task<MovieDTO?> GetMovieByTmdbIdAsync(int tmdbId); // ✅ THÊM: kiểm tra duplicate khi import
+    Task<MovieDTO?> GetMovieByTmdbIdAsync(int tmdbId);
     Task<Guid> CreateMovieAsync(CreateMovieDTO dto);
     Task<bool> UpdateMovieAsync(Guid movieId, UpdateMovieDTO dto);
     Task<bool> DeleteMovieAsync(Guid movieId);
-
-    // ─── Search & Filter ─────────────────────────────────────────────────────
     Task<IEnumerable<MovieDTO>> SearchMoviesAsync(string query);
     Task<IEnumerable<MovieDTO>> GetMoviesByGenreAsync(Guid genreId);
-
-    // ─── Videos ──────────────────────────────────────────────────────────────
     Task<bool> AddVideoAsync(Guid movieId, string videoUrl, string videoType, string? quality);
     Task<bool> DeleteVideoAsync(Guid videoId);
-
-    // ─── Favorites ───────────────────────────────────────────────────────────
     Task<bool> AddFavoriteAsync(Guid userId, Guid movieId);
     Task<bool> RemoveFavoriteAsync(Guid userId, Guid movieId);
     Task<IEnumerable<FavoriteDTO>> GetFavoritesAsync(Guid userId);
-
-    // ─── Watch History ────────────────────────────────────────────────────────
     Task UpdateWatchProgressAsync(Guid userId, Guid movieId, int progressMinutes, bool isCompleted);
     Task<IEnumerable<WatchHistoryDTO>> GetWatchHistoryAsync(Guid userId);
 }
 
 public class MovieService : IMovieService
 {
-    private readonly IRepository<Movie> _movieRepository;
-    private readonly IRepository<MovieVideo> _videoRepository;
-    private readonly IRepository<Favorite> _favoriteRepository;
-    private readonly IRepository<WatchHistory> _watchHistoryRepository;
-    private readonly ICacheService _cacheService;
+    // ← Đổi IRepository<Movie> → IMovieRepository
+    private readonly IMovieRepository  _movieRepository;
+    private readonly IRepository<MovieVideo>    _videoRepository;
+    private readonly IRepository<Favorite>      _favoriteRepository;
+    private readonly IRepository<WatchHistory>  _watchHistoryRepository;
+    private readonly IRepository<Person>        _personRepository;
+    private readonly IRepository<MovieCast>     _castRepository;
+    private readonly IRepository<MovieDirector> _directorRepository;
+    private readonly IRepository<MovieImage>    _imageRepository;
+    private readonly ICacheService              _cacheService;
 
     private const string TRENDING_CACHE_KEY = "movies:trending";
-    private const string GENRE_CACHE_KEY = "movies:genre:{0}";
-    private const string MOVIE_CACHE_KEY = "movie:{0}";
+    private const string GENRE_CACHE_KEY    = "movies:genre:{0}";
+    private const string MOVIE_CACHE_KEY    = "movie:{0}";
 
     public MovieService(
-        IRepository<Movie> movieRepository,
-        IRepository<MovieVideo> videoRepository,
-        IRepository<Favorite> favoriteRepository,
-        IRepository<WatchHistory> watchHistoryRepository,
-        ICacheService cacheService)
+        IMovieRepository            movieRepository,
+        IRepository<MovieVideo>     videoRepository,
+        IRepository<Favorite>       favoriteRepository,
+        IRepository<WatchHistory>   watchHistoryRepository,
+        IRepository<Person>         personRepository,
+        IRepository<MovieCast>      castRepository,
+        IRepository<MovieDirector>  directorRepository,
+        IRepository<MovieImage>     imageRepository,
+        ICacheService               cacheService)
     {
-        _movieRepository = movieRepository;
-        _videoRepository = videoRepository;
-        _favoriteRepository = favoriteRepository;
+        _movieRepository        = movieRepository;
+        _videoRepository        = videoRepository;
+        _favoriteRepository     = favoriteRepository;
         _watchHistoryRepository = watchHistoryRepository;
-        _cacheService = cacheService;
+        _personRepository       = personRepository;
+        _castRepository         = castRepository;
+        _directorRepository     = directorRepository;
+        _imageRepository        = imageRepository;
+        _cacheService           = cacheService;
     }
 
     // ─── Movies ──────────────────────────────────────────────────────────────
 
     public async Task<PaginatedDTO<MovieDTO>> GetMoviesAsync(FilterMoviesDTO filter)
     {
-        var movies = await _movieRepository.GetAllAsync();
+        // Dùng GetAllWithGenresAsync — có Genre name, không load cast/image nặng
+        var movies = await _movieRepository.GetAllWithGenresAsync();
 
         if (!string.IsNullOrWhiteSpace(filter.Search))
             movies = movies.Where(m =>
@@ -86,17 +91,11 @@ public class MovieService : IMovieService
         if (filter.ToReleaseDate.HasValue)
             movies = movies.Where(m => m.ReleaseDate <= filter.ToReleaseDate);
 
-        movies = filter.SortBy.ToLower() switch
+        movies = filter.SortBy?.ToLower() switch
         {
-            "title" => filter.SortDesc
-                ? movies.OrderByDescending(m => m.Title)
-                : movies.OrderBy(m => m.Title),
-            "releasedate" => filter.SortDesc
-                ? movies.OrderByDescending(m => m.ReleaseDate)
-                : movies.OrderBy(m => m.ReleaseDate),
-            _ => filter.SortDesc
-                ? movies.OrderByDescending(m => m.ImdbRating)
-                : movies.OrderBy(m => m.ImdbRating)
+            "title"       => filter.SortDesc ? movies.OrderByDescending(m => m.Title)       : movies.OrderBy(m => m.Title),
+            "releasedate" => filter.SortDesc ? movies.OrderByDescending(m => m.ReleaseDate) : movies.OrderBy(m => m.ReleaseDate),
+            _             => filter.SortDesc ? movies.OrderByDescending(m => m.ImdbRating)  : movies.OrderBy(m => m.ImdbRating)
         };
 
         var totalCount = movies.Count();
@@ -108,10 +107,10 @@ public class MovieService : IMovieService
 
         return new PaginatedDTO<MovieDTO>
         {
-            Items = items,
+            Items      = items,
             TotalCount = totalCount,
             PageNumber = filter.Page,
-            PageSize = filter.PageSize
+            PageSize   = filter.PageSize
         };
     }
 
@@ -120,7 +119,7 @@ public class MovieService : IMovieService
         var cached = await _cacheService.GetAsync<List<MovieDTO>>(TRENDING_CACHE_KEY);
         if (cached != null) return cached;
 
-        var movies = await _movieRepository.GetAllAsync();
+        var movies = await _movieRepository.GetAllWithGenresAsync();
         var trending = movies
             .OrderByDescending(m => m.ImdbRating)
             .Take(20)
@@ -137,7 +136,8 @@ public class MovieService : IMovieService
         var cached = await _cacheService.GetAsync<MovieDTO>(cacheKey);
         if (cached != null) return cached;
 
-        var movie = await _movieRepository.GetByIdAsync(movieId);
+        // ← Dùng GetByIdWithDetailsAsync — có đầy đủ Cast, Director, Images
+        var movie = await _movieRepository.GetByIdWithDetailsAsync(movieId);
         if (movie == null) return null;
 
         var dto = MapToDTO(movie);
@@ -145,11 +145,9 @@ public class MovieService : IMovieService
         return dto;
     }
 
-    // ✅ THÊM: Tìm phim theo TmdbId — dùng để kiểm tra duplicate trước khi import
     public async Task<MovieDTO?> GetMovieByTmdbIdAsync(int tmdbId)
     {
-        var movies = await _movieRepository.GetAllAsync();
-        var movie = movies.FirstOrDefault(m => m.TmdbId == tmdbId);
+        var movie = await _movieRepository.GetByTmdbIdAsync(tmdbId);
         return movie == null ? null : MapToDTO(movie);
     }
 
@@ -157,24 +155,27 @@ public class MovieService : IMovieService
     {
         var movie = new Movie
         {
-            Title = dto.Title,
-            // ✅ FIX: Description không được null — fallback về Title
-            Description = string.IsNullOrEmpty(dto.Description) ? dto.Title : dto.Description,
-            // ✅ FIX: Đảm bảo ReleaseDate luôn là UTC trước khi lưu vào PostgreSQL timestamptz
-            ReleaseDate = dto.ReleaseDate.HasValue
-                ? DateTime.SpecifyKind(dto.ReleaseDate.Value, DateTimeKind.Utc)
-                : null,
-            PosterUrl = dto.PosterUrl,
-            BackdropUrl = dto.BackdropUrl,
-            Duration = dto.Duration,
-            ImdbRating = dto.ImdbRating,
-            TmdbId = dto.TmdbId,
+            Title         = dto.Title,
+            Description   = string.IsNullOrEmpty(dto.Description) ? dto.Title : dto.Description,
+            ReleaseDate   = dto.ReleaseDate.HasValue
+                                ? DateTime.SpecifyKind(dto.ReleaseDate.Value, DateTimeKind.Utc)
+                                : null,
+            PosterUrl     = dto.PosterUrl,
+            BackdropUrl   = dto.BackdropUrl,
+            Duration      = dto.Duration,
+            ImdbRating    = dto.ImdbRating,
+            TmdbId        = dto.TmdbId,
             ContentRating = dto.ContentRating,
-            IsPublished = true
+            IsPublished   = true
         };
 
         await _movieRepository.AddAsync(movie);
         await _movieRepository.SaveChangesAsync();
+
+        if (dto.Cast.Any())     await SaveCastAsync(movie.Id, dto.Cast);
+        if (dto.Director != null) await SaveDirectorAsync(movie.Id, dto.Director);
+        if (dto.Images.Any())   await SaveImagesAsync(movie.Id, dto.Images);
+        if (dto.Trailers.Any()) await SaveTrailersAsync(movie.Id, dto.Trailers);
 
         await _cacheService.RemoveAsync(TRENDING_CACHE_KEY);
         return movie.Id;
@@ -185,17 +186,16 @@ public class MovieService : IMovieService
         var movie = await _movieRepository.GetByIdAsync(movieId);
         if (movie == null) return false;
 
-        movie.Title = dto.Title ?? movie.Title;
+        movie.Title       = dto.Title ?? movie.Title;
         movie.Description = dto.Description ?? movie.Description;
-        movie.ImdbRating = dto.ImdbRating ?? movie.ImdbRating;
-        movie.UpdatedAt = DateTime.UtcNow;
+        movie.ImdbRating  = dto.ImdbRating ?? movie.ImdbRating;
+        movie.UpdatedAt   = DateTime.UtcNow;
 
         _movieRepository.Update(movie);
         await _movieRepository.SaveChangesAsync();
 
         await _cacheService.RemoveAsync(string.Format(MOVIE_CACHE_KEY, movieId));
         await _cacheService.RemoveAsync(TRENDING_CACHE_KEY);
-
         return true;
     }
 
@@ -209,7 +209,6 @@ public class MovieService : IMovieService
 
         await _cacheService.RemoveAsync(string.Format(MOVIE_CACHE_KEY, movieId));
         await _cacheService.RemoveAsync(TRENDING_CACHE_KEY);
-
         return true;
     }
 
@@ -221,7 +220,7 @@ public class MovieService : IMovieService
         var cached = await _cacheService.GetAsync<List<MovieDTO>>(cacheKey);
         if (cached != null) return cached;
 
-        var movies = await _movieRepository.GetAllAsync();
+        var movies = await _movieRepository.GetAllWithGenresAsync();
         var results = movies
             .Where(m => m.Title.Contains(query, StringComparison.OrdinalIgnoreCase))
             .Select(MapToDTO)
@@ -237,7 +236,7 @@ public class MovieService : IMovieService
         var cached = await _cacheService.GetAsync<List<MovieDTO>>(cacheKey);
         if (cached != null) return cached;
 
-        var movies = await _movieRepository.GetAllAsync();
+        var movies = await _movieRepository.GetAllWithGenresAsync();
         var results = movies
             .Where(m => m.MovieGenres.Any(g => g.GenreId == genreId))
             .Select(MapToDTO)
@@ -254,16 +253,14 @@ public class MovieService : IMovieService
         var movie = await _movieRepository.GetByIdAsync(movieId);
         if (movie == null) return false;
 
-        var video = new MovieVideo
+        await _videoRepository.AddAsync(new MovieVideo
         {
-            MovieId = movieId,
-            VideoUrl = videoUrl,
-            VideoType = videoType,
-            Quality = quality,
+            MovieId     = movieId,
+            VideoUrl    = videoUrl,
+            VideoType   = videoType,
+            Quality     = quality,
             IsPublished = true
-        };
-
-        await _videoRepository.AddAsync(video);
+        });
         await _videoRepository.SaveChangesAsync();
 
         await _cacheService.RemoveAsync(string.Format(MOVIE_CACHE_KEY, movieId));
@@ -287,14 +284,9 @@ public class MovieService : IMovieService
     public async Task<bool> AddFavoriteAsync(Guid userId, Guid movieId)
     {
         var favorites = await _favoriteRepository.GetAllAsync();
-        var exists = favorites.Any(f => f.UserId == userId && f.MovieId == movieId);
-        if (exists) return false;
+        if (favorites.Any(f => f.UserId == userId && f.MovieId == movieId)) return false;
 
-        await _favoriteRepository.AddAsync(new Favorite
-        {
-            UserId = userId,
-            MovieId = movieId
-        });
+        await _favoriteRepository.AddAsync(new Favorite { UserId = userId, MovieId = movieId });
         await _favoriteRepository.SaveChangesAsync();
         return true;
     }
@@ -302,7 +294,7 @@ public class MovieService : IMovieService
     public async Task<bool> RemoveFavoriteAsync(Guid userId, Guid movieId)
     {
         var favorites = await _favoriteRepository.GetAllAsync();
-        var favorite = favorites.FirstOrDefault(f => f.UserId == userId && f.MovieId == movieId);
+        var favorite  = favorites.FirstOrDefault(f => f.UserId == userId && f.MovieId == movieId);
         if (favorite == null) return false;
 
         _favoriteRepository.Remove(favorite);
@@ -313,18 +305,18 @@ public class MovieService : IMovieService
     public async Task<IEnumerable<FavoriteDTO>> GetFavoritesAsync(Guid userId)
     {
         var favorites = await _favoriteRepository.GetAllAsync();
-        var movies = await _movieRepository.GetAllAsync();
+        var movies    = await _movieRepository.GetAllWithGenresAsync();
 
         return favorites
             .Where(f => f.UserId == userId)
             .Join(movies, f => f.MovieId, m => m.Id, (f, m) => new FavoriteDTO
             {
-                Id = f.Id,
-                MovieId = m.Id,
+                Id         = f.Id,
+                MovieId    = m.Id,
                 MovieTitle = m.Title,
-                PosterUrl = m.PosterUrl,
-                Rating = m.ImdbRating,
-                AddedAt = f.AddedAt
+                PosterUrl  = m.PosterUrl,
+                Rating     = m.ImdbRating,
+                AddedAt    = f.AddedAt
             })
             .OrderByDescending(f => f.AddedAt)
             .ToList();
@@ -336,23 +328,23 @@ public class MovieService : IMovieService
         Guid userId, Guid movieId, int progressMinutes, bool isCompleted)
     {
         var histories = await _watchHistoryRepository.GetAllAsync();
-        var existing = histories.FirstOrDefault(h => h.UserId == userId && h.MovieId == movieId);
+        var existing  = histories.FirstOrDefault(h => h.UserId == userId && h.MovieId == movieId);
 
         if (existing != null)
         {
             existing.ProgressMinutes = progressMinutes;
-            existing.IsCompleted = isCompleted;
-            existing.WatchedAt = DateTime.UtcNow;
+            existing.IsCompleted     = isCompleted;
+            existing.WatchedAt       = DateTime.UtcNow;
             _watchHistoryRepository.Update(existing);
         }
         else
         {
             await _watchHistoryRepository.AddAsync(new WatchHistory
             {
-                UserId = userId,
-                MovieId = movieId,
+                UserId          = userId,
+                MovieId         = movieId,
                 ProgressMinutes = progressMinutes,
-                IsCompleted = isCompleted
+                IsCompleted     = isCompleted
             });
         }
 
@@ -362,44 +354,172 @@ public class MovieService : IMovieService
     public async Task<IEnumerable<WatchHistoryDTO>> GetWatchHistoryAsync(Guid userId)
     {
         var histories = await _watchHistoryRepository.GetAllAsync();
-        var movies = await _movieRepository.GetAllAsync();
+        var movies    = await _movieRepository.GetAllWithGenresAsync();
 
         return histories
             .Where(h => h.UserId == userId)
             .Join(movies, h => h.MovieId, m => m.Id, (h, m) => new WatchHistoryDTO
             {
-                Id = h.Id,
-                MovieId = m.Id,
-                MovieTitle = m.Title,
-                PosterUrl = m.PosterUrl,
-                WatchedAt = h.WatchedAt,
+                Id              = h.Id,
+                MovieId         = m.Id,
+                MovieTitle      = m.Title,
+                PosterUrl       = m.PosterUrl,
+                WatchedAt       = h.WatchedAt,
                 ProgressMinutes = h.ProgressMinutes,
-                IsCompleted = h.IsCompleted
+                IsCompleted     = h.IsCompleted
             })
             .OrderByDescending(h => h.WatchedAt)
             .ToList();
     }
 
-    // ─── Helper ──────────────────────────────────────────────────────────────
+    // ─── Private: lưu cast / director / images / trailers ────────────────────
+
+    private async Task<Person> UpsertPersonAsync(int tmdbPersonId, string name, string? profileUrl)
+    {
+        var existing = await _personRepository.FindOneAsync(p => p.TmdbPersonId == tmdbPersonId);
+        if (existing != null) return existing;
+
+        var person = new Person
+        {
+            TmdbPersonId = tmdbPersonId,
+            Name         = name,
+            ProfileUrl   = profileUrl
+        };
+        await _personRepository.AddAsync(person);
+        await _personRepository.SaveChangesAsync();
+        return person;
+    }
+
+    private async Task SaveCastAsync(Guid movieId, List<ImportCastDTO> castList)
+    {
+        foreach (var c in castList)
+        {
+            var person = await UpsertPersonAsync(c.TmdbPersonId, c.Name, c.ProfileUrl);
+            await _castRepository.AddAsync(new MovieCast
+            {
+                MovieId   = movieId,
+                PersonId  = person.Id,
+                Character = c.Character,
+                Order     = c.Order
+            });
+        }
+        await _castRepository.SaveChangesAsync();
+    }
+
+    private async Task SaveDirectorAsync(Guid movieId, ImportDirectorDTO dto)
+    {
+        var person = await UpsertPersonAsync(dto.TmdbPersonId, dto.Name, dto.ProfileUrl);
+        await _directorRepository.AddAsync(new MovieDirector
+        {
+            MovieId  = movieId,
+            PersonId = person.Id
+        });
+        await _directorRepository.SaveChangesAsync();
+    }
+
+    private async Task SaveImagesAsync(Guid movieId, List<ImportImageDTO> images)
+    {
+        foreach (var img in images)
+        {
+            await _imageRepository.AddAsync(new MovieImage
+            {
+                MovieId   = movieId,
+                Url       = img.Url,
+                ImageType = img.ImageType
+            });
+        }
+        await _imageRepository.SaveChangesAsync();
+    }
+
+    private async Task SaveTrailersAsync(Guid movieId, List<ImportTrailerDTO> trailers)
+    {
+        foreach (var t in trailers)
+        {
+            await _videoRepository.AddAsync(new MovieVideo
+            {
+                MovieId     = movieId,
+                VideoUrl    = t.YoutubeUrl,   // full URL: https://www.youtube.com/watch?v=KEY
+                VideoType   = "trailer",
+                Quality     = t.Name,         // tận dụng Quality field lưu tên trailer
+                IsPublished = true
+            });
+        }
+        await _videoRepository.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Parse YouTube video ID từ các dạng URL phổ biến:
+    /// https://www.youtube.com/watch?v=abc123
+    /// https://youtu.be/abc123
+    /// </summary>
+    private static string? ExtractYoutubeKey(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return null;
+
+        // dạng watch?v=KEY
+        var v = System.Text.RegularExpressions.Regex.Match(url, @"[?&]v=([a-zA-Z0-9_-]{11})");
+        if (v.Success) return v.Groups[1].Value;
+
+        // dạng youtu.be/KEY
+        var s = System.Text.RegularExpressions.Regex.Match(url, @"youtu\.be/([a-zA-Z0-9_-]{11})");
+        if (s.Success) return s.Groups[1].Value;
+
+        return null;
+    }
+
+    // ─── MapToDTO ─────────────────────────────────────────────────────────────
 
     private static MovieDTO MapToDTO(Movie m) => new()
     {
-        Id = m.Id,
-        Title = m.Title,
+        Id          = m.Id,
+        Title       = m.Title,
         Description = m.Description,
         ReleaseDate = m.ReleaseDate,
-        PosterUrl = m.PosterUrl,
+        PosterUrl   = m.PosterUrl,
         BackdropUrl = m.BackdropUrl,
-        Duration = m.Duration,
-        Rating = m.ImdbRating,
-        Genres = m.MovieGenres?.Select(g => g.Genre?.Name ?? "").ToList() ?? new(),
-        Videos = m.MovieVideos?.Select(v => new MovieVideoDTO
-        {
-            Id = v.Id,
-            VideoUrl = v.VideoUrl,
-            VideoType = v.VideoType,
-            Duration = v.Duration,
-            Quality = v.Quality
-        }).ToList() ?? new()
+        Duration    = m.Duration,
+        Rating      = m.ImdbRating,
+
+        Genres = m.MovieGenres?
+            .Select(g => g.Genre?.Name ?? "")
+            .Where(n => n != "")
+            .ToList() ?? new(),
+
+        Videos = m.MovieVideos?
+            .Select(v => new MovieVideoDTO
+            {
+                Id        = v.Id,
+                VideoUrl  = v.VideoUrl,
+                VideoType = v.VideoType,
+                Duration  = v.Duration,
+                Quality   = v.Quality
+            }).ToList() ?? new(),
+
+        // Lấy YouTube key từ trailer đầu tiên (vd: "abc123" từ "https://youtu.be/abc123")
+        TrailerKey = m.MovieVideos?
+            .Where(v => v.VideoType == "trailer" && !string.IsNullOrEmpty(v.VideoUrl))
+            .Select(v => ExtractYoutubeKey(v.VideoUrl))
+            .FirstOrDefault(k => k != null),
+
+        Cast = m.MovieCasts?
+            .OrderBy(c => c.Order)
+            .Select(c => new MovieCastDTO
+            {
+                Name       = c.Person?.Name ?? "",
+                Character  = c.Character,
+                Order      = c.Order,
+                ProfileUrl = c.Person?.ProfileUrl
+            }).ToList() ?? new(),
+
+        Director = m.MovieDirectors?
+            .Select(d => d.Person?.Name)
+            .FirstOrDefault(),
+
+        Images = m.MovieImages?
+            .Select(i => new MovieImageDTO
+            {
+                Url       = i.Url,
+                ImageType = i.ImageType
+            }).ToList() ?? new()
     };
 }

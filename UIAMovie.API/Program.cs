@@ -29,6 +29,7 @@ builder.Services.AddScoped<ICacheService, RedisCacheService>();
 
 // Repositories
 builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
+builder.Services.AddScoped<IMovieRepository, MovieRepository>();
 // builder.Services.AddScoped<IRepository<RatingReview>, Repository<RatingReview>>();
 
 // Authentication
@@ -46,6 +47,10 @@ builder.Services.AddHttpClient();
 builder.Services.AddScoped<ITmdbService, TmdbService>();
 builder.Services.AddScoped<IRatingReviewService, RatingReviewService>();
 builder.Services.AddScoped<IGenreService, GenreService>();
+builder.Services.AddScoped<IRepository<Person>, Repository<Person>>();
+builder.Services.AddScoped<IRepository<MovieCast>, Repository<MovieCast>>();
+builder.Services.AddScoped<IRepository<MovieDirector>, Repository<MovieDirector>>();
+builder.Services.AddScoped<IRepository<MovieImage>, Repository<MovieImage>>();
 
 // Thêm Kafka
 // builder.Services.AddScoped<IKafkaProducer, KafkaProducer>();
@@ -72,12 +77,10 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 // CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowReactApp", policy =>
-    {
-        policy.WithOrigins("http://localhost:3000")
-            .AllowAnyMethod()
-            .AllowAnyHeader();
-    });
+    options.AddPolicy("AllowAll", policy =>
+        policy.AllowAnyOrigin()
+            .AllowAnyHeader()
+            .AllowAnyMethod());
 });
 
 builder.Services.AddControllers();
@@ -91,10 +94,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+
 // Thêm Middleware
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseMiddleware<JwtMiddleware>();
-app.UseCors("AllowReactApp");
+app.UseCors("AllowAll");
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

@@ -1,5 +1,6 @@
 ﻿// UIAMovie.Application/Services/RatingReviewService.cs
 
+using Microsoft.EntityFrameworkCore;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Domain.Entities;
@@ -67,14 +68,6 @@ public class RatingReviewService : IRatingReviewService
         if (dto.Rating < 1 || dto.Rating > 10)
             throw new ArgumentException("Đánh giá phải từ 1 đến 10");
 
-        // Check user already reviewed this movie
-        var existingReviews = await _reviewRepository.GetAllAsync();
-        var existing = existingReviews.FirstOrDefault(r =>
-            r.UserId == userId && r.MovieId == dto.MovieId);
-
-        if (existing != null)
-            throw new InvalidOperationException("Bạn đã đánh giá phim này rồi");
-
         // Create review
         var review = new RatingReview
         {
@@ -88,7 +81,34 @@ public class RatingReviewService : IRatingReviewService
         };
 
         await _reviewRepository.AddAsync(review);
-        await _reviewRepository.SaveChangesAsync();
+
+        try
+        {
+            await _reviewRepository.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // DB có unique constraint (UserId, MovieId) — user đã review phim này rồi,
+            // chuyển sang UPDATE thay vì INSERT
+            var existingReviews = await _reviewRepository.GetAllAsync();
+            var existing = existingReviews.FirstOrDefault(r =>
+                r.UserId == userId && r.MovieId == dto.MovieId);
+
+            if (existing != null)
+            {
+                existing.Rating = dto.Rating;
+                existing.ReviewText = dto.ReviewText;
+                existing.IsSpoiler = dto.IsSpoiler;
+                existing.UpdatedAt = DateTime.UtcNow;
+                _reviewRepository.Update(existing);
+                await _reviewRepository.SaveChangesAsync();
+
+                await InvalidateMovieCacheAsync(dto.MovieId);
+                await InvalidateUserCacheAsync(userId);
+                return existing.Id;
+            }
+            throw;
+        }
 
         // Invalidate cache
         await InvalidateMovieCacheAsync(dto.MovieId);

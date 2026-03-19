@@ -14,17 +14,17 @@ namespace UIAMovie.Controllers;
 [Route("api/[controller]")]
 public class MoviesController : ControllerBase
 {
-    private readonly IMovieService _movieService;
-    private readonly ITmdbService _tmdbService;
+    private readonly IMovieService      _movieService;
+    private readonly ITmdbService       _tmdbService;
     private readonly ICloudinaryService _cloudinaryService;
 
     public MoviesController(
-        IMovieService movieService,
-        ITmdbService tmdbService,
+        IMovieService      movieService,
+        ITmdbService       tmdbService,
         ICloudinaryService cloudinaryService)
     {
-        _movieService = movieService;
-        _tmdbService = tmdbService;
+        _movieService      = movieService;
+        _tmdbService       = tmdbService;
         _cloudinaryService = cloudinaryService;
     }
 
@@ -120,41 +120,89 @@ public class MoviesController : ControllerBase
         return Ok(genres);
     }
 
-    /// <summary>[Admin] Import phim từ TMDB vào database</summary>
+    /// <summary>
+    /// [Admin] Import phim từ TMDB vào database.
+    /// Tự động kéo về: detail + top 10 cast + đạo diễn + ảnh + trailers.
+    /// </summary>
     [HttpPost("tmdb/{tmdbId:int}/import")]
     [Authorize(Roles = Roles.Admin)]
     public async Task<IActionResult> ImportFromTmdb(int tmdbId)
     {
-        // ✅ FIX 1: Kiểm tra duplicate — tránh insert trùng TmdbId gây unique constraint exception
+        // Kiểm tra duplicate
         var existing = await _movieService.GetMovieByTmdbIdAsync(tmdbId);
         if (existing != null)
             return Conflict(new { message = "Phim này đã được import rồi", movieId = existing.Id });
 
-        var tmdbMovie = await _tmdbService.GetMovieAsync(tmdbId);
-        if (tmdbMovie == null)
+        // Gọi song song 4 TMDB APIs (detail + credits + images + trailers)
+        var full = await _tmdbService.GetFullMovieAsync(tmdbId);
+        if (full == null)
             return NotFound(new { message = "Không tìm thấy phim trên TMDB" });
 
         var dto = new CreateMovieDTO
         {
-            TmdbId = tmdbMovie.Id,
-            Title = tmdbMovie.Title,
-            // ✅ FIX 2: Overview có thể null/empty với một số phim TMDB
-            Description = string.IsNullOrEmpty(tmdbMovie.Overview) ? tmdbMovie.Title : tmdbMovie.Overview,
-            // ✅ FIX 3: DateTime.TryParse trả về Kind=Unspecified — PostgreSQL timestamptz
-            // chỉ chấp nhận Kind=Utc, phải SpecifyKind sau khi parse
-            ReleaseDate = DateTime.TryParse(tmdbMovie.ReleaseDate, out var d)
-                ? DateTime.SpecifyKind(d, DateTimeKind.Utc)
-                : null,
-            PosterUrl = tmdbMovie.PosterUrl,
-            BackdropUrl = tmdbMovie.BackdropUrl,
-            Duration = tmdbMovie.Runtime,
-            ImdbRating = (decimal)tmdbMovie.VoteAverage,
-            GenreIds = new List<Guid>()
+            TmdbId      = full.Detail.Id,
+            Title       = full.Detail.Title,
+            Description = string.IsNullOrEmpty(full.Detail.Overview)
+                            ? full.Detail.Title
+                            : full.Detail.Overview,
+            ReleaseDate = DateTime.TryParse(full.Detail.ReleaseDate, out var d)
+                            ? DateTime.SpecifyKind(d, DateTimeKind.Utc)
+                            : null,
+            PosterUrl   = full.Detail.PosterUrl,
+            BackdropUrl = full.Detail.BackdropUrl,
+            Duration    = full.Detail.Runtime,
+            ImdbRating  = (decimal)full.Detail.VoteAverage,
+            GenreIds    = new List<Guid>(),
+
+            // ← Cast (top 10)
+            Cast = full.Cast.Select(c => new ImportCastDTO
+            {
+                TmdbPersonId = c.Id,
+                Name         = c.Name,
+                Character    = c.Character,
+                Order        = c.Order,
+                ProfileUrl   = c.ProfileUrl
+            }).ToList(),
+
+            // ← Đạo diễn
+            Director = full.Director == null ? null : new ImportDirectorDTO
+            {
+                TmdbPersonId = full.Director.Id,
+                Name         = full.Director.Name,
+                ProfileUrl   = full.Director.ProfileUrl
+            },
+
+            // ← Hình ảnh (5 backdrops + 3 posters)
+            Images = full.Backdrops.Select(i => new ImportImageDTO
+            {
+                Url       = i.Url!,
+                ImageType = "backdrop"
+            })
+            .Concat(full.Posters.Select(i => new ImportImageDTO
+            {
+                Url       = i.Url!,
+                ImageType = "poster"
+            }))
+            .ToList(),
+
+            // ← Trailers (YouTube URL)
+            Trailers = full.Trailers.Select(t => new ImportTrailerDTO
+            {
+                YoutubeUrl = t.YoutubeUrl,
+                Name       = t.Name
+            }).ToList()
         };
 
         var movieId = await _movieService.CreateMovieAsync(dto);
-        return CreatedAtAction(nameof(GetById), new { id = movieId },
-            new { message = "Import thành công", movieId });
+
+        return CreatedAtAction(nameof(GetById), new { id = movieId }, new
+        {
+            message    = "Import thành công",
+            movieId,
+            castCount  = dto.Cast.Count,
+            imageCount = dto.Images.Count,
+            hasDirector = dto.Director != null
+        });
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -230,7 +278,6 @@ public class MoviesController : ControllerBase
     // FAVORITES — Yêu thích
     // ═══════════════════════════════════════════════════════════════════
 
-    /// <summary>Lấy danh sách phim yêu thích</summary>
     [HttpGet("favorites")]
     [Authorize]
     public async Task<IActionResult> GetFavorites()
@@ -239,7 +286,6 @@ public class MoviesController : ControllerBase
         return Ok(favorites);
     }
 
-    /// <summary>Thêm phim vào yêu thích</summary>
     [HttpPost("favorites")]
     [Authorize]
     public async Task<IActionResult> AddFavorite([FromBody] AddFavoriteDTO dto)
@@ -250,7 +296,6 @@ public class MoviesController : ControllerBase
             : BadRequest(new { message = "Phim đã có trong danh sách yêu thích" });
     }
 
-    /// <summary>Xóa phim khỏi yêu thích</summary>
     [HttpDelete("favorites/{movieId:guid}")]
     [Authorize]
     public async Task<IActionResult> RemoveFavorite(Guid movieId)
@@ -265,7 +310,6 @@ public class MoviesController : ControllerBase
     // WATCH HISTORY — Lịch sử xem
     // ═══════════════════════════════════════════════════════════════════
 
-    /// <summary>Lấy lịch sử xem</summary>
     [HttpGet("history")]
     [Authorize]
     public async Task<IActionResult> GetWatchHistory()
@@ -274,7 +318,6 @@ public class MoviesController : ControllerBase
         return Ok(history);
     }
 
-    /// <summary>Cập nhật tiến trình xem phim</summary>
     [HttpPost("history")]
     [Authorize]
     public async Task<IActionResult> UpdateWatchProgress([FromBody] UpdateWatchProgressDTO dto)
