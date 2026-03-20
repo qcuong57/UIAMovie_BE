@@ -120,9 +120,26 @@ public class MoviesController : ControllerBase
         return Ok(genres);
     }
 
+    /// <summary>Lấy tiểu sử chi tiết một người từ TMDB</summary>
+    [HttpGet("tmdb/person/{tmdbPersonId:int}")]
+    public async Task<IActionResult> GetTmdbPerson(int tmdbPersonId)
+    {
+        var person = await _tmdbService.GetPersonDetailAsync(tmdbPersonId);
+        return person == null ? NotFound() : Ok(person);
+    }
+
+    /// <summary>Lấy danh sách ảnh profile của một người từ TMDB</summary>
+    [HttpGet("tmdb/person/{tmdbPersonId:int}/images")]
+    public async Task<IActionResult> GetTmdbPersonImages(int tmdbPersonId)
+    {
+        var images = await _tmdbService.GetPersonImagesAsync(tmdbPersonId);
+        return Ok(images);
+    }
+
     /// <summary>
     /// [Admin] Import phim từ TMDB vào database.
-    /// Tự động kéo về: detail + top 10 cast + đạo diễn + ảnh + trailers.
+    /// Tự động kéo về: detail + top 10 cast + đạo diễn + ảnh phim + trailers
+    ///                 + tiểu sử + ảnh profile của từng diễn viên / đạo diễn.
     /// </summary>
     [HttpPost("tmdb/{tmdbId:int}/import")]
     [Authorize(Roles = Roles.Admin)]
@@ -133,7 +150,7 @@ public class MoviesController : ControllerBase
         if (existing != null)
             return Conflict(new { message = "Phim này đã được import rồi", movieId = existing.Id });
 
-        // Gọi song song 4 TMDB APIs (detail + credits + images + trailers)
+        // Gọi song song: detail + credits + images + trailers + person detail + person images
         var full = await _tmdbService.GetFullMovieAsync(tmdbId);
         if (full == null)
             return NotFound(new { message = "Không tìm thấy phim trên TMDB" });
@@ -154,38 +171,51 @@ public class MoviesController : ControllerBase
             ImdbRating  = (decimal)full.Detail.VoteAverage,
             GenreIds    = new List<Guid>(),
 
-            // ← Cast (top 10)
-            Cast = full.Cast.Select(c => new ImportCastDTO
+            // Cast (top 10) — kèm tiểu sử + ảnh profile
+            Cast = full.Cast.Select(c =>
             {
-                TmdbPersonId = c.Id,
-                Name         = c.Name,
-                Character    = c.Character,
-                Order        = c.Order,
-                ProfileUrl   = c.ProfileUrl
+                var bio    = full.PersonDetails.GetValueOrDefault(c.Id);
+                var images = full.PersonImages.GetValueOrDefault(c.Id) ?? new();
+                return new ImportCastDTO
+                {
+                    TmdbPersonId  = c.Id,
+                    Name          = c.Name,
+                    Character     = c.Character,
+                    Order         = c.Order,
+                    ProfileUrl    = c.ProfileUrl,
+                    Biography     = bio?.Biography,
+                    Birthday      = bio?.Birthday,
+                    PlaceOfBirth  = bio?.PlaceOfBirth,
+                    ProfileImages = images
+                };
             }).ToList(),
 
-            // ← Đạo diễn
+            // Đạo diễn — kèm tiểu sử + ảnh profile
             Director = full.Director == null ? null : new ImportDirectorDTO
             {
-                TmdbPersonId = full.Director.Id,
-                Name         = full.Director.Name,
-                ProfileUrl   = full.Director.ProfileUrl
+                TmdbPersonId  = full.Director.Id,
+                Name          = full.Director.Name,
+                ProfileUrl    = full.Director.ProfileUrl,
+                Biography     = full.PersonDetails.GetValueOrDefault(full.Director.Id)?.Biography,
+                Birthday      = full.PersonDetails.GetValueOrDefault(full.Director.Id)?.Birthday,
+                PlaceOfBirth  = full.PersonDetails.GetValueOrDefault(full.Director.Id)?.PlaceOfBirth,
+                ProfileImages = full.PersonImages.GetValueOrDefault(full.Director.Id) ?? new()
             },
 
-            // ← Hình ảnh (5 backdrops + 3 posters)
+            // Hình ảnh phim (5 backdrops + 3 posters)
             Images = full.Backdrops.Select(i => new ImportImageDTO
-            {
-                Url       = i.Url!,
-                ImageType = "backdrop"
-            })
-            .Concat(full.Posters.Select(i => new ImportImageDTO
-            {
-                Url       = i.Url!,
-                ImageType = "poster"
-            }))
-            .ToList(),
+                {
+                    Url       = i.Url!,
+                    ImageType = "backdrop"
+                })
+                .Concat(full.Posters.Select(i => new ImportImageDTO
+                {
+                    Url       = i.Url!,
+                    ImageType = "poster"
+                }))
+                .ToList(),
 
-            // ← Trailers (YouTube URL)
+            // Trailers
             Trailers = full.Trailers.Select(t => new ImportTrailerDTO
             {
                 YoutubeUrl = t.YoutubeUrl,
@@ -197,11 +227,13 @@ public class MoviesController : ControllerBase
 
         return CreatedAtAction(nameof(GetById), new { id = movieId }, new
         {
-            message    = "Import thành công",
+            message              = "Import thành công",
             movieId,
-            castCount  = dto.Cast.Count,
-            imageCount = dto.Images.Count,
-            hasDirector = dto.Director != null
+            castCount            = dto.Cast.Count,
+            imageCount           = dto.Images.Count,
+            hasDirector          = dto.Director != null,
+            personBioCount       = full.PersonDetails.Count(kv => !string.IsNullOrEmpty(kv.Value?.Biography)),
+            personImageCount     = full.PersonImages.Count(kv => kv.Value.Any())
         });
     }
 
@@ -304,6 +336,23 @@ public class MoviesController : ControllerBase
         return success
             ? Ok(new { message = "Đã xóa khỏi yêu thích" })
             : NotFound(new { message = "Không tìm thấy trong danh sách yêu thích" });
+    }
+
+    [HttpGet("search/actor")]
+    public async Task<IActionResult> SearchByActor([FromQuery] string actorName)
+    {
+        if (string.IsNullOrWhiteSpace(actorName))
+            return BadRequest(new { message = "Tên diễn viên không được để trống" });
+
+        var movies = await _movieService.SearchMoviesByActorAsync(actorName);
+        return Ok(movies);
+    }
+    
+    [HttpGet("person/{personId:guid}/images")]
+    public async Task<IActionResult> GetPersonImagesFromDb(Guid personId)
+    {
+        var images = await _movieService.GetPersonImagesAsync(personId);
+        return Ok(images);
     }
 
     // ═══════════════════════════════════════════════════════════════════

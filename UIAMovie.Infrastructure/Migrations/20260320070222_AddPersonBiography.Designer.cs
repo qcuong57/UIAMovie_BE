@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using UIAMovie.Infrastructure.Data;
@@ -11,9 +12,11 @@ using UIAMovie.Infrastructure.Data;
 namespace UIAMovie.Infrastructure.Migrations
 {
     [DbContext(typeof(MovieDbContext))]
-    partial class MovieDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260320070222_AddPersonBiography")]
+    partial class AddPersonBiography
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -308,29 +311,6 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.ToTable("People");
                 });
 
-            modelBuilder.Entity("UIAMovie.Domain.Entities.PersonImage", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("PersonId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Url")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PersonId");
-
-                    b.ToTable("PersonImages");
-                });
-
             modelBuilder.Entity("UIAMovie.Domain.Entities.RatingReview", b =>
                 {
                     b.Property<Guid>("Id")
@@ -439,7 +419,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$QgpE3P7254pcvT2P4boymOxlRBz33wDHynj4/obkA5VebssgZxjsq",
+                            PasswordHash = "$2a$11$ARrYA81U2hOhTdOZ0wV98.u7KMsLl.QngDAADzp6SAG0366ckTvV2",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
@@ -612,17 +592,6 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Navigation("Movie");
                 });
 
-            modelBuilder.Entity("UIAMovie.Domain.Entities.PersonImage", b =>
-                {
-                    b.HasOne("UIAMovie.Domain.Entities.Person", "Person")
-                        .WithMany("Images")
-                        .HasForeignKey("PersonId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Person");
-                });
-
             modelBuilder.Entity("UIAMovie.Domain.Entities.RatingReview", b =>
                 {
                     b.HasOne("UIAMovie.Domain.Entities.Movie", "Movie")
@@ -698,8 +667,6 @@ namespace UIAMovie.Infrastructure.Migrations
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.Person", b =>
                 {
-                    b.Navigation("Images");
-
                     b.Navigation("MovieCasts");
 
                     b.Navigation("MovieDirectors");

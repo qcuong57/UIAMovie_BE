@@ -19,6 +19,7 @@ public interface IAuthService
     Task<bool> ResetPasswordAsync(string email, string code, string newPassword);
     
     Task<LoginResponseDTO?> RefreshTokenAsync(string refreshToken);
+    Task<(bool Success, string Message)> Disable2FAAsync(Guid userId, string code);
 }
 
 public class AuthService : IAuthService
@@ -110,6 +111,7 @@ public class AuthService : IAuthService
         var user = await _userRepository.GetByIdAsync(userId);
         if (user == null) return null;
 
+        // Nếu chưa bật 2FA (flow enable): bật lên sau khi verify thành công
         if (!user.Is2FaEnabled)
         {
             user.Is2FaEnabled = true;
@@ -118,6 +120,26 @@ public class AuthService : IAuthService
         }
 
         return await CreateSessionAsync(user);
+    }
+
+    public async Task<(bool Success, string Message)> Disable2FAAsync(Guid userId, string code)
+    {
+        // Xác thực OTP
+        var stored = await _cacheService.GetAsync<string>($"{OTP_PREFIX}{userId}");
+        if (stored == null || stored != code)
+            return (false, "Mã OTP không đúng hoặc đã hết hạn");
+
+        await _cacheService.RemoveAsync($"{OTP_PREFIX}{userId}");
+
+        var user = await _userRepository.GetByIdAsync(userId);
+        if (user == null) return (false, "Không tìm thấy user");
+
+        user.Is2FaEnabled = false;
+        user.UpdatedAt    = DateTime.UtcNow;
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync();
+
+        return (true, "Đã tắt xác thực 2 lớp");
     }
 
     public async Task<bool> ForgotPasswordAsync(string email)

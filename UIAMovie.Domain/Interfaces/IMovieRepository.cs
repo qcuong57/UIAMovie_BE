@@ -19,4 +19,10 @@ public interface IMovieRepository : IRepository<Movie>
  
     /// <summary>Tìm phim theo TmdbId — kiểm tra duplicate khi import.</summary>
     Task<Movie?> GetByTmdbIdAsync(int tmdbId);
+
+    /// <summary>
+    /// Tìm phim có diễn viên tên chứa <paramref name="actorName"/> (case-insensitive).
+    /// Include đầy đủ Cast + Person, Director + Person, Images, Videos, Genres.
+    /// </summary>
+    Task<IEnumerable<Movie>> GetMoviesByActorNameAsync(string actorName);
 }

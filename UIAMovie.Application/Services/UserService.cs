@@ -158,6 +158,7 @@ public class UserService : IUserService
         AvatarUrl        = u.AvatarUrl,
         SubscriptionType = u.SubscriptionType,
         Role             = u.Role,
+        Is2FaEnabled     = u.Is2FaEnabled, // ← map trạng thái 2FA
         CreatedAt        = u.CreatedAt
     };
 }

@@ -102,6 +102,20 @@ public class AuthController : ControllerBase
             : BadRequest(new { message = "Không thể gửi OTP" });
     }
 
+    /// <summary>
+    /// Tắt 2FA — xác thực OTP rồi set Is2FaEnabled = false.
+    /// Body: { userId, code }
+    /// </summary>
+    [HttpPost("2fa/disable")]
+    [Authorize]
+    public async Task<IActionResult> Disable2FA([FromBody] VerifyOtpDTO dto)
+    {
+        var userId = GetUserId();
+        var (success, message) = await _authService.Disable2FAAsync(userId, dto.Code);
+
+        return success ? Ok(new { message }) : BadRequest(new { message });
+    }
+
     // ─── Forgot / Reset Password ─────────────────────────────────────────────
 
     /// <summary>Quên mật khẩu — gửi OTP về email</summary>

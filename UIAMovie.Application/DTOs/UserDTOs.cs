@@ -52,7 +52,8 @@ public class UserDTO
     public string Username { get; set; }
     public string? AvatarUrl { get; set; }
     public string SubscriptionType { get; set; }
-    public string Role { get; set; } // ← Thêm Role
+    public string Role { get; set; }
+    public bool Is2FaEnabled { get; set; } // ← Trạng thái 2FA
     public DateTime CreatedAt { get; set; }
 }
 

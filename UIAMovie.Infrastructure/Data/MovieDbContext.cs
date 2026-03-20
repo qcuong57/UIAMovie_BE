@@ -16,14 +16,15 @@ public class MovieDbContext : DbContext
 
     public DbSet<Movie>         Movies         { get; set; }
     public DbSet<MovieVideo>    MovieVideos    { get; set; }
-    public DbSet<MovieImage>    MovieImages    { get; set; }    // ← mới
+    public DbSet<MovieImage>    MovieImages    { get; set; }
 
     public DbSet<Genre>         Genres         { get; set; }
     public DbSet<MovieGenre>    MovieGenres    { get; set; }
 
-    public DbSet<Person>        People         { get; set; }    // ← mới
-    public DbSet<MovieCast>     MovieCasts     { get; set; }    // ← mới
-    public DbSet<MovieDirector> MovieDirectors { get; set; }    // ← mới
+    public DbSet<Person>        People         { get; set; }
+    public DbSet<PersonImage>   PersonImages   { get; set; }   // ← mới
+    public DbSet<MovieCast>     MovieCasts     { get; set; }
+    public DbSet<MovieDirector> MovieDirectors { get; set; }
 
     public DbSet<Favorite>      Favorites      { get; set; }
     public DbSet<WatchHistory>  WatchHistories { get; set; }
@@ -56,7 +57,6 @@ public class MovieDbContext : DbContext
         modelBuilder.Entity<Movie>(entity =>
         {
             entity.HasKey(e => e.Id);
-            // Filter null để không bị unique conflict khi tạo phim thủ công
             entity.HasIndex(e => e.TmdbId).IsUnique().HasFilter("\"TmdbId\" IS NOT NULL");
             entity.Property(e => e.ImdbRating).HasPrecision(4, 1);
         });
@@ -109,10 +109,19 @@ public class MovieDbContext : DbContext
             entity.HasIndex(e => e.TmdbPersonId).IsUnique().HasFilter("\"TmdbPersonId\" IS NOT NULL");
         });
 
+        // ── PersonImage ───────────────────────────────────────────────────────
+        modelBuilder.Entity<PersonImage>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasOne(e => e.Person)
+                  .WithMany(p => p.Images)
+                  .HasForeignKey(e => e.PersonId)
+                  .OnDelete(DeleteBehavior.Cascade); // xóa người → xóa ảnh theo
+        });
+
         modelBuilder.Entity<MovieCast>(entity =>
         {
             entity.HasKey(e => e.Id);
-            // Cùng 1 diễn viên không xuất hiện 2 lần trong 1 phim
             entity.HasIndex(e => new { e.MovieId, e.PersonId }).IsUnique();
 
             entity.HasOne(e => e.Movie)
@@ -123,7 +132,7 @@ public class MovieDbContext : DbContext
             entity.HasOne(e => e.Person)
                   .WithMany(p => p.MovieCasts)
                   .HasForeignKey(e => e.PersonId)
-                  .OnDelete(DeleteBehavior.Restrict); // xóa phim không kéo theo xóa người
+                  .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<MovieDirector>(entity =>
@@ -163,7 +172,6 @@ public class MovieDbContext : DbContext
         modelBuilder.Entity<WatchHistory>(entity =>
         {
             entity.HasKey(e => e.Id);
-            // 1 user chỉ có 1 record cho 1 phim — update thay vì insert mới
             entity.HasIndex(e => new { e.UserId, e.MovieId }).IsUnique();
 
             entity.HasOne(e => e.User)
@@ -181,7 +189,6 @@ public class MovieDbContext : DbContext
         modelBuilder.Entity<RatingReview>(entity =>
         {
             entity.HasKey(e => e.Id);
-            // Không unique — cho phép 1 user review nhiều lần trên cùng 1 phim
             entity.HasIndex(e => new { e.UserId, e.MovieId });
 
             entity.HasOne(r => r.User)
@@ -211,4 +218,4 @@ public class MovieDbContext : DbContext
             UpdatedAt        = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
         });
     }
-}   
+}
