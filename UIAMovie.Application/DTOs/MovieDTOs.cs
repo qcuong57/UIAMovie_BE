@@ -12,6 +12,8 @@ public class MovieDTO
     public string?   BackdropUrl { get; set; }
     public int?      Duration    { get; set; }
     public decimal?  Rating      { get; set; }
+    /// <summary>Mã quốc gia sản xuất — ISO 3166-1 alpha-2, VD: "US", "KR", "JP"</summary>
+    public string?   OriginCountry { get; set; }
 
     public List<string>        Genres     { get; set; } = new();
     public List<MovieVideoDTO> Videos     { get; set; } = new();
@@ -37,6 +39,8 @@ public class CreateMovieDTO
     public int?      Duration      { get; set; }
     public decimal?  ImdbRating    { get; set; }
     public string?   ContentRating { get; set; }
+    /// <summary>Mã quốc gia sản xuất — ISO 3166-1 alpha-2, VD: "US", "KR"</summary>
+    public string?   OriginCountry { get; set; }
     public List<Guid> GenreIds     { get; set; } = new();
 
     public List<ImportCastDTO>    Cast     { get; set; } = new();

@@ -26,6 +26,8 @@ public interface IMovieService
     Task<IEnumerable<FavoriteDTO>> GetFavoritesAsync(Guid userId);
     Task UpdateWatchProgressAsync(Guid userId, Guid movieId, int progressMinutes, bool isCompleted);
     Task<IEnumerable<WatchHistoryDTO>> GetWatchHistoryAsync(Guid userId);
+    Task<bool> DeleteWatchHistoryAsync(Guid userId, Guid historyId);
+    Task ClearWatchHistoryAsync(Guid userId);
     Task<IEnumerable<string>> GetPersonImagesAsync(Guid personId);
 }
 
@@ -40,6 +42,7 @@ public class MovieService : IMovieService
     private readonly IRepository<MovieCast>      _castRepository;
     private readonly IRepository<MovieDirector>  _directorRepository;
     private readonly IRepository<MovieImage>     _imageRepository;
+    private readonly IRepository<MovieGenre>     _movieGenreRepository;
     private readonly ICacheService               _cacheService;
 
     private const string TRENDING_CACHE_KEY = "movies:trending";
@@ -56,6 +59,7 @@ public class MovieService : IMovieService
         IRepository<MovieCast>      castRepository,
         IRepository<MovieDirector>  directorRepository,
         IRepository<MovieImage>     imageRepository,
+        IRepository<MovieGenre>     movieGenreRepository,
         ICacheService               cacheService)
     {
         _movieRepository        = movieRepository;
@@ -67,6 +71,7 @@ public class MovieService : IMovieService
         _castRepository         = castRepository;
         _directorRepository     = directorRepository;
         _imageRepository        = imageRepository;
+        _movieGenreRepository   = movieGenreRepository;
         _cacheService           = cacheService;
     }
 
@@ -93,6 +98,11 @@ public class MovieService : IMovieService
             movies = movies.Where(m => m.ReleaseDate >= filter.FromReleaseDate);
         if (filter.ToReleaseDate.HasValue)
             movies = movies.Where(m => m.ReleaseDate <= filter.ToReleaseDate);
+
+        if (!string.IsNullOrWhiteSpace(filter.OriginCountry))
+            movies = movies.Where(m =>
+                m.OriginCountry != null &&
+                m.OriginCountry.Equals(filter.OriginCountry.Trim(), StringComparison.OrdinalIgnoreCase));
 
         movies = filter.SortBy?.ToLower() switch
         {
@@ -136,7 +146,7 @@ public class MovieService : IMovieService
     public async Task<MovieDTO?> GetMovieByIdAsync(Guid movieId)
     {
         var cacheKey = string.Format(MOVIE_CACHE_KEY, movieId);
-        var cached = await _cacheService.GetAsync<MovieDTO>(cacheKey);
+        var cached   = await _cacheService.GetAsync<MovieDTO>(cacheKey);
         if (cached != null) return cached;
 
         var movie = await _movieRepository.GetByIdWithDetailsAsync(movieId);
@@ -168,21 +178,26 @@ public class MovieService : IMovieService
             ImdbRating    = dto.ImdbRating,
             TmdbId        = dto.TmdbId,
             ContentRating = dto.ContentRating,
+            OriginCountry = dto.OriginCountry,
             IsPublished   = true
         };
 
         await _movieRepository.AddAsync(movie);
         await _movieRepository.SaveChangesAsync();
 
-        if (dto.Cast.Any())       await SaveCastAsync(movie.Id, dto.Cast);
+        // Lưu genres trước để MovieGenres có sẵn khi response
+        if (dto.GenreIds.Any())  await SaveGenresAsync(movie.Id, dto.GenreIds);
+        if (dto.Cast.Any())      await SaveCastAsync(movie.Id, dto.Cast);
         if (dto.Director != null) await SaveDirectorAsync(movie.Id, dto.Director);
-        if (dto.Images.Any())     await SaveImagesAsync(movie.Id, dto.Images);
-        if (dto.Trailers.Any())   await SaveTrailersAsync(movie.Id, dto.Trailers);
+        if (dto.Images.Any())    await SaveImagesAsync(movie.Id, dto.Images);
+        if (dto.Trailers.Any())  await SaveTrailersAsync(movie.Id, dto.Trailers);
 
-        // ✅ FIX: Xoá cache SAU KHI đã lưu toàn bộ cast + ảnh
-        // để lần gọi GetMovieByIdAsync tiếp theo đọc lại từ DB với đầy đủ dữ liệu
+        // Xóa cache sau khi đã lưu toàn bộ dữ liệu
         await _cacheService.RemoveAsync(string.Format(MOVIE_CACHE_KEY, movie.Id));
         await _cacheService.RemoveAsync(TRENDING_CACHE_KEY);
+        // Xóa genre cache cho từng thể loại vừa gán — tránh cache cũ thiếu phim mới
+        foreach (var genreId in dto.GenreIds)
+            await _cacheService.RemoveAsync(string.Format(GENRE_CACHE_KEY, genreId));
 
         return movie.Id;
     }
@@ -202,40 +217,43 @@ public class MovieService : IMovieService
 
         await _cacheService.RemoveAsync(string.Format(MOVIE_CACHE_KEY, movieId));
         await _cacheService.RemoveAsync(TRENDING_CACHE_KEY);
+        // Xóa genre cache liên quan đến phim này
+        var movieWithGenres = await _movieRepository.GetByIdWithDetailsAsync(movieId);
+        if (movieWithGenres != null)
+            foreach (var mg in movieWithGenres.MovieGenres)
+                await _cacheService.RemoveAsync(string.Format(GENRE_CACHE_KEY, mg.GenreId));
         return true;
     }
 
     public async Task<bool> DeleteMovieAsync(Guid movieId)
     {
-        // Dùng GetByIdWithDetailsAsync để load đầy đủ Cast + Director
         var movie = await _movieRepository.GetByIdWithDetailsAsync(movieId);
         if (movie == null) return false;
 
-        // Thu thập PersonId của tất cả cast + director trong phim này
         var personIds = movie.MovieCasts
             .Select(c => c.PersonId)
             .Concat(movie.MovieDirectors.Select(d => d.PersonId))
             .Distinct()
             .ToList();
 
-        // Xóa phim → MovieCast + MovieDirector + MovieImage + MovieVideo tự cascade
+        // Lấy genre ids trước khi xóa để clear cache sau
+        var genreIds = movie.MovieGenres.Select(mg => mg.GenreId).ToList();
+
+        // Xóa phim → MovieCast + MovieDirector + MovieImage + MovieVideo + MovieGenre tự cascade
         _movieRepository.Remove(movie);
         await _movieRepository.SaveChangesAsync();
 
         // Xóa Person không còn xuất hiện ở bất kỳ phim nào khác
         foreach (var personId in personIds)
         {
-            var stillInCast = await _castRepository
-                .FindOneAsync(c => c.PersonId == personId);
-            var stillInDir  = await _directorRepository
-                .FindOneAsync(d => d.PersonId == personId);
+            var stillInCast = await _castRepository.FindOneAsync(c => c.PersonId == personId);
+            var stillInDir  = await _directorRepository.FindOneAsync(d => d.PersonId == personId);
 
             if (stillInCast == null && stillInDir == null)
             {
                 var person = await _personRepository.GetByIdAsync(personId);
                 if (person != null)
                 {
-                    // PersonImage tự cascade theo Person
                     _personRepository.Remove(person);
                     await _personRepository.SaveChangesAsync();
                 }
@@ -244,6 +262,8 @@ public class MovieService : IMovieService
 
         await _cacheService.RemoveAsync(string.Format(MOVIE_CACHE_KEY, movieId));
         await _cacheService.RemoveAsync(TRENDING_CACHE_KEY);
+        foreach (var genreId in genreIds)
+            await _cacheService.RemoveAsync(string.Format(GENRE_CACHE_KEY, genreId));
         return true;
     }
 
@@ -252,7 +272,7 @@ public class MovieService : IMovieService
     public async Task<IEnumerable<MovieDTO>> SearchMoviesAsync(string query)
     {
         var cacheKey = $"search:{query.ToLower()}";
-        var cached = await _cacheService.GetAsync<List<MovieDTO>>(cacheKey);
+        var cached   = await _cacheService.GetAsync<List<MovieDTO>>(cacheKey);
         if (cached != null) return cached;
 
         var movies = await _movieRepository.GetAllWithGenresAsync();
@@ -271,10 +291,10 @@ public class MovieService : IMovieService
             return Enumerable.Empty<MovieDTO>();
 
         var cacheKey = $"search:actor:{actorName.ToLower().Trim()}";
-        var cached = await _cacheService.GetAsync<List<MovieDTO>>(cacheKey);
+        var cached   = await _cacheService.GetAsync<List<MovieDTO>>(cacheKey);
         if (cached != null) return cached;
 
-        var movies = await _movieRepository.GetMoviesByActorNameAsync(actorName);
+        var movies  = await _movieRepository.GetMoviesByActorNameAsync(actorName);
         var results = movies.Select(MapToDTO).ToList();
 
         await _cacheService.SetAsync(cacheKey, results, TimeSpan.FromMinutes(10));
@@ -284,7 +304,7 @@ public class MovieService : IMovieService
     public async Task<IEnumerable<MovieDTO>> GetMoviesByGenreAsync(Guid genreId)
     {
         var cacheKey = string.Format(GENRE_CACHE_KEY, genreId);
-        var cached = await _cacheService.GetAsync<List<MovieDTO>>(cacheKey);
+        var cached   = await _cacheService.GetAsync<List<MovieDTO>>(cacheKey);
         if (cached != null) return cached;
 
         var movies = await _movieRepository.GetAllWithGenresAsync();
@@ -293,7 +313,7 @@ public class MovieService : IMovieService
             .Select(MapToDTO)
             .ToList();
 
-        await _cacheService.SetAsync(cacheKey, results, TimeSpan.FromHours(1));
+        await _cacheService.SetAsync(cacheKey, results, TimeSpan.FromMinutes(15));
         return results;
     }
 
@@ -423,7 +443,53 @@ public class MovieService : IMovieService
             .ToList();
     }
 
-    // ─── Private: lưu cast / director / images / trailers ────────────────────
+    public async Task<bool> DeleteWatchHistoryAsync(Guid userId, Guid historyId)
+    {
+        var histories = await _watchHistoryRepository.GetAllAsync();
+        var record    = histories.FirstOrDefault(h => h.Id == historyId && h.UserId == userId);
+
+        if (record == null) return false;
+
+        _watchHistoryRepository.Remove(record);
+        await _watchHistoryRepository.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task ClearWatchHistoryAsync(Guid userId)
+    {
+        var histories = await _watchHistoryRepository.GetAllAsync();
+        var userRecords = histories.Where(h => h.UserId == userId).ToList();
+
+        foreach (var record in userRecords)
+            _watchHistoryRepository.Remove(record);
+
+        await _watchHistoryRepository.SaveChangesAsync();
+    }
+
+    // ─── Private: lưu genres / cast / director / images / trailers ───────────
+
+    /// <summary>
+    /// Lưu MovieGenre records cho phim.
+    /// Tự động bỏ qua duplicate nếu gọi nhiều lần.
+    /// </summary>
+    private async Task SaveGenresAsync(Guid movieId, List<Guid> genreIds)
+    {
+        foreach (var genreId in genreIds.Distinct())
+        {
+            var exists = await _movieGenreRepository.FindOneAsync(
+                x => x.MovieId == movieId && x.GenreId == genreId);
+
+            if (exists == null)
+            {
+                await _movieGenreRepository.AddAsync(new MovieGenre
+                {
+                    MovieId = movieId,
+                    GenreId = genreId
+                });
+            }
+        }
+        await _movieGenreRepository.SaveChangesAsync();
+    }
 
     private async Task<Person> UpsertPersonAsync(
         int     tmdbPersonId,
@@ -437,7 +503,6 @@ public class MovieService : IMovieService
 
         if (existing != null)
         {
-            // Bổ sung tiểu sử nếu trước đó chưa có
             if (string.IsNullOrEmpty(existing.Biography) && !string.IsNullOrEmpty(biography))
             {
                 existing.Biography    = biography;
@@ -492,10 +557,8 @@ public class MovieService : IMovieService
                 c.TmdbPersonId, c.Name, c.ProfileUrl,
                 c.Biography, c.Birthday, c.PlaceOfBirth);
 
-            // Lưu ảnh profile vào bảng PersonImages
             await SavePersonImagesAsync(person.Id, c.ProfileImages);
 
-            // Tránh duplicate cast trong cùng một phim
             var existingCast = await _castRepository.FindOneAsync(
                 x => x.MovieId == movieId && x.PersonId == person.Id);
 
@@ -519,10 +582,8 @@ public class MovieService : IMovieService
             dto.TmdbPersonId, dto.Name, dto.ProfileUrl,
             dto.Biography, dto.Birthday, dto.PlaceOfBirth);
 
-        // Lưu ảnh profile vào bảng PersonImages
         await SavePersonImagesAsync(person.Id, dto.ProfileImages);
 
-        // Tránh duplicate director trong cùng một phim
         var existingDirector = await _directorRepository.FindOneAsync(
             x => x.MovieId == movieId && x.PersonId == person.Id);
 
@@ -592,6 +653,7 @@ public class MovieService : IMovieService
         BackdropUrl = m.BackdropUrl,
         Duration    = m.Duration,
         Rating      = m.ImdbRating,
+        OriginCountry = m.OriginCountry,
 
         Genres = m.MovieGenres?
             .Select(g => g.Genre?.Name ?? "")
@@ -618,16 +680,14 @@ public class MovieService : IMovieService
             .Where(c => c.Person != null)
             .Select(c => new MovieCastDTO
             {
-                Name         = c.Person!.Name,
-                Character    = c.Character,
-                Order        = c.Order,
-                ProfileUrl   = c.Person.ProfileUrl,
-                TmdbPersonId = c.Person.TmdbPersonId,
-                Biography    = c.Person.Biography,
-                Birthday     = c.Person.Birthday,
-                PlaceOfBirth = c.Person.PlaceOfBirth,
-
-                // ✅ Map ảnh profile từ DB — đã được include trong GetByIdWithDetailsAsync
+                Name          = c.Person!.Name,
+                Character     = c.Character,
+                Order         = c.Order,
+                ProfileUrl    = c.Person.ProfileUrl,
+                TmdbPersonId  = c.Person.TmdbPersonId,
+                Biography     = c.Person.Biography,
+                Birthday      = c.Person.Birthday,
+                PlaceOfBirth  = c.Person.PlaceOfBirth,
                 ProfileImages = c.Person.Images
                     .OrderByDescending(i => i.CreatedAt)
                     .Select(i => i.Url)
@@ -642,14 +702,12 @@ public class MovieService : IMovieService
             .Where(d => d.Person != null)
             .Select(d => new PersonDetailDTO
             {
-                Name         = d.Person!.Name,
-                ProfileUrl   = d.Person.ProfileUrl,
-                TmdbPersonId = d.Person.TmdbPersonId,
-                Biography    = d.Person.Biography,
-                Birthday     = d.Person.Birthday,
-                PlaceOfBirth = d.Person.PlaceOfBirth,
-
-                // ✅ Map ảnh profile từ DB — đã được include trong GetByIdWithDetailsAsync
+                Name          = d.Person!.Name,
+                ProfileUrl    = d.Person.ProfileUrl,
+                TmdbPersonId  = d.Person.TmdbPersonId,
+                Biography     = d.Person.Biography,
+                Birthday      = d.Person.Birthday,
+                PlaceOfBirth  = d.Person.PlaceOfBirth,
                 ProfileImages = d.Person.Images
                     .OrderByDescending(i => i.CreatedAt)
                     .Select(i => i.Url)
@@ -664,6 +722,7 @@ public class MovieService : IMovieService
                 ImageType = i.ImageType
             }).ToList() ?? new()
     };
+
     public async Task<IEnumerable<string>> GetPersonImagesAsync(Guid personId)
     {
         var images = await _personImageRepository.FindAsync(i => i.PersonId == personId);

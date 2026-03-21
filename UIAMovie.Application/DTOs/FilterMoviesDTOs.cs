@@ -8,6 +8,8 @@ public class FilterMoviesDTO
     public DateTime? FromReleaseDate { get; set; }
     public DateTime? ToReleaseDate { get; set; }
     public string? Search { get; set; }
+    /// <summary>Lọc theo quốc gia sản xuất — ISO 3166-1 alpha-2, VD: "US", "KR", "JP"</summary>
+    public string? OriginCountry { get; set; }
     public int Page { get; set; } = 1;
     public int PageSize { get; set; } = 20;
     public string SortBy { get; set; } = "rating"; // rating, title, releaseDate

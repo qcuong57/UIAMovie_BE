@@ -17,20 +17,55 @@ public class MoviesController : ControllerBase
     private readonly IMovieService      _movieService;
     private readonly ITmdbService       _tmdbService;
     private readonly ICloudinaryService _cloudinaryService;
+    private readonly IGenreService      _genreService;
 
     public MoviesController(
         IMovieService      movieService,
         ITmdbService       tmdbService,
-        ICloudinaryService cloudinaryService)
+        ICloudinaryService cloudinaryService,
+        IGenreService      genreService)
     {
         _movieService      = movieService;
         _tmdbService       = tmdbService;
         _cloudinaryService = cloudinaryService;
+        _genreService      = genreService;
     }
 
     // ═══════════════════════════════════════════════════════════════════
     // PUBLIC — Không cần đăng nhập
     // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>Lấy phim theo quốc gia sản xuất — VD: US, KR, JP, CN, FR</summary>
+    [HttpGet("country/{country}")]
+    public async Task<IActionResult> GetByCountry(string country)
+    {
+        if (string.IsNullOrWhiteSpace(country))
+            return BadRequest(new { message = "Mã quốc gia không được để trống" });
+
+        var filter = new FilterMoviesDTO
+        {
+            OriginCountry = country.Trim().ToUpper(),
+            PageSize      = 200,
+            SortBy        = "rating",
+            SortDesc      = true
+        };
+        var result = await _movieService.GetMoviesAsync(filter);
+        return Ok(result);
+    }
+
+    /// <summary>Lấy danh sách quốc gia có phim trong DB</summary>
+    [HttpGet("countries")]
+    public async Task<IActionResult> GetAvailableCountries()
+    {
+        var all = await _movieService.GetMoviesAsync(new FilterMoviesDTO { PageSize = 9999 });
+        var countries = all.Items
+            .Where(m => !string.IsNullOrEmpty(m.OriginCountry))
+            .Select(m => m.OriginCountry!)
+            .Distinct()
+            .OrderBy(c => c)
+            .ToList();
+        return Ok(countries);
+    }
 
     /// <summary>Lấy danh sách phim — lọc, tìm kiếm, phân trang</summary>
     [HttpGet]
@@ -112,7 +147,7 @@ public class MoviesController : ControllerBase
         return Ok(trailers);
     }
 
-    /// <summary>Lấy danh sách genre từ TMDB</summary>
+    /// <summary>Lấy danh sách genre từ TMDB (chưa lưu vào DB)</summary>
     [HttpGet("tmdb/genres")]
     public async Task<IActionResult> GetTmdbGenres()
     {
@@ -140,6 +175,9 @@ public class MoviesController : ControllerBase
     /// [Admin] Import phim từ TMDB vào database.
     /// Tự động kéo về: detail + top 10 cast + đạo diễn + ảnh phim + trailers
     ///                 + tiểu sử + ảnh profile của từng diễn viên / đạo diễn.
+    ///
+    /// LƯU Ý: Gọi POST /api/genres/sync-tmdb trước để đảm bảo genre đã có trong DB,
+    ///         nếu không genre sẽ không được gán cho phim.
     /// </summary>
     [HttpPost("tmdb/{tmdbId:int}/import")]
     [Authorize(Roles = Roles.Admin)]
@@ -155,6 +193,11 @@ public class MoviesController : ControllerBase
         if (full == null)
             return NotFound(new { message = "Không tìm thấy phim trên TMDB" });
 
+        // Resolve TMDB genre ids → Guid trong DB
+        // full.Detail.Genres là List<TmdbGenreDTO> từ TMDB detail response
+        var genreIds = await _genreService.ResolveGenreIdsFromTmdbAsync(
+            full.Detail.Genres.Select(g => g.Id));
+
         var dto = new CreateMovieDTO
         {
             TmdbId      = full.Detail.Id,
@@ -169,7 +212,8 @@ public class MoviesController : ControllerBase
             BackdropUrl = full.Detail.BackdropUrl,
             Duration    = full.Detail.Runtime,
             ImdbRating  = (decimal)full.Detail.VoteAverage,
-            GenreIds    = new List<Guid>(),
+            OriginCountry = full.Detail.OriginCountry.FirstOrDefault(),
+            GenreIds    = genreIds, // ← đã resolve từ TMDB genre ids
 
             // Cast (top 10) — kèm tiểu sử + ảnh profile
             Cast = full.Cast.Select(c =>
@@ -203,16 +247,10 @@ public class MoviesController : ControllerBase
             },
 
             // Hình ảnh phim (5 backdrops + 3 posters)
-            Images = full.Backdrops.Select(i => new ImportImageDTO
-                {
-                    Url       = i.Url!,
-                    ImageType = "backdrop"
-                })
-                .Concat(full.Posters.Select(i => new ImportImageDTO
-                {
-                    Url       = i.Url!,
-                    ImageType = "poster"
-                }))
+            Images = full.Backdrops
+                .Select(i => new ImportImageDTO { Url = i.Url!, ImageType = "backdrop" })
+                .Concat(full.Posters
+                    .Select(i => new ImportImageDTO { Url = i.Url!, ImageType = "poster" }))
                 .ToList(),
 
             // Trailers
@@ -227,13 +265,14 @@ public class MoviesController : ControllerBase
 
         return CreatedAtAction(nameof(GetById), new { id = movieId }, new
         {
-            message              = "Import thành công",
+            message          = "Import thành công",
             movieId,
-            castCount            = dto.Cast.Count,
-            imageCount           = dto.Images.Count,
-            hasDirector          = dto.Director != null,
-            personBioCount       = full.PersonDetails.Count(kv => !string.IsNullOrEmpty(kv.Value?.Biography)),
-            personImageCount     = full.PersonImages.Count(kv => kv.Value.Any())
+            genreCount       = genreIds.Count,
+            castCount        = dto.Cast.Count,
+            imageCount       = dto.Images.Count,
+            hasDirector      = dto.Director != null,
+            personBioCount   = full.PersonDetails.Count(kv => !string.IsNullOrEmpty(kv.Value?.Biography)),
+            personImageCount = full.PersonImages.Count(kv => kv.Value.Any())
         });
     }
 
@@ -338,6 +377,10 @@ public class MoviesController : ControllerBase
             : NotFound(new { message = "Không tìm thấy trong danh sách yêu thích" });
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // SEARCH
+    // ═══════════════════════════════════════════════════════════════════
+
     [HttpGet("search/actor")]
     public async Task<IActionResult> SearchByActor([FromQuery] string actorName)
     {
@@ -347,7 +390,7 @@ public class MoviesController : ControllerBase
         var movies = await _movieService.SearchMoviesByActorAsync(actorName);
         return Ok(movies);
     }
-    
+
     [HttpGet("person/{personId:guid}/images")]
     public async Task<IActionResult> GetPersonImagesFromDb(Guid personId)
     {
@@ -375,6 +418,23 @@ public class MoviesController : ControllerBase
             GetUserId(), dto.MovieId, dto.ProgressMinutes, dto.IsCompleted);
 
         return Ok(new { message = "Đã cập nhật tiến trình xem" });
+    }
+
+    [HttpDelete("history/{historyId:guid}")]
+    [Authorize]
+    public async Task<IActionResult> DeleteWatchHistory(Guid historyId)
+    {
+        var success = await _movieService.DeleteWatchHistoryAsync(GetUserId(), historyId);
+        if (!success) return NotFound(new { message = "Không tìm thấy lịch sử xem" });
+        return Ok(new { message = "Đã xóa" });
+    }
+
+    [HttpDelete("history")]
+    [Authorize]
+    public async Task<IActionResult> ClearWatchHistory()
+    {
+        await _movieService.ClearWatchHistoryAsync(GetUserId());
+        return Ok(new { message = "Đã xóa toàn bộ lịch sử xem" });
     }
 
     // ─── Helper ──────────────────────────────────────────────────────────────

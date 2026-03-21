@@ -12,6 +12,8 @@ public class TmdbMovieDTO
     [JsonPropertyName("backdrop_path")] public string? BackdropPath { get; set; }
     [JsonPropertyName("vote_average")]  public double VoteAverage  { get; set; }
     [JsonPropertyName("genre_ids")]     public List<int> GenreIds  { get; set; } = new();
+    /// <summary>Mã quốc gia sản xuất — ISO 3166-1 alpha-2, VD: ["US"], ["KR"]</summary>
+    [JsonPropertyName("origin_country")] public List<string> OriginCountry { get; set; } = new();
     public string? PosterUrl   { get; set; }
     public string? BackdropUrl { get; set; }
 }

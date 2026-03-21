@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Services;
 using UIAMovie.Domain.Constants;
+using UIAMovie.Infrastructure.Configuration;
 
 namespace UIAMovie.Controllers;
 
@@ -13,10 +14,12 @@ namespace UIAMovie.Controllers;
 public class GenresController : ControllerBase
 {
     private readonly IGenreService _genreService;
+    private readonly ITmdbService  _tmdbService;
 
-    public GenresController(IGenreService genreService)
+    public GenresController(IGenreService genreService, ITmdbService tmdbService)
     {
         _genreService = genreService;
+        _tmdbService  = tmdbService;
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -97,8 +100,30 @@ public class GenresController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
-            // Genre đang được dùng bởi phim — không cho xóa
             return Conflict(new { message = ex.Message });
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // TMDB Sync
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// [Admin] Đồng bộ genre từ TMDB vào database.
+    /// Gọi endpoint này trước khi import phim để đảm bảo genre đã có trong DB.
+    /// - Genre chưa có → thêm mới.
+    /// - Genre đã có nhưng TMDB đổi tên → cập nhật tên.
+    /// </summary>
+    [HttpPost("sync-tmdb")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> SyncFromTmdb()
+    {
+        var tmdbGenres = await _tmdbService.GetGenresAsync();
+        var created    = await _genreService.SyncFromTmdbAsync(tmdbGenres);
+        return Ok(new
+        {
+            message      = "Đồng bộ genre từ TMDB thành công",
+            createdCount = created
+        });
     }
 }

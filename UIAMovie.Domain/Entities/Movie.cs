@@ -11,7 +11,9 @@ public class Movie
     public string? BackdropUrl { get; set; }
     public int? Duration { get; set; }
     public decimal? ImdbRating { get; set; }
-    public string? ContentRating { get; set; }
+    public string? ContentRating  { get; set; }
+    /// <summary>Mã quốc gia sản xuất — ISO 3166-1 alpha-2, VD: "US", "KR", "JP"</summary>
+    public string? OriginCountry  { get; set; }
     public Guid? UploadedBy { get; set; }
     public bool IsPublished { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
