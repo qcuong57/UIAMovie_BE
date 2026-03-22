@@ -30,8 +30,10 @@ public class AuthService : IAuthService
     private readonly IEmailService _emailService;
     private readonly ICacheService _cacheService;
 
-    private const string OTP_PREFIX = "otp:";
-    private const string RESET_PREFIX = "reset:";
+    private const string OTP_PREFIX        = "otp:";
+    private const string RESET_PREFIX      = "reset:";
+    private const string USER_EMAIL_PREFIX = "user:email:";
+    private const string USER_ID_PREFIX    = "user:id:";
 
     public AuthService(
         IRepository<User> userRepository,
@@ -50,23 +52,24 @@ public class AuthService : IAuthService
     public async Task<(bool Success, string Message)> RegisterAsync(
         string email, string username, string password)
     {
-        var existing = (await _userRepository.GetAllAsync())
-            .FirstOrDefault(u => u.Email == email);
-
+        var existing = await FindUserByEmailAsync(email);
         if (existing != null)
             return (false, "Email đã được đăng ký");
 
         var user = new User
         {
-            Email = email,
-            Username = username,
+            Email        = email,
+            Username     = username,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
-            Role = Roles.User, // ← Mặc định là User
-            IsActive = true
+            Role         = Roles.User,
+            IsActive     = true
         };
 
         await _userRepository.AddAsync(user);
         await _userRepository.SaveChangesAsync();
+
+        // Cache user ngay sau khi tạo
+        await CacheUserAsync(user);
 
         return (true, "Đăng ký thành công");
     }
@@ -74,9 +77,7 @@ public class AuthService : IAuthService
     public async Task<(LoginResponseDTO? Response, Guid? PendingUserId)> LoginAsync(
         string email, string password)
     {
-        var user = (await _userRepository.GetAllAsync())
-            .FirstOrDefault(u => u.Email == email);
-
+        var user = await FindUserByEmailAsync(email);
         if (user == null) return (null, null);
         if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash)) return (null, null);
 
@@ -144,10 +145,8 @@ public class AuthService : IAuthService
 
     public async Task<bool> ForgotPasswordAsync(string email)
     {
-        var user = (await _userRepository.GetAllAsync())
-            .FirstOrDefault(u => u.Email == email);
-
-        if (user == null) return true;
+        var user = await FindUserByEmailAsync(email);
+        if (user == null) return true; // silent fail — không lộ email tồn tại
 
         var otp = GenerateOtp();
         await _cacheService.SetAsync($"{RESET_PREFIX}{email}", otp, TimeSpan.FromMinutes(10));
@@ -161,17 +160,18 @@ public class AuthService : IAuthService
         var stored = await _cacheService.GetAsync<string>($"{RESET_PREFIX}{email}");
         if (stored == null || stored != code) return false;
 
-        var user = (await _userRepository.GetAllAsync())
-            .FirstOrDefault(u => u.Email == email);
-
+        var user = await FindUserByEmailAsync(email);
         if (user == null) return false;
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
-        user.UpdatedAt = DateTime.UtcNow;
+        user.UpdatedAt    = DateTime.UtcNow;
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync();
 
         await _cacheService.RemoveAsync($"{RESET_PREFIX}{email}");
+        // Invalidate user cache sau khi đổi password
+        await _cacheService.RemoveAsync($"{USER_EMAIL_PREFIX}{email}");
+        await _cacheService.RemoveAsync($"{USER_ID_PREFIX}{user.Id}");
 
         return true;
     }
@@ -189,6 +189,31 @@ public class AuthService : IAuthService
 
     private static string GenerateOtp() =>
         new Random().Next(100000, 999999).ToString();
+
+    // ── Cache helpers ────────────────────────────────────────────────────────
+
+    /// <summary>Tìm user theo email — ưu tiên cache, fallback DB + cache lại.</summary>
+    private async Task<User?> FindUserByEmailAsync(string email)
+    {
+        var cacheKey = $"{USER_EMAIL_PREFIX}{email.ToLower()}";
+        var cached   = await _cacheService.GetAsync<User>(cacheKey);
+        if (cached != null) return cached;
+
+        // FindAsync theo email trực tiếp thay vì GetAllAsync
+        var user = await _userRepository.FindOneAsync(u => u.Email == email);
+        if (user != null)
+            await CacheUserAsync(user);
+
+        return user;
+    }
+
+    /// <summary>Cache user theo cả email lẫn id.</summary>
+    private async Task CacheUserAsync(User user)
+    {
+        var expiry = TimeSpan.FromMinutes(30);
+        await _cacheService.SetAsync($"{USER_EMAIL_PREFIX}{user.Email.ToLower()}", user, expiry);
+        await _cacheService.SetAsync($"{USER_ID_PREFIX}{user.Id}",               user, expiry);
+    }
 
     private async Task<LoginResponseDTO> CreateSessionAsync(User user)
     {

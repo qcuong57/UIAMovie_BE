@@ -192,12 +192,14 @@ public class MovieService : IMovieService
         if (dto.Images.Any())    await SaveImagesAsync(movie.Id, dto.Images);
         if (dto.Trailers.Any())  await SaveTrailersAsync(movie.Id, dto.Trailers);
 
-        // Xóa cache sau khi đã lưu toàn bộ dữ liệu
-        await _cacheService.RemoveAsync(string.Format(MOVIE_CACHE_KEY, movie.Id));
-        await _cacheService.RemoveAsync(TRENDING_CACHE_KEY);
-        // Xóa genre cache cho từng thể loại vừa gán — tránh cache cũ thiếu phim mới
-        foreach (var genreId in dto.GenreIds)
-            await _cacheService.RemoveAsync(string.Format(GENRE_CACHE_KEY, genreId));
+        // Xóa cache sau khi đã lưu toàn bộ dữ liệu — 1 round-trip duy nhất
+        var keysToInvalidate = new List<string>
+        {
+            string.Format(MOVIE_CACHE_KEY, movie.Id),
+            TRENDING_CACHE_KEY,
+        };
+        keysToInvalidate.AddRange(dto.GenreIds.Select(id => string.Format(GENRE_CACHE_KEY, id)));
+        await _cacheService.RemoveManyAsync(keysToInvalidate.ToArray());
 
         return movie.Id;
     }
@@ -215,13 +217,17 @@ public class MovieService : IMovieService
         _movieRepository.Update(movie);
         await _movieRepository.SaveChangesAsync();
 
-        await _cacheService.RemoveAsync(string.Format(MOVIE_CACHE_KEY, movieId));
-        await _cacheService.RemoveAsync(TRENDING_CACHE_KEY);
-        // Xóa genre cache liên quan đến phim này
         var movieWithGenres = await _movieRepository.GetByIdWithDetailsAsync(movieId);
+        var keysToInvalidate = new List<string>
+        {
+            string.Format(MOVIE_CACHE_KEY, movieId),
+            TRENDING_CACHE_KEY,
+        };
         if (movieWithGenres != null)
-            foreach (var mg in movieWithGenres.MovieGenres)
-                await _cacheService.RemoveAsync(string.Format(GENRE_CACHE_KEY, mg.GenreId));
+            keysToInvalidate.AddRange(
+                movieWithGenres.MovieGenres.Select(mg => string.Format(GENRE_CACHE_KEY, mg.GenreId)));
+
+        await _cacheService.RemoveManyAsync(keysToInvalidate.ToArray());
         return true;
     }
 
@@ -260,10 +266,13 @@ public class MovieService : IMovieService
             }
         }
 
-        await _cacheService.RemoveAsync(string.Format(MOVIE_CACHE_KEY, movieId));
-        await _cacheService.RemoveAsync(TRENDING_CACHE_KEY);
-        foreach (var genreId in genreIds)
-            await _cacheService.RemoveAsync(string.Format(GENRE_CACHE_KEY, genreId));
+        var keysToInvalidate = new List<string>
+        {
+            string.Format(MOVIE_CACHE_KEY, movieId),
+            TRENDING_CACHE_KEY,
+        };
+        keysToInvalidate.AddRange(genreIds.Select(id => string.Format(GENRE_CACHE_KEY, id)));
+        await _cacheService.RemoveManyAsync(keysToInvalidate.ToArray());
         return true;
     }
 

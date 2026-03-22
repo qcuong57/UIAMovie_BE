@@ -1,5 +1,6 @@
 ﻿// UIAMovie.Application/Services/UserService.cs
 using UIAMovie.Application.DTOs;
+using UIAMovie.Application.Interfaces;
 using UIAMovie.Domain.Constants;
 using UIAMovie.Domain.Entities;
 using UIAMovie.Infrastructure.Data.Repositories;
@@ -19,10 +20,17 @@ namespace UIAMovie.Application.Services;
 public class UserService : IUserService
 {
     private readonly IRepository<User> _userRepository;
+    private readonly ICacheService     _cacheService;
 
-    public UserService(IRepository<User> userRepository)
+    private const string USER_CACHE_KEY  = "user:id:{0}";
+    private const string USERS_LIST_KEY  = "users:list:{0}:{1}:{2}:{3}"; // page,size,search,role
+
+    public UserService(
+        IRepository<User> userRepository,
+        ICacheService     cacheService)
     {
         _userRepository = userRepository;
+        _cacheService   = cacheService;
     }
 
     public async Task<PaginatedDTO<UserDTO>> GetUsersAsync(UserQueryDTO query)
@@ -80,8 +88,14 @@ public class UserService : IUserService
 
     public async Task<UserDTO?> GetUserByIdAsync(Guid id)
     {
-        var user = await _userRepository.GetByIdAsync(id);
-        return user == null ? null : MapToDTO(user);
+        var cacheKey = string.Format(USER_CACHE_KEY, id);
+        return await _cacheService.GetOrSetAsync(cacheKey,
+            async () =>
+            {
+                var user = await _userRepository.GetByIdAsync(id);
+                return user == null ? null : MapToDTO(user);
+            },
+            TimeSpan.FromMinutes(30));
     }
 
     public async Task<(bool Success, string Message)> UpdateUserAsync(Guid id, UpdateUserDTO dto)
@@ -89,20 +103,20 @@ public class UserService : IUserService
         var user = await _userRepository.GetByIdAsync(id);
         if (user == null) return (false, "Không tìm thấy user");
 
-        user.Username         = dto.Username ?? user.Username;
-        user.AvatarUrl        = dto.AvatarUrl ?? user.AvatarUrl;
+        user.Username         = dto.Username         ?? user.Username;
+        user.AvatarUrl        = dto.AvatarUrl        ?? user.AvatarUrl;
         user.SubscriptionType = dto.SubscriptionType ?? user.SubscriptionType;
         user.UpdatedAt        = DateTime.UtcNow;
 
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync();
 
+        await _cacheService.RemoveAsync(string.Format(USER_CACHE_KEY, id));
         return (true, "Cập nhật thành công");
     }
 
     public async Task<(bool Success, string Message)> UpdateUserRoleAsync(Guid id, string role)
     {
-        // Chỉ cho phép 2 giá trị hợp lệ
         if (role != Roles.Admin && role != Roles.User)
             return (false, "Role không hợp lệ. Chỉ chấp nhận 'Admin' hoặc 'User'");
 
@@ -115,6 +129,7 @@ public class UserService : IUserService
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync();
 
+        await _cacheService.RemoveAsync(string.Format(USER_CACHE_KEY, id));
         return (true, $"Đã cập nhật role thành {role}");
     }
 
@@ -126,6 +141,7 @@ public class UserService : IUserService
         _userRepository.Remove(user);
         await _userRepository.SaveChangesAsync();
 
+        await _cacheService.RemoveAsync(string.Format(USER_CACHE_KEY, id));
         return true;
     }
 
@@ -147,6 +163,7 @@ public class UserService : IUserService
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync();
 
+        await _cacheService.RemoveAsync(string.Format(USER_CACHE_KEY, id));
         return (true, "Đổi mật khẩu thành công");
     }
 

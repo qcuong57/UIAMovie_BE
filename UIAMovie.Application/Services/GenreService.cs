@@ -48,31 +48,21 @@ public class GenreService : IGenreService
 
     public async Task<IEnumerable<GenreDTO>> GetAllAsync()
     {
-        var cached = await _cacheService.GetAsync<List<GenreDTO>>(ALL_GENRES_CACHE_KEY);
-        if (cached != null) return cached;
-
-        var genres = await _genreRepository.GetAllAsync();
-        var result = genres
-            .OrderBy(g => g.Name)
-            .Select(MapToDTO)
-            .ToList();
-
-        await _cacheService.SetAsync(ALL_GENRES_CACHE_KEY, result, TimeSpan.FromHours(6));
-        return result;
+        return await _cacheService.GetOrSetAsync(ALL_GENRES_CACHE_KEY, async () =>
+        {
+            var genres = await _genreRepository.GetAllAsync();
+            return genres.OrderBy(g => g.Name).Select(MapToDTO).ToList();
+        }, TimeSpan.FromHours(6)) ?? Enumerable.Empty<GenreDTO>();
     }
 
     public async Task<GenreDTO?> GetByIdAsync(Guid id)
     {
         var cacheKey = string.Format(GENRE_CACHE_KEY, id);
-        var cached   = await _cacheService.GetAsync<GenreDTO>(cacheKey);
-        if (cached != null) return cached;
-
-        var genre = await _genreRepository.GetByIdAsync(id);
-        if (genre == null) return null;
-
-        var dto = MapToDTO(genre);
-        await _cacheService.SetAsync(cacheKey, dto, TimeSpan.FromHours(6));
-        return dto;
+        return await _cacheService.GetOrSetAsync(cacheKey, async () =>
+        {
+            var genre = await _genreRepository.GetByIdAsync(id);
+            return genre == null ? null : MapToDTO(genre);
+        }, TimeSpan.FromHours(6));
     }
 
     public async Task<Guid> CreateAsync(CreateGenreDTO dto)

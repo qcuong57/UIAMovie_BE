@@ -173,78 +173,72 @@ public class RatingReviewService : IRatingReviewService
 
     public async Task<IEnumerable<ReviewDTO>> GetMovieReviewsAsync(Guid movieId, int pageNumber = 1, int pageSize = 20)
     {
-        // Try cache
+        // Cache toàn bộ reviews của 1 phim (thường không quá lớn)
         var cacheKey = string.Format(MOVIE_REVIEWS_CACHE_KEY, movieId);
-        var cached = await _cacheService.GetAsync<List<ReviewDTO>>(cacheKey);
-        if (cached != null)
+
+        var allReviews = await _cacheService.GetOrSetAsync(cacheKey, async () =>
         {
-            return cached
-                .Skip((pageNumber - 1) * pageSize)
-                .Take(pageSize)
+            var reviews = await _reviewRepository.FindAsync(r => r.MovieId == movieId && r.IsPublished);
+            var users   = await _userRepository.GetAllAsync();
+            var userMap = users.ToDictionary(u => u.Id);
+
+            return reviews
+                .OrderByDescending(r => r.CreatedAt)
+                .Select(r =>
+                {
+                    userMap.TryGetValue(r.UserId, out var u);
+                    return new ReviewDTO
+                    {
+                        Id         = r.Id,
+                        MovieId    = r.MovieId,
+                        UserId     = r.UserId,
+                        UserName   = u?.Username ?? "Ẩn danh",
+                        UserAvatar = u?.AvatarUrl,
+                        Rating     = r.Rating,
+                        ReviewText = r.ReviewText,
+                        IsSpoiler  = r.IsSpoiler,
+                        CreatedAt  = r.CreatedAt,
+                        UpdatedAt  = r.UpdatedAt,
+                    };
+                })
                 .ToList();
-        }
+        }, TimeSpan.FromMinutes(15));
 
-        var reviews = await _reviewRepository.GetAllAsync();
-        var users = await _userRepository.GetAllAsync();
+        if (allReviews == null) return Enumerable.Empty<ReviewDTO>();
 
-        var result = reviews
-            .Where(r => r.MovieId == movieId && r.IsPublished)
-            .OrderByDescending(r => r.CreatedAt)
-            .Join(users, r => r.UserId, u => u.Id, (r, u) => new ReviewDTO
-            {
-                Id = r.Id,
-                MovieId = r.MovieId,
-                UserId = r.UserId,
-                UserName = u.Username,
-                UserAvatar = u.AvatarUrl,
-                Rating = r.Rating,
-                ReviewText = r.ReviewText,
-                IsSpoiler = r.IsSpoiler,
-                CreatedAt = r.CreatedAt,
-                UpdatedAt = r.UpdatedAt
-            })
-            .ToList();
-
-        // Cache all reviews
-        await _cacheService.SetAsync(cacheKey, result, TimeSpan.FromMinutes(15));
-
-        // Return paginated
-        return result
+        return allReviews
             .Skip((pageNumber - 1) * pageSize)
-            .Take(pageSize)
-            .ToList();
+            .Take(pageSize);
     }
 
     public async Task<IEnumerable<ReviewDTO>> GetUserReviewsAsync(Guid userId)
     {
         var cacheKey = string.Format(USER_REVIEWS_CACHE_KEY, userId);
-        var cached = await _cacheService.GetAsync<List<ReviewDTO>>(cacheKey);
-        if (cached != null) 
-            return cached;
 
-        var reviews = await _reviewRepository.GetAllAsync();
-        var users = await _userRepository.GetAllAsync();
+        var result = await _cacheService.GetOrSetAsync(cacheKey, async () =>
+        {
+            var reviews = await _reviewRepository.FindAsync(r => r.UserId == userId);
+            var user    = await _userRepository.GetByIdAsync(userId);
 
-        var result = reviews
-            .Where(r => r.UserId == userId)
-            .OrderByDescending(r => r.CreatedAt)
-            .Join(users, r => r.UserId, u => u.Id, (r, u) => new ReviewDTO
-            {
-                Id = r.Id,
-                MovieId = r.MovieId,
-                UserId = r.UserId,
-                UserName = u.Username,
-                UserAvatar = u.AvatarUrl,
-                Rating = r.Rating,
-                ReviewText = r.ReviewText,
-                IsSpoiler = r.IsSpoiler,
-                CreatedAt = r.CreatedAt,
-                UpdatedAt = r.UpdatedAt
-            })
-            .ToList();
+            return reviews
+                .OrderByDescending(r => r.CreatedAt)
+                .Select(r => new ReviewDTO
+                {
+                    Id         = r.Id,
+                    MovieId    = r.MovieId,
+                    UserId     = r.UserId,
+                    UserName   = user?.Username ?? "Ẩn danh",
+                    UserAvatar = user?.AvatarUrl,
+                    Rating     = r.Rating,
+                    ReviewText = r.ReviewText,
+                    IsSpoiler  = r.IsSpoiler,
+                    CreatedAt  = r.CreatedAt,
+                    UpdatedAt  = r.UpdatedAt,
+                })
+                .ToList();
+        }, TimeSpan.FromHours(1));
 
-        await _cacheService.SetAsync(cacheKey, result, TimeSpan.FromHours(1));
-        return result;
+        return result ?? Enumerable.Empty<ReviewDTO>();
     }
 
     public async Task<ReviewDTO?> GetReviewByIdAsync(Guid reviewId)

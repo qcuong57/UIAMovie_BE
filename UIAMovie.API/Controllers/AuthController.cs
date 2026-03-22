@@ -167,4 +167,5 @@ public class AuthController : ControllerBase
     private Guid GetUserId() =>
         Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value
             ?? Guid.Empty.ToString());
+    
 }

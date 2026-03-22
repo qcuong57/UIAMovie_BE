@@ -15,16 +15,45 @@ using UIAMovie.Infrastructure.Security;
 using UIAMovie.Infrastructure.Services;
 using UIAMovie.Middleware;
 
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Database
 builder.Services.AddDbContext<MovieDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
+
+// var redisConnection = builder.Configuration["Redis:ConnectionString"];
+// builder.Services.AddSingleton<IConnectionMultiplexer>(
+//     ConnectionMultiplexer.Connect(redisConnection));
+// builder.Services.AddScoped<ICacheService, RedisCacheService>();
+
 // Redis
-var redisConnection = builder.Configuration["Redis:ConnectionString"];
-builder.Services.AddSingleton<IConnectionMultiplexer>(
-    ConnectionMultiplexer.Connect(redisConnection));
+var redisUrl = builder.Configuration["Redis:ConnectionString"];
+ 
+builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
+{
+    // Parse rediss://user:password@host:port → ConfigurationOptions
+    var uri    = new Uri(redisUrl!);
+    var host   = uri.Host;
+    var port   = uri.Port;
+    var pass   = Uri.UnescapeDataString(uri.UserInfo.Split(':')[1]);
+ 
+    var options = new ConfigurationOptions
+    {
+        EndPoints          = { { host, port } },
+        Password           = pass,
+        Ssl                = true,   // rediss:// = SSL bắt buộc
+        SslProtocols       = System.Security.Authentication.SslProtocols.Tls12,
+        AbortOnConnectFail = false,
+        ConnectRetry       = 5,
+        ConnectTimeout     = 10000,
+        SyncTimeout        = 10000,
+    };
+ 
+    return ConnectionMultiplexer.Connect(options);
+});
+ 
 builder.Services.AddScoped<ICacheService, RedisCacheService>();
 
 // Repositories
