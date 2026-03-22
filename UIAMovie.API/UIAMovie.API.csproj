@@ -9,12 +9,6 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <Content Include="..\.dockerignore">
-        <Link>.dockerignore</Link>
-      </Content>
-    </ItemGroup>
-
-    <ItemGroup>
       <ProjectReference Include="..\UIAMovie.Application\UIAMovie.Application.csproj" />
       <ProjectReference Include="..\UIAMovie.Infrastructure\UIAMovie.Infrastructure.csproj" />
     </ItemGroup>

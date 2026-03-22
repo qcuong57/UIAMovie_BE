@@ -5,6 +5,8 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{D1EF08EC-481F-423A-95FB-EC6362ACC68B}"
 	ProjectSection(SolutionItems) = preProject
 		compose.yaml = compose.yaml
+		Dockerfile = Dockerfile
+		.dockerignore = .dockerignore
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIAMovie.Domain", "UIAMovie.Domain\UIAMovie.Domain.csproj", "{529B3512-FCD0-4617-ADE4-A727DC110C2F}"
