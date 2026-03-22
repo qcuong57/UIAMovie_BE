@@ -22,18 +22,11 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<MovieDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-
-// var redisConnection = builder.Configuration["Redis:ConnectionString"];
-// builder.Services.AddSingleton<IConnectionMultiplexer>(
-//     ConnectionMultiplexer.Connect(redisConnection));
-// builder.Services.AddScoped<ICacheService, RedisCacheService>();
-
 // Redis
 var redisUrl = builder.Configuration["Redis:ConnectionString"];
  
 builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
 {
-    // Parse rediss://user:password@host:port → ConfigurationOptions
     var uri    = new Uri(redisUrl!);
     var host   = uri.Host;
     var port   = uri.Port;
@@ -43,7 +36,7 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
     {
         EndPoints          = { { host, port } },
         Password           = pass,
-        Ssl                = true,   // rediss:// = SSL bắt buộc
+        Ssl                = true,
         SslProtocols       = System.Security.Authentication.SslProtocols.Tls12,
         AbortOnConnectFail = false,
         ConnectRetry       = 5,
@@ -59,7 +52,6 @@ builder.Services.AddScoped<ICacheService, RedisCacheService>();
 // Repositories
 builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 builder.Services.AddScoped<IMovieRepository, MovieRepository>();
-// builder.Services.AddScoped<IRepository<RatingReview>, Repository<RatingReview>>();
 
 // Authentication
 builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
@@ -80,10 +72,6 @@ builder.Services.AddScoped<IRepository<Person>, Repository<Person>>();
 builder.Services.AddScoped<IRepository<MovieCast>, Repository<MovieCast>>();
 builder.Services.AddScoped<IRepository<MovieDirector>, Repository<MovieDirector>>();
 builder.Services.AddScoped<IRepository<MovieImage>, Repository<MovieImage>>();
-
-// Thêm Kafka
-// builder.Services.AddScoped<IKafkaProducer, KafkaProducer>();
-// builder.Services.AddHostedService<VideoUploadConsumerService>();
 
 // JWT Configuration
 var jwtSettings = builder.Configuration.GetSection("Jwt");
@@ -118,13 +106,11 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+// Swagger luôn bật (cả Production)
+app.UseSwagger();
+app.UseSwaggerUI();
 
-// Thêm Middleware
+// Middleware
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseMiddleware<JwtMiddleware>();
 app.UseCors("AllowAll");
