@@ -1,6 +1,4 @@
-﻿// UIAMovie.Application/Services/AuthService.cs
-
-using UIAMovie.Application.DTOs;
+﻿using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Domain.Constants;
 using UIAMovie.Domain.Entities;
@@ -17,7 +15,6 @@ public interface IAuthService
     Task LogoutAsync(Guid userId);
     Task<bool> ForgotPasswordAsync(string email);
     Task<bool> ResetPasswordAsync(string email, string code, string newPassword);
-    
     Task<LoginResponseDTO?> RefreshTokenAsync(string refreshToken);
     Task<(bool Success, string Message)> Disable2FAAsync(Guid userId, string code);
 }
@@ -35,6 +32,8 @@ public class AuthService : IAuthService
     private const string USER_EMAIL_PREFIX = "user:email:";
     private const string USER_ID_PREFIX    = "user:id:";
 
+    private static readonly TimeSpan RefreshTokenLifetime = TimeSpan.FromDays(7);
+
     public AuthService(
         IRepository<User> userRepository,
         IRepository<UserSession> sessionRepository,
@@ -42,11 +41,11 @@ public class AuthService : IAuthService
         IEmailService emailService,
         ICacheService cacheService)
     {
-        _userRepository = userRepository;
+        _userRepository    = userRepository;
         _sessionRepository = sessionRepository;
         _jwtTokenGenerator = jwtTokenGenerator;
-        _emailService = emailService;
-        _cacheService = cacheService;
+        _emailService      = emailService;
+        _cacheService      = cacheService;
     }
 
     public async Task<(bool Success, string Message)> RegisterAsync(
@@ -67,8 +66,6 @@ public class AuthService : IAuthService
 
         await _userRepository.AddAsync(user);
         await _userRepository.SaveChangesAsync();
-
-        // Cache user ngay sau khi tạo
         await CacheUserAsync(user);
 
         return (true, "Đăng ký thành công");
@@ -112,7 +109,6 @@ public class AuthService : IAuthService
         var user = await _userRepository.GetByIdAsync(userId);
         if (user == null) return null;
 
-        // Nếu chưa bật 2FA (flow enable): bật lên sau khi verify thành công
         if (!user.Is2FaEnabled)
         {
             user.Is2FaEnabled = true;
@@ -125,7 +121,6 @@ public class AuthService : IAuthService
 
     public async Task<(bool Success, string Message)> Disable2FAAsync(Guid userId, string code)
     {
-        // Xác thực OTP
         var stored = await _cacheService.GetAsync<string>($"{OTP_PREFIX}{userId}");
         if (stored == null || stored != code)
             return (false, "Mã OTP không đúng hoặc đã hết hạn");
@@ -146,7 +141,7 @@ public class AuthService : IAuthService
     public async Task<bool> ForgotPasswordAsync(string email)
     {
         var user = await FindUserByEmailAsync(email);
-        if (user == null) return true; // silent fail — không lộ email tồn tại
+        if (user == null) return true;
 
         var otp = GenerateOtp();
         await _cacheService.SetAsync($"{RESET_PREFIX}{email}", otp, TimeSpan.FromMinutes(10));
@@ -169,7 +164,6 @@ public class AuthService : IAuthService
         await _userRepository.SaveChangesAsync();
 
         await _cacheService.RemoveAsync($"{RESET_PREFIX}{email}");
-        // Invalidate user cache sau khi đổi password
         await _cacheService.RemoveAsync($"{USER_EMAIL_PREFIX}{email}");
         await _cacheService.RemoveAsync($"{USER_ID_PREFIX}{user.Id}");
 
@@ -178,8 +172,7 @@ public class AuthService : IAuthService
 
     public async Task LogoutAsync(Guid userId)
     {
-        var sessions = (await _sessionRepository.GetAllAsync())
-            .Where(s => s.UserId == userId).ToList();
+        var sessions = await _sessionRepository.FindAsync(s => s.UserId == userId);
 
         foreach (var s in sessions)
             _sessionRepository.Remove(s);
@@ -187,19 +180,53 @@ public class AuthService : IAuthService
         await _sessionRepository.SaveChangesAsync();
     }
 
+    public async Task<LoginResponseDTO?> RefreshTokenAsync(string refreshToken)
+    {
+        var session = await _sessionRepository.FindOneAsync(
+            s => s.RefreshToken == refreshToken);
+
+        if (session == null)
+            return null;
+
+        if (session.ExpiresAt < DateTime.UtcNow)
+        {
+            _sessionRepository.Remove(session);
+            await _sessionRepository.SaveChangesAsync();
+            return null;
+        }
+
+        var user = await _userRepository.GetByIdAsync(session.UserId);
+        if (user == null)
+            return null;
+
+        var newAccessToken  = _jwtTokenGenerator.GenerateAccessToken(user.Id, user.Email, user.Role);
+        var newRefreshToken = _jwtTokenGenerator.GenerateRefreshToken();
+
+        _sessionRepository.Remove(session);
+
+        var newSession = new UserSession
+        {
+            UserId       = user.Id,
+            AccessToken  = newAccessToken,
+            RefreshToken = newRefreshToken,
+            ExpiresAt    = DateTime.UtcNow.Add(RefreshTokenLifetime)
+        };
+
+        await _sessionRepository.AddAsync(newSession);
+        await _sessionRepository.SaveChangesAsync();
+
+        return BuildLoginResponse(newAccessToken, newRefreshToken, user);
+    }
+
     private static string GenerateOtp() =>
-        new Random().Next(100000, 999999).ToString();
+        Random.Shared.Next(100000, 999999).ToString();
 
-    // ── Cache helpers ────────────────────────────────────────────────────────
-
-    /// <summary>Tìm user theo email — ưu tiên cache, fallback DB + cache lại.</summary>
     private async Task<User?> FindUserByEmailAsync(string email)
     {
         var cacheKey = $"{USER_EMAIL_PREFIX}{email.ToLower()}";
         var cached   = await _cacheService.GetAsync<User>(cacheKey);
         if (cached != null) return cached;
 
-        // FindAsync theo email trực tiếp thay vì GetAllAsync
         var user = await _userRepository.FindOneAsync(u => u.Email == email);
         if (user != null)
             await CacheUserAsync(user);
@@ -207,26 +234,24 @@ public class AuthService : IAuthService
         return user;
     }
 
-    /// <summary>Cache user theo cả email lẫn id.</summary>
     private async Task CacheUserAsync(User user)
     {
         var expiry = TimeSpan.FromMinutes(30);
         await _cacheService.SetAsync($"{USER_EMAIL_PREFIX}{user.Email.ToLower()}", user, expiry);
-        await _cacheService.SetAsync($"{USER_ID_PREFIX}{user.Id}",               user, expiry);
+        await _cacheService.SetAsync($"{USER_ID_PREFIX}{user.Id}",                 user, expiry);
     }
 
     private async Task<LoginResponseDTO> CreateSessionAsync(User user)
     {
-        // ← Truyền role vào token
-        var accessToken = _jwtTokenGenerator.GenerateAccessToken(user.Id, user.Email, user.Role);
+        var accessToken  = _jwtTokenGenerator.GenerateAccessToken(user.Id, user.Email, user.Role);
         var refreshToken = _jwtTokenGenerator.GenerateRefreshToken();
 
         var session = new UserSession
         {
-            UserId = user.Id,
-            AccessToken = accessToken,
+            UserId       = user.Id,
+            AccessToken  = accessToken,
             RefreshToken = refreshToken,
-            ExpiresAt = DateTime.UtcNow.AddHours(24)
+            ExpiresAt    = DateTime.UtcNow.Add(RefreshTokenLifetime)
         };
 
         await _sessionRepository.AddAsync(session);
@@ -236,66 +261,24 @@ public class AuthService : IAuthService
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync();
 
-        return new LoginResponseDTO
+        return BuildLoginResponse(accessToken, refreshToken, user);
+    }
+
+    private static LoginResponseDTO BuildLoginResponse(string accessToken, string refreshToken, User user) =>
+        new()
         {
-            AccessToken = accessToken,
+            AccessToken  = accessToken,
             RefreshToken = refreshToken,
-            ExpiresIn = DateTime.UtcNow.AddHours(1),
+            ExpiresIn    = DateTime.UtcNow.AddHours(1),
             User = new UserDTO
             {
-                Id = user.Id,
-                Email = user.Email,
-                Username = user.Username,
-                AvatarUrl = user.AvatarUrl,
+                Id               = user.Id,
+                Email            = user.Email,
+                Username         = user.Username,
+                AvatarUrl        = user.AvatarUrl,
                 SubscriptionType = user.SubscriptionType,
-                Role = user.Role,
-                CreatedAt = user.CreatedAt
+                Role             = user.Role,
+                CreatedAt        = user.CreatedAt
             }
         };
-    }
-    
-    public async Task<LoginResponseDTO?> RefreshTokenAsync(string refreshToken)
-    {
-        var session = (await _sessionRepository.GetAllAsync())
-            .FirstOrDefault(s => s.RefreshToken == refreshToken);
-
-        if (session == null)
-            return null;
-
-        if (session.ExpiresAt < DateTime.UtcNow)
-            return null;
-
-        var user = await _userRepository.GetByIdAsync(session.UserId);
-        if (user == null)
-            return null;
-
-        // tạo access token mới
-        var newAccessToken = _jwtTokenGenerator.GenerateAccessToken(
-            user.Id,
-            user.Email,
-            user.Role
-        );
-
-        // update session
-        session.AccessToken = newAccessToken;
-        _sessionRepository.Update(session);
-        await _sessionRepository.SaveChangesAsync();
-
-        return new LoginResponseDTO
-        {
-            AccessToken = newAccessToken,
-            RefreshToken = session.RefreshToken,
-            ExpiresIn = DateTime.UtcNow.AddHours(1),
-            User = new UserDTO
-            {
-                Id = user.Id,
-                Email = user.Email,
-                Username = user.Username,
-                AvatarUrl = user.AvatarUrl,
-                SubscriptionType = user.SubscriptionType,
-                Role = user.Role,
-                CreatedAt = user.CreatedAt
-            }
-        };
-    }
 }

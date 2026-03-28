@@ -2,15 +2,9 @@
 using CloudinaryDotNet.Actions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using UIAMovie.Application.Interfaces;
 
 namespace UIAMovie.Infrastructure.Configuration;
-
-public interface ICloudinaryService
-{
-    Task<string> UploadVideoAsync(IFormFile file, string folderName);
-    Task<bool> DeleteFileAsync(string publicId);
-    Task<string> GenerateUrl(string publicId);
-}
 
 public class CloudinaryService : ICloudinaryService
 {
@@ -34,12 +28,14 @@ public class CloudinaryService : ICloudinaryService
 
         var uploadParams = new VideoUploadParams
         {
-            File = new FileDescription(file.FileName, file.OpenReadStream()),
-            Folder = folderName,
-            PublicId = Guid.NewGuid().ToString(),
-            Transformation = new Transformation()
-                .Quality("auto:eco")
-                .FetchFormat("mp4")
+            File       = new FileDescription(file.FileName, file.OpenReadStream()),
+            Folder     = folderName,
+            PublicId   = Guid.NewGuid().ToString(),
+            EagerTransforms = new List<Transformation>
+            {
+                new Transformation().Quality("auto:eco").FetchFormat("mp4")
+            },
+            EagerAsync = true,
         };
 
         var uploadResult = await _cloudinary.UploadAsync(uploadParams);

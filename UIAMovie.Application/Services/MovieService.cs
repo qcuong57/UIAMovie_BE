@@ -44,6 +44,7 @@ public class MovieService : IMovieService
     private readonly IRepository<MovieImage>     _imageRepository;
     private readonly IRepository<MovieGenre>     _movieGenreRepository;
     private readonly ICacheService               _cacheService;
+    private readonly ICloudinaryService          _cloudinaryService; // ✅ FIX: inject để xóa file trên Cloudinary
 
     private const string TRENDING_CACHE_KEY = "movies:trending";
     private const string GENRE_CACHE_KEY    = "movies:genre:{0}";
@@ -60,6 +61,7 @@ public class MovieService : IMovieService
         IRepository<MovieDirector>  directorRepository,
         IRepository<MovieImage>     imageRepository,
         IRepository<MovieGenre>     movieGenreRepository,
+        ICloudinaryService          cloudinaryService, // ✅ FIX: thêm vào constructor
         ICacheService               cacheService)
     {
         _movieRepository        = movieRepository;
@@ -72,6 +74,7 @@ public class MovieService : IMovieService
         _directorRepository     = directorRepository;
         _imageRepository        = imageRepository;
         _movieGenreRepository   = movieGenreRepository;
+        _cloudinaryService      = cloudinaryService; // ✅ FIX
         _cacheService           = cacheService;
     }
 
@@ -186,11 +189,11 @@ public class MovieService : IMovieService
         await _movieRepository.SaveChangesAsync();
 
         // Lưu genres trước để MovieGenres có sẵn khi response
-        if (dto.GenreIds.Any())  await SaveGenresAsync(movie.Id, dto.GenreIds);
-        if (dto.Cast.Any())      await SaveCastAsync(movie.Id, dto.Cast);
+        if (dto.GenreIds.Any())   await SaveGenresAsync(movie.Id, dto.GenreIds);
+        if (dto.Cast.Any())       await SaveCastAsync(movie.Id, dto.Cast);
         if (dto.Director != null) await SaveDirectorAsync(movie.Id, dto.Director);
-        if (dto.Images.Any())    await SaveImagesAsync(movie.Id, dto.Images);
-        if (dto.Trailers.Any())  await SaveTrailersAsync(movie.Id, dto.Trailers);
+        if (dto.Images.Any())     await SaveImagesAsync(movie.Id, dto.Images);
+        if (dto.Trailers.Any())   await SaveTrailersAsync(movie.Id, dto.Trailers);
 
         // Xóa cache sau khi đã lưu toàn bộ dữ liệu — 1 round-trip duy nhất
         var keysToInvalidate = new List<string>
@@ -235,6 +238,18 @@ public class MovieService : IMovieService
     {
         var movie = await _movieRepository.GetByIdWithDetailsAsync(movieId);
         if (movie == null) return false;
+
+        // ✅ FIX BUG 1+3: Xóa tất cả video trên Cloudinary TRƯỚC khi cascade delete trong DB
+        // Nếu không xóa ở đây, file vẫn còn trên Cloudinary và URL vẫn stream được dù phim đã bị xóa
+        foreach (var video in movie.MovieVideos ?? Enumerable.Empty<MovieVideo>())
+        {
+            var publicId = ExtractCloudinaryPublicId(video.VideoUrl);
+            if (publicId != null)
+            {
+                try { await _cloudinaryService.DeleteFileAsync(publicId); }
+                catch { /* Tiếp tục xóa DB dù Cloudinary có lỗi */ }
+            }
+        }
 
         var personIds = movie.MovieCasts
             .Select(c => c.PersonId)
@@ -351,6 +366,15 @@ public class MovieService : IMovieService
     {
         var video = await _videoRepository.GetByIdAsync(videoId);
         if (video == null) return false;
+
+        // ✅ FIX BUG 1: Xóa file trên Cloudinary trước khi xóa record trong DB
+        // Trước đây chỉ xóa DB → file vẫn còn trên Cloudinary, tốn storage và URL vẫn hoạt động
+        var publicId = ExtractCloudinaryPublicId(video.VideoUrl);
+        if (publicId != null)
+        {
+            try { await _cloudinaryService.DeleteFileAsync(publicId); }
+            catch { /* Tiếp tục xóa DB dù Cloudinary có lỗi */ }
+        }
 
         _videoRepository.Remove(video);
         await _videoRepository.SaveChangesAsync();
@@ -648,6 +672,29 @@ public class MovieService : IMovieService
         if (s.Success) return s.Groups[1].Value;
 
         return null;
+    }
+
+    /// <summary>
+    /// ✅ FIX BUG 1: Extract Cloudinary publicId từ secure URL để truyền vào DeleteFileAsync.
+    /// Cloudinary URL dạng:
+    ///   https://res.cloudinary.com/{cloud}/video/upload/v{timestamp}/{folder}/{publicId}.mp4
+    /// publicId cần trả về: {folder}/{publicId}  (không có extension, không có v{timestamp}/)
+    ///
+    /// Bỏ qua YouTube URL — chỉ xử lý Cloudinary URL.
+    /// </summary>
+    private static string? ExtractCloudinaryPublicId(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return null;
+        // Bỏ qua YouTube
+        if (url.Contains("youtube.com") || url.Contains("youtu.be")) return null;
+        // Chỉ xử lý Cloudinary URL
+        if (!url.Contains("cloudinary.com")) return null;
+
+        // Lấy phần sau "/upload/" và bỏ version prefix "v123456789/"
+        var match = System.Text.RegularExpressions.Regex.Match(
+            url, @"/upload/(?:v\d+/)?(.+?)(?:\.[^./]+)?$");
+
+        return match.Success ? match.Groups[1].Value : null;
     }
 
     // ─── MapToDTO ─────────────────────────────────────────────────────────────

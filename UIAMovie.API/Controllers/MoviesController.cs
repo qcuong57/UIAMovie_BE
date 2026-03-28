@@ -4,6 +4,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using UIAMovie.Application.DTOs;
+using UIAMovie.Application.Interfaces;
 using UIAMovie.Application.Services;
 using UIAMovie.Domain.Constants;
 using UIAMovie.Infrastructure.Configuration;
@@ -319,6 +320,8 @@ public class MoviesController : ControllerBase
     /// <summary>[Admin] Upload video lên Cloudinary và gắn vào phim</summary>
     [HttpPost("{id:guid}/videos")]
     [Authorize(Roles = Roles.Admin)]
+    [RequestSizeLimit(5_368_709_120)]      // 5 GB
+    [RequestFormLimits(MultipartBodyLengthLimit = 5_368_709_120)]
     public async Task<IActionResult> UploadVideo(Guid id, [FromForm] UploadMovieVideoDTO dto)
     {
         if (dto.VideoFile == null || dto.VideoFile.Length == 0)
