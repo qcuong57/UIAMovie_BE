@@ -117,5 +117,6 @@ app.UseCors("AllowAll");
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+app.MapGet("/", () => "UIAMovie API running");
 
 app.Run();
