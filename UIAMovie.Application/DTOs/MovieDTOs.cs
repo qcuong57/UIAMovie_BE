@@ -22,10 +22,25 @@ public class MovieDTO
     public List<MovieCastDTO>  Cast   { get; set; } = new();
     public List<MovieImageDTO> Images { get; set; } = new();
 
-    // Tên đạo diễn — giữ nguyên để không breaking change
     public string?          Director       { get; set; }
-    // Thông tin đầy đủ đạo diễn kèm tiểu sử
     public PersonDetailDTO? DirectorDetail { get; set; }
+}
+
+/// <summary>
+/// DTO cho trending — kế thừa MovieDTO và bổ sung thông tin xu hướng.
+/// Frontend dùng Views7d để hiển thị "🔥 1.2k lượt xem tuần này".
+/// TrendingRank để hiển thị "#1 Trending".
+/// </summary>
+public class TrendingMovieDTO : MovieDTO
+{
+    /// <summary>Thứ hạng trending, bắt đầu từ 1.</summary>
+    public int    TrendingRank  { get; set; }
+    /// <summary>Lượt xem trong 7 ngày gần nhất.</summary>
+    public int    Views7d       { get; set; }
+    /// <summary>Lượt xem trong 30 ngày gần nhất.</summary>
+    public int    Views30d      { get; set; }
+    /// <summary>Score tổng hợp dùng để xếp hạng (để frontend debug nếu cần).</summary>
+    public double TrendingScore { get; set; }
 }
 
 public class CreateMovieDTO
@@ -77,13 +92,12 @@ public class UploadMovieVideoDTO
 
 public class TrendingMoviesDTO
 {
-    public List<MovieDTO> Movies { get; set; } = new();
+    public List<TrendingMovieDTO> Movies { get; set; } = new();
     public int Total { get; set; }
 }
 
 // ── Cast / Director / Image DTOs (response) ───────────────────────────────────
 
-/// <summary>Thông tin diễn viên trả về trong MovieDTO — kèm tiểu sử</summary>
 public class MovieCastDTO
 {
     public string  Name         { get; set; } = string.Empty;
@@ -94,11 +108,9 @@ public class MovieCastDTO
     public string? Biography    { get; set; }
     public string? Birthday     { get; set; }
     public string? PlaceOfBirth { get; set; }
-    /// <summary>Danh sách ảnh profile lưu trong DB</summary>
     public List<string> ProfileImages { get; set; } = new();
 }
 
-/// <summary>Thông tin đầy đủ một người (dùng cho DirectorDetail)</summary>
 public class PersonDetailDTO
 {
     public string  Name         { get; set; } = string.Empty;
@@ -107,7 +119,6 @@ public class PersonDetailDTO
     public string? Biography    { get; set; }
     public string? Birthday     { get; set; }
     public string? PlaceOfBirth { get; set; }
-    /// <summary>Danh sách ảnh profile lưu trong DB</summary>
     public List<string> ProfileImages { get; set; } = new();
 }
 
@@ -117,7 +128,7 @@ public class MovieImageDTO
     public string ImageType { get; set; } = string.Empty;
 }
 
-// ── Import DTOs (request — dùng trong CreateMovieDTO khi import TMDB) ─────────
+// ── Import DTOs ───────────────────────────────────────────────────────────────
 
 public class ImportCastDTO
 {
@@ -129,7 +140,6 @@ public class ImportCastDTO
     public string? Biography     { get; set; }
     public string? Birthday      { get; set; }
     public string? PlaceOfBirth  { get; set; }
-    /// <summary>Danh sách URL ảnh profile từ TMDB — tối đa 5 ảnh</summary>
     public List<string> ProfileImages { get; set; } = new();
 }
 
@@ -141,7 +151,6 @@ public class ImportDirectorDTO
     public string? Biography     { get; set; }
     public string? Birthday      { get; set; }
     public string? PlaceOfBirth  { get; set; }
-    /// <summary>Danh sách URL ảnh profile từ TMDB — tối đa 5 ảnh</summary>
     public List<string> ProfileImages { get; set; } = new();
 }
 

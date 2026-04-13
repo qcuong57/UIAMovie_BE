@@ -30,7 +30,7 @@ public class UserController : ControllerBase
     public async Task<IActionResult> GetUsers([FromQuery] UserQueryDTO query)
     {
         var result = await _userService.GetUsersAsync(query);
-        return Ok(result);
+        return Ok(new ApiResponseDTO<object> { Data = result, Message = "Thành công" });
     }
 
     /// <summary>[Admin] Lấy thông tin user theo ID</summary>
@@ -40,8 +40,8 @@ public class UserController : ControllerBase
     {
         var user = await _userService.GetUserByIdAsync(id);
         return user == null
-            ? NotFound(new { message = "Không tìm thấy user" })
-            : Ok(user);
+            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy user", StatusCode = 404 })
+            : Ok(new ApiResponseDTO<object> { Data = user, Message = "Thành công" });
     }
 
     /// <summary>[Admin] Cập nhật thông tin user bất kỳ</summary>
@@ -50,7 +50,9 @@ public class UserController : ControllerBase
     public async Task<IActionResult> UpdateUser(Guid id, [FromBody] UpdateUserDTO dto)
     {
         var (success, message) = await _userService.UpdateUserAsync(id, dto);
-        return success ? Ok(new { message }) : NotFound(new { message });
+        return success 
+            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+            : NotFound(new ApiErrorResponseDTO { Message = message, StatusCode = 404 });
     }
 
     /// <summary>[Admin] Thay đổi role của user (User ↔ Admin)</summary>
@@ -59,7 +61,9 @@ public class UserController : ControllerBase
     public async Task<IActionResult> UpdateRole(Guid id, [FromBody] UpdateRoleDTO dto)
     {
         var (success, message) = await _userService.UpdateUserRoleAsync(id, dto.Role);
-        return success ? Ok(new { message }) : BadRequest(new { message });
+        return success 
+            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+            : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 
     /// <summary>[Admin] Xóa user</summary>
@@ -69,12 +73,12 @@ public class UserController : ControllerBase
     {
         // Không cho phép admin tự xóa chính mình
         if (id == GetUserId())
-            return BadRequest(new { message = "Không thể tự xóa tài khoản của mình" });
+            return BadRequest(new ApiErrorResponseDTO { Message = "Không thể tự xóa tài khoản của mình", StatusCode = 400 });
 
         var success = await _userService.DeleteUserAsync(id);
         return success
-            ? Ok(new { message = "Xóa user thành công" })
-            : NotFound(new { message = "Không tìm thấy user" });
+            ? Ok(new ApiResponseDTO<object> { Message = "Xóa user thành công" })
+            : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy user", StatusCode = 404 });
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -86,7 +90,9 @@ public class UserController : ControllerBase
     public async Task<IActionResult> GetMe()
     {
         var user = await _userService.GetUserByIdAsync(GetUserId());
-        return user == null ? NotFound() : Ok(user);
+        return user == null 
+            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy user", StatusCode = 404 }) 
+            : Ok(new ApiResponseDTO<object> { Data = user, Message = "Thành công" });
     }
 
     /// <summary>Cập nhật thông tin bản thân</summary>
@@ -94,7 +100,9 @@ public class UserController : ControllerBase
     public async Task<IActionResult> UpdateMe([FromBody] UpdateUserDTO dto)
     {
         var (success, message) = await _userService.UpdateUserAsync(GetUserId(), dto);
-        return success ? Ok(new { message }) : BadRequest(new { message });
+        return success 
+            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+            : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 
     /// <summary>Đổi mật khẩu</summary>
@@ -102,7 +110,9 @@ public class UserController : ControllerBase
     public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordDTO dto)
     {
         var (success, message) = await _userService.ChangePasswordAsync(GetUserId(), dto);
-        return success ? Ok(new { message }) : BadRequest(new { message });
+        return success 
+            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+            : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 
     // ─── Helper ──────────────────────────────────────────────────────────────

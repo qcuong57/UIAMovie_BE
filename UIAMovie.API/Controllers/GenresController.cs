@@ -31,7 +31,7 @@ public class GenresController : ControllerBase
     public async Task<IActionResult> GetAll()
     {
         var genres = await _genreService.GetAllAsync();
-        return Ok(genres);
+        return Ok(new ApiResponseDTO<IEnumerable<object>> { Data = genres, Message = "Thành công" });
     }
 
     /// <summary>Lấy chi tiết genre theo ID</summary>
@@ -40,8 +40,8 @@ public class GenresController : ControllerBase
     {
         var genre = await _genreService.GetByIdAsync(id);
         return genre == null
-            ? NotFound(new { message = "Không tìm thấy genre" })
-            : Ok(genre);
+            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy genre", StatusCode = 404 })
+            : Ok(new ApiResponseDTO<object> { Data = genre, Message = "Thành công" });
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -54,17 +54,17 @@ public class GenresController : ControllerBase
     public async Task<IActionResult> Create([FromBody] CreateGenreDTO dto)
     {
         if (string.IsNullOrWhiteSpace(dto.Name))
-            return BadRequest(new { message = "Tên genre không được để trống" });
+            return BadRequest(new ApiErrorResponseDTO { Message = "Tên genre không được để trống", StatusCode = 400 });
 
         try
         {
             var id = await _genreService.CreateAsync(dto);
             return CreatedAtAction(nameof(GetById), new { id },
-                new { message = "Tạo genre thành công", id });
+                new ApiResponseDTO<object> { Data = new { id }, Message = "Tạo genre thành công" });
         }
         catch (InvalidOperationException ex)
         {
-            return Conflict(new { message = ex.Message });
+            return Conflict(new ApiErrorResponseDTO { Message = ex.Message, StatusCode = 409 });
         }
     }
 
@@ -77,12 +77,12 @@ public class GenresController : ControllerBase
         {
             var success = await _genreService.UpdateAsync(id, dto);
             return success
-                ? Ok(new { message = "Cập nhật genre thành công" })
-                : NotFound(new { message = "Không tìm thấy genre" });
+                ? Ok(new ApiResponseDTO<object> { Message = "Cập nhật genre thành công" })
+                : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy genre", StatusCode = 404 });
         }
         catch (InvalidOperationException ex)
         {
-            return Conflict(new { message = ex.Message });
+            return Conflict(new ApiErrorResponseDTO { Message = ex.Message, StatusCode = 409 });
         }
     }
 
@@ -95,12 +95,12 @@ public class GenresController : ControllerBase
         {
             var success = await _genreService.DeleteAsync(id);
             return success
-                ? Ok(new { message = "Xóa genre thành công" })
-                : NotFound(new { message = "Không tìm thấy genre" });
+                ? Ok(new ApiResponseDTO<object> { Message = "Xóa genre thành công" })
+                : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy genre", StatusCode = 404 });
         }
         catch (InvalidOperationException ex)
         {
-            return Conflict(new { message = ex.Message });
+            return Conflict(new ApiErrorResponseDTO { Message = ex.Message, StatusCode = 409 });
         }
     }
 
@@ -110,9 +110,6 @@ public class GenresController : ControllerBase
 
     /// <summary>
     /// [Admin] Đồng bộ genre từ TMDB vào database.
-    /// Gọi endpoint này trước khi import phim để đảm bảo genre đã có trong DB.
-    /// - Genre chưa có → thêm mới.
-    /// - Genre đã có nhưng TMDB đổi tên → cập nhật tên.
     /// </summary>
     [HttpPost("sync-tmdb")]
     [Authorize(Roles = Roles.Admin)]
@@ -120,10 +117,10 @@ public class GenresController : ControllerBase
     {
         var tmdbGenres = await _tmdbService.GetGenresAsync();
         var created    = await _genreService.SyncFromTmdbAsync(tmdbGenres);
-        return Ok(new
+        return Ok(new ApiResponseDTO<object>
         {
-            message      = "Đồng bộ genre từ TMDB thành công",
-            createdCount = created
+            Data = new { createdCount = created },
+            Message = "Đồng bộ genre từ TMDB thành công"
         });
     }
 }

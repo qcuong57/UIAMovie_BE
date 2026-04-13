@@ -27,7 +27,9 @@ public class AuthController : ControllerBase
         var (success, message) = await _authService.RegisterAsync(
             dto.Email, dto.Username, dto.Password);
 
-        return success ? Ok(new { message }) : BadRequest(new { message });
+        return success 
+            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+            : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 
     // ─── Login ───────────────────────────────────────────────────────────────
@@ -43,19 +45,18 @@ public class AuthController : ControllerBase
 
         // Login thành công, không cần 2FA
         if (result != null)
-            return Ok(result);
+            return Ok(new ApiResponseDTO<LoginResponseDTO> { Data = result, Message = "Đăng nhập thành công" });
 
         // 2FA bật → OTP đã được gửi tự động
         if (pendingUserId.HasValue)
-            return Ok(new
+            return Ok(new ApiResponseDTO<object>
             {
-                requiresOtp = true,
-                userId      = pendingUserId,
-                message     = "OTP đã được gửi đến email của bạn"
+                Data = new { requiresOtp = true, userId = pendingUserId },
+                Message = "OTP đã được gửi đến email của bạn"
             });
 
         // Sai email/password
-        return Unauthorized(new { message = "Email hoặc mật khẩu không đúng" });
+        return Unauthorized(new ApiErrorResponseDTO { Message = "Email hoặc mật khẩu không đúng", StatusCode = 401 });
     }
 
     // ─── OTP ─────────────────────────────────────────────────────────────────
@@ -66,8 +67,8 @@ public class AuthController : ControllerBase
     {
         var success = await _authService.SendOtpAsync(dto.UserId);
         return success
-            ? Ok(new { message = "OTP đã được gửi đến email của bạn" })
-            : BadRequest(new { message = "Không tìm thấy user" });
+            ? Ok(new ApiResponseDTO<object> { Message = "OTP đã được gửi đến email của bạn" })
+            : BadRequest(new ApiErrorResponseDTO { Message = "Không tìm thấy user", StatusCode = 400 });
     }
 
     /// <summary>
@@ -80,8 +81,8 @@ public class AuthController : ControllerBase
         var result = await _authService.VerifyOtpAsync(dto.UserId, dto.Code);
 
         return result != null
-            ? Ok(result)
-            : BadRequest(new { message = "Mã OTP không đúng hoặc đã hết hạn" });
+            ? Ok(new ApiResponseDTO<LoginResponseDTO> { Data = result, Message = "Xác thực OTP thành công" })
+            : BadRequest(new ApiErrorResponseDTO { Message = "Mã OTP không đúng hoặc đã hết hạn", StatusCode = 400 });
     }
 
     // ─── 2FA ─────────────────────────────────────────────────────────────────
@@ -98,8 +99,8 @@ public class AuthController : ControllerBase
         var success = await _authService.SendOtpAsync(userId);
 
         return success
-            ? Ok(new { message = "OTP đã gửi đến email, gọi /otp/verify để bật 2FA" })
-            : BadRequest(new { message = "Không thể gửi OTP" });
+            ? Ok(new ApiResponseDTO<object> { Message = "OTP đã gửi đến email, gọi /otp/verify để bật 2FA" })
+            : BadRequest(new ApiErrorResponseDTO { Message = "Không thể gửi OTP", StatusCode = 400 });
     }
 
     /// <summary>
@@ -113,7 +114,9 @@ public class AuthController : ControllerBase
         var userId = GetUserId();
         var (success, message) = await _authService.Disable2FAAsync(userId, dto.Code);
 
-        return success ? Ok(new { message }) : BadRequest(new { message });
+        return success 
+            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+            : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 
     // ─── Forgot / Reset Password ─────────────────────────────────────────────
@@ -124,7 +127,7 @@ public class AuthController : ControllerBase
     {
         await _authService.ForgotPasswordAsync(dto.Email);
         // Luôn trả OK để không tiết lộ email có tồn tại hay không
-        return Ok(new { message = "Nếu email tồn tại, mã OTP đã được gửi" });
+        return Ok(new ApiResponseDTO<object> { Message = "Nếu email tồn tại, mã OTP đã được gửi" });
     }
 
     /// <summary>Đặt lại mật khẩu bằng OTP nhận từ email</summary>
@@ -132,14 +135,14 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDTO dto)
     {
         if (dto.NewPassword != dto.ConfirmPassword)
-            return BadRequest(new { message = "Mật khẩu xác nhận không khớp" });
+            return BadRequest(new ApiErrorResponseDTO { Message = "Mật khẩu xác nhận không khớp", StatusCode = 400 });
 
         var success = await _authService.ResetPasswordAsync(
             dto.Email, dto.Code, dto.NewPassword);
 
         return success
-            ? Ok(new { message = "Đặt lại mật khẩu thành công" })
-            : BadRequest(new { message = "Mã OTP không đúng hoặc đã hết hạn" });
+            ? Ok(new ApiResponseDTO<object> { Message = "Đặt lại mật khẩu thành công" })
+            : BadRequest(new ApiErrorResponseDTO { Message = "Mã OTP không đúng hoặc đã hết hạn", StatusCode = 400 });
     }
     
     [HttpPost("refresh-token")]
@@ -148,8 +151,8 @@ public class AuthController : ControllerBase
         var result = await _authService.RefreshTokenAsync(dto.RefreshToken);
 
         return result != null
-            ? Ok(result)
-            : Unauthorized(new { message = "Refresh token không hợp lệ hoặc đã hết hạn" });
+            ? Ok(new ApiResponseDTO<LoginResponseDTO> { Data = result, Message = "Refresh token thành công" })
+            : Unauthorized(new ApiErrorResponseDTO { Message = "Refresh token không hợp lệ hoặc đã hết hạn", StatusCode = 401 });
     }
 
     // ─── Logout ──────────────────────────────────────────────────────────────
@@ -159,7 +162,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> Logout()
     {
         await _authService.LogoutAsync(GetUserId());
-        return Ok(new { message = "Đăng xuất thành công" });
+        return Ok(new ApiResponseDTO<object> { Message = "Đăng xuất thành công" });
     }
 
     // ─── Helper ──────────────────────────────────────────────────────────────
@@ -167,5 +170,4 @@ public class AuthController : ControllerBase
     private Guid GetUserId() =>
         Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value
             ?? Guid.Empty.ToString());
-    
 }

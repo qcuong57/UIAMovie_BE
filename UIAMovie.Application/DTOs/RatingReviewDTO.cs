@@ -44,7 +44,7 @@ public class MovieRatingStatsDTO
     public Guid MovieId { get; set; }
     public decimal AverageRating { get; set; }      // 0.00 - 10.00
     public int TotalReviews { get; set; }
-    /// <summary>Dictionary<Rating (1-10), Count></summary>
+    /// <summary>Dictionary&lt;Rating (1-10), Count&gt;</summary>
     public Dictionary<int, int> RatingDistribution { get; set; } = new();
 }
 
@@ -77,7 +77,21 @@ public class CheckReviewResponseDTO
     public ReviewDTO? Review { get; set; }
 }
 
-/// <summary>Response DTO - Danh sách reviews với phân trang</summary>
+/// <summary>
+/// Response DTO - TẤT CẢ reviews toàn hệ thống (có phân trang).
+/// Dùng cho GET /api/ratingreview — homepage carousel fetch 1 request.
+/// ReviewDTO đã có MovieId để client join với danh sách phim lấy posterUrl/title.
+/// </summary>
+public class AllReviewsResponseDTO
+{
+    public List<ReviewDTO> Items { get; set; } = new();
+    public int TotalCount { get; set; }
+    public int PageNumber { get; set; }
+    public int PageSize { get; set; }
+    public int TotalPages => TotalCount == 0 ? 0 : (TotalCount + PageSize - 1) / PageSize;
+}
+
+/// <summary>Response DTO - Danh sách reviews với phân trang (per-movie)</summary>
 public class PaginatedReviewsDTO
 {
     public Guid MovieId { get; set; }

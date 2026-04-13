@@ -10,7 +10,8 @@ namespace UIAMovie.Application.Services;
 public interface IMovieService
 {
     Task<PaginatedDTO<MovieDTO>> GetMoviesAsync(FilterMoviesDTO filter);
-    Task<IEnumerable<MovieDTO>> GetTrendingMoviesAsync();
+    // ✅ FIX: trả về IEnumerable<TrendingMovieDTO> thay vì MovieDTO để có Views7d, TrendingRank
+    Task<IEnumerable<TrendingMovieDTO>> GetTrendingMoviesAsync();
     Task<MovieDTO?> GetMovieByIdAsync(Guid movieId);
     Task<MovieDTO?> GetMovieByTmdbIdAsync(int tmdbId);
     Task<Guid> CreateMovieAsync(CreateMovieDTO dto);
@@ -44,7 +45,7 @@ public class MovieService : IMovieService
     private readonly IRepository<MovieImage>     _imageRepository;
     private readonly IRepository<MovieGenre>     _movieGenreRepository;
     private readonly ICacheService               _cacheService;
-    private readonly ICloudinaryService          _cloudinaryService; // ✅ FIX: inject để xóa file trên Cloudinary
+    private readonly ICloudinaryService          _cloudinaryService;
 
     private const string TRENDING_CACHE_KEY = "movies:trending";
     private const string GENRE_CACHE_KEY    = "movies:genre:{0}";
@@ -61,7 +62,7 @@ public class MovieService : IMovieService
         IRepository<MovieDirector>  directorRepository,
         IRepository<MovieImage>     imageRepository,
         IRepository<MovieGenre>     movieGenreRepository,
-        ICloudinaryService          cloudinaryService, // ✅ FIX: thêm vào constructor
+        ICloudinaryService          cloudinaryService,
         ICacheService               cacheService)
     {
         _movieRepository        = movieRepository;
@@ -74,7 +75,7 @@ public class MovieService : IMovieService
         _directorRepository     = directorRepository;
         _imageRepository        = imageRepository;
         _movieGenreRepository   = movieGenreRepository;
-        _cloudinaryService      = cloudinaryService; // ✅ FIX
+        _cloudinaryService      = cloudinaryService;
         _cacheService           = cacheService;
     }
 
@@ -130,19 +131,34 @@ public class MovieService : IMovieService
         };
     }
 
-    public async Task<IEnumerable<MovieDTO>> GetTrendingMoviesAsync()
+    // ✅ FIX: GetTrendingMoviesAsync — không còn load all vào RAM
+    public async Task<IEnumerable<TrendingMovieDTO>> GetTrendingMoviesAsync()
     {
-        var cached = await _cacheService.GetAsync<List<MovieDTO>>(TRENDING_CACHE_KEY);
+        var cached = await _cacheService.GetAsync<List<TrendingMovieDTO>>(TRENDING_CACHE_KEY);
         if (cached != null) return cached;
 
-        var movies = await _movieRepository.GetAllWithGenresAsync();
-        var trending = movies
-            .OrderByDescending(m => m.ImdbRating)
-            .Take(20)
-            .Select(MapToDTO)
+        var now      = DateTime.UtcNow;
+        var cutoff7  = now.AddDays(-7);
+        var cutoff30 = now.AddDays(-30);
+
+        // ✅ Gọi repository — GroupBy chạy trên DB, không kéo toàn bộ WatchHistory về RAM
+        var projections = await _movieRepository.GetTrendingAsync(cutoff7, cutoff30, take: 20);
+
+        // Map sang TrendingMovieDTO, gán rank theo thứ tự đã sắp xếp
+        var trending = projections
+            .Select((p, index) =>
+            {
+                var dto = MapToTrendingDTO(p.Movie);
+                dto.TrendingRank  = index + 1;
+                dto.Views7d       = p.Views7d;
+                dto.Views30d      = p.Views30d;
+                dto.TrendingScore = p.Score;
+                return dto;
+            })
             .ToList();
 
-        await _cacheService.SetAsync(TRENDING_CACHE_KEY, trending, TimeSpan.FromHours(1));
+        // Cache 30 phút — trending không cần realtime tuyệt đối
+        await _cacheService.SetAsync(TRENDING_CACHE_KEY, trending, TimeSpan.FromMinutes(30));
         return trending;
     }
 
@@ -188,14 +204,12 @@ public class MovieService : IMovieService
         await _movieRepository.AddAsync(movie);
         await _movieRepository.SaveChangesAsync();
 
-        // Lưu genres trước để MovieGenres có sẵn khi response
         if (dto.GenreIds.Any())   await SaveGenresAsync(movie.Id, dto.GenreIds);
         if (dto.Cast.Any())       await SaveCastAsync(movie.Id, dto.Cast);
         if (dto.Director != null) await SaveDirectorAsync(movie.Id, dto.Director);
         if (dto.Images.Any())     await SaveImagesAsync(movie.Id, dto.Images);
         if (dto.Trailers.Any())   await SaveTrailersAsync(movie.Id, dto.Trailers);
 
-        // Xóa cache sau khi đã lưu toàn bộ dữ liệu — 1 round-trip duy nhất
         var keysToInvalidate = new List<string>
         {
             string.Format(MOVIE_CACHE_KEY, movie.Id),
@@ -239,8 +253,6 @@ public class MovieService : IMovieService
         var movie = await _movieRepository.GetByIdWithDetailsAsync(movieId);
         if (movie == null) return false;
 
-        // ✅ FIX BUG 1+3: Xóa tất cả video trên Cloudinary TRƯỚC khi cascade delete trong DB
-        // Nếu không xóa ở đây, file vẫn còn trên Cloudinary và URL vẫn stream được dù phim đã bị xóa
         foreach (var video in movie.MovieVideos ?? Enumerable.Empty<MovieVideo>())
         {
             var publicId = ExtractCloudinaryPublicId(video.VideoUrl);
@@ -257,14 +269,11 @@ public class MovieService : IMovieService
             .Distinct()
             .ToList();
 
-        // Lấy genre ids trước khi xóa để clear cache sau
         var genreIds = movie.MovieGenres.Select(mg => mg.GenreId).ToList();
 
-        // Xóa phim → MovieCast + MovieDirector + MovieImage + MovieVideo + MovieGenre tự cascade
         _movieRepository.Remove(movie);
         await _movieRepository.SaveChangesAsync();
 
-        // Xóa Person không còn xuất hiện ở bất kỳ phim nào khác
         foreach (var personId in personIds)
         {
             var stillInCast = await _castRepository.FindOneAsync(c => c.PersonId == personId);
@@ -367,8 +376,6 @@ public class MovieService : IMovieService
         var video = await _videoRepository.GetByIdAsync(videoId);
         if (video == null) return false;
 
-        // ✅ FIX BUG 1: Xóa file trên Cloudinary trước khi xóa record trong DB
-        // Trước đây chỉ xóa DB → file vẫn còn trên Cloudinary, tốn storage và URL vẫn hoạt động
         var publicId = ExtractCloudinaryPublicId(video.VideoUrl);
         if (publicId != null)
         {
@@ -453,6 +460,9 @@ public class MovieService : IMovieService
         }
 
         await _watchHistoryRepository.SaveChangesAsync();
+
+        // Invalidate trending cache — lượt xem mới ảnh hưởng trực tiếp đến score
+        await _cacheService.RemoveAsync(TRENDING_CACHE_KEY);
     }
 
     public async Task<IEnumerable<WatchHistoryDTO>> GetWatchHistoryAsync(Guid userId)
@@ -501,10 +511,6 @@ public class MovieService : IMovieService
 
     // ─── Private: lưu genres / cast / director / images / trailers ───────────
 
-    /// <summary>
-    /// Lưu MovieGenre records cho phim.
-    /// Tự động bỏ qua duplicate nếu gọi nhiều lần.
-    /// </summary>
     private async Task SaveGenresAsync(Guid movieId, List<Guid> genreIds)
     {
         foreach (var genreId in genreIds.Distinct())
@@ -561,15 +567,12 @@ public class MovieService : IMovieService
         return person;
     }
 
-    /// <summary>
-    /// Lưu ảnh profile cho một người — bỏ qua nếu đã có ảnh rồi (tránh duplicate khi import lại).
-    /// </summary>
     private async Task SavePersonImagesAsync(Guid personId, List<string> imageUrls)
     {
         if (!imageUrls.Any()) return;
 
         var existing = await _personImageRepository.FindAsync(i => i.PersonId == personId);
-        if (existing.Any()) return; // đã có ảnh → không import lại
+        if (existing.Any()) return;
 
         foreach (var url in imageUrls)
         {
@@ -674,23 +677,12 @@ public class MovieService : IMovieService
         return null;
     }
 
-    /// <summary>
-    /// ✅ FIX BUG 1: Extract Cloudinary publicId từ secure URL để truyền vào DeleteFileAsync.
-    /// Cloudinary URL dạng:
-    ///   https://res.cloudinary.com/{cloud}/video/upload/v{timestamp}/{folder}/{publicId}.mp4
-    /// publicId cần trả về: {folder}/{publicId}  (không có extension, không có v{timestamp}/)
-    ///
-    /// Bỏ qua YouTube URL — chỉ xử lý Cloudinary URL.
-    /// </summary>
     private static string? ExtractCloudinaryPublicId(string? url)
     {
         if (string.IsNullOrEmpty(url)) return null;
-        // Bỏ qua YouTube
         if (url.Contains("youtube.com") || url.Contains("youtu.be")) return null;
-        // Chỉ xử lý Cloudinary URL
         if (!url.Contains("cloudinary.com")) return null;
 
-        // Lấy phần sau "/upload/" và bỏ version prefix "v123456789/"
         var match = System.Text.RegularExpressions.Regex.Match(
             url, @"/upload/(?:v\d+/)?(.+?)(?:\.[^./]+)?$");
 
@@ -778,6 +770,39 @@ public class MovieService : IMovieService
                 ImageType = i.ImageType
             }).ToList() ?? new()
     };
+
+    /// <summary>
+    /// Map Movie → TrendingMovieDTO.
+    /// Views7d, Views30d, TrendingRank, TrendingScore được gán sau bởi caller.
+    /// </summary>
+    private static TrendingMovieDTO MapToTrendingDTO(Movie m)
+    {
+        var base_ = MapToDTO(m);
+        return new TrendingMovieDTO
+        {
+            Id            = base_.Id,
+            Title         = base_.Title,
+            Description   = base_.Description,
+            ReleaseDate   = base_.ReleaseDate,
+            PosterUrl     = base_.PosterUrl,
+            BackdropUrl   = base_.BackdropUrl,
+            Duration      = base_.Duration,
+            Rating        = base_.Rating,
+            OriginCountry = base_.OriginCountry,
+            Genres        = base_.Genres,
+            Videos        = base_.Videos,
+            TrailerKey    = base_.TrailerKey,
+            Cast          = base_.Cast,
+            Images        = base_.Images,
+            Director      = base_.Director,
+            DirectorDetail= base_.DirectorDetail,
+            // Trending fields — sẽ được gán sau
+            TrendingRank  = 0,
+            Views7d       = 0,
+            Views30d      = 0,
+            TrendingScore = 0
+        };
+    }
 
     public async Task<IEnumerable<string>> GetPersonImagesAsync(Guid personId)
     {
