@@ -2,6 +2,7 @@ using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using StackExchange.Redis;
+using UIAMovie.API.Filters;
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Application.Services;
 using UIAMovie.Application.Validators;
@@ -52,6 +53,7 @@ builder.Services.AddScoped<ICacheService, RedisCacheService>();
 // Repositories
 builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 builder.Services.AddScoped<IMovieRepository, MovieRepository>();
+builder.Services.AddScoped<ITvShowRepository, TvShowRepository>();
 
 // Authentication
 builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
@@ -72,6 +74,15 @@ builder.Services.AddScoped<IRepository<Person>, Repository<Person>>();
 builder.Services.AddScoped<IRepository<MovieCast>, Repository<MovieCast>>();
 builder.Services.AddScoped<IRepository<MovieDirector>, Repository<MovieDirector>>();
 builder.Services.AddScoped<IRepository<MovieImage>, Repository<MovieImage>>();
+builder.Services.AddHttpClient<IGroqService, GroqService>();
+builder.Services.AddScoped<ITvShowService, TvShowService>();
+builder.Services.AddScoped<IRepository<TvShowVideo>,   Repository<TvShowVideo>>();
+builder.Services.AddScoped<IRepository<TvShowImage>,   Repository<TvShowImage>>();
+builder.Services.AddScoped<IRepository<TvShowGenre>,   Repository<TvShowGenre>>();
+builder.Services.AddScoped<IRepository<TvShowCast>,    Repository<TvShowCast>>();
+builder.Services.AddScoped<IRepository<TvShowDirector>, Repository<TvShowDirector>>();
+builder.Services.AddScoped<IRepository<Season>,        Repository<Season>>();
+builder.Services.AddScoped<IRepository<Episode>,       Repository<Episode>>();
 
 // JWT Configuration
 var jwtSettings = builder.Configuration.GetSection("Jwt");
@@ -100,8 +111,11 @@ builder.Services.AddCors(options =>
             .AllowAnyMethod());
 });
 
-builder.Services.AddControllers();
-builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddControllers()
+    .ConfigureApiBehaviorOptions(options =>
+    {
+        options.InvalidModelStateResponseFactory = ValidationErrorFilter.Handler;
+    });builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();

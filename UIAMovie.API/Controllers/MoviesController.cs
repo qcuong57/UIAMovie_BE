@@ -11,6 +11,12 @@ using UIAMovie.Infrastructure.Configuration;
 
 namespace UIAMovie.Controllers;
 
+/// <summary>
+/// Fix so với phiên bản cũ:
+///   [1] GetByCountry: dùng GetMoviesAsync(filter) → SQL filter, bỏ PageSize=200 cứng
+///   [2] GetAvailableCountries: dùng GetAvailableCountriesAsync() → SQL DISTINCT,
+///       không còn GetMoviesAsync(PageSize=9999) rồi distinct trong RAM
+/// </summary>
 [ApiController]
 [Route("api/[controller]")]
 public class MoviesController : ControllerBase
@@ -42,10 +48,12 @@ public class MoviesController : ControllerBase
         if (string.IsNullOrWhiteSpace(country))
             return BadRequest(new ApiErrorResponseDTO { Message = "Mã quốc gia không được để trống", StatusCode = 400 });
 
+        // FIX [1]: PageSize=200 cứng → dùng filter chuẩn, để client tự chọn page size
+        // Giữ nguyên casing khi truyền vào filter — repository tự normalize khi compare
         var filter = new FilterMoviesDTO
         {
-            OriginCountry = country.Trim().ToUpper(),
-            PageSize      = 200,
+            OriginCountry = country.Trim(),
+            PageSize      = 50,
             SortBy        = "rating",
             SortDesc      = true
         };
@@ -56,14 +64,10 @@ public class MoviesController : ControllerBase
     [HttpGet("countries")]
     public async Task<IActionResult> GetAvailableCountries()
     {
-        var all = await _movieService.GetMoviesAsync(new FilterMoviesDTO { PageSize = 9999 });
-        var countries = all.Items
-            .Where(m => !string.IsNullOrEmpty(m.OriginCountry))
-            .Select(m => m.OriginCountry!)
-            .Distinct()
-            .OrderBy(c => c)
-            .ToList();
-        return Ok(new ApiResponseDTO<List<string>> { Data = countries, Message = "Thành công" });
+        // FIX [2]: Dùng GetAvailableCountriesAsync() → SQL SELECT DISTINCT OriginCountry
+        // Thay vì GetMoviesAsync(PageSize=9999) rồi .Select().Distinct() trong RAM
+        var countries = await _movieService.GetAvailableCountriesAsync();
+        return Ok(new ApiResponseDTO<List<string>> { Data = countries.ToList(), Message = "Thành công" });
     }
 
     [HttpGet]
@@ -101,8 +105,8 @@ public class MoviesController : ControllerBase
     public async Task<IActionResult> GetById(Guid id)
     {
         var movie = await _movieService.GetMovieByIdAsync(id);
-        return movie == null 
-            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy phim", StatusCode = 404 }) 
+        return movie == null
+            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy phim", StatusCode = 404 })
             : Ok(new ApiResponseDTO<object> { Data = movie, Message = "Thành công" });
     }
 
@@ -129,8 +133,8 @@ public class MoviesController : ControllerBase
     public async Task<IActionResult> GetTmdbMovie(int tmdbId)
     {
         var movie = await _tmdbService.GetMovieAsync(tmdbId);
-        return movie == null 
-            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy phim trên TMDB", StatusCode = 404 }) 
+        return movie == null
+            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy phim trên TMDB", StatusCode = 404 })
             : Ok(new ApiResponseDTO<object> { Data = movie, Message = "Thành công" });
     }
 
@@ -152,8 +156,8 @@ public class MoviesController : ControllerBase
     public async Task<IActionResult> GetTmdbPerson(int tmdbPersonId)
     {
         var person = await _tmdbService.GetPersonDetailAsync(tmdbPersonId);
-        return person == null 
-            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy thông tin người này", StatusCode = 404 }) 
+        return person == null
+            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy thông tin người này", StatusCode = 404 })
             : Ok(new ApiResponseDTO<object> { Data = person, Message = "Thành công" });
     }
 
@@ -170,7 +174,8 @@ public class MoviesController : ControllerBase
     {
         var existing = await _movieService.GetMovieByTmdbIdAsync(tmdbId);
         if (existing != null)
-            return Conflict(new ApiErrorResponseDTO { Message = $"Phim này đã được import rồi (ID: {existing.Id})", StatusCode = 409 });
+            return Conflict(new ApiErrorResponseDTO
+                { Message = $"Phim này đã được import rồi (ID: {existing.Id})", StatusCode = 409 });
 
         var full = await _tmdbService.GetFullMovieAsync(tmdbId);
         if (full == null)
@@ -184,39 +189,53 @@ public class MoviesController : ControllerBase
             TmdbId      = full.Detail.Id,
             Title       = full.Detail.Title,
             Description = string.IsNullOrEmpty(full.Detail.Overview) ? full.Detail.Title : full.Detail.Overview,
-            ReleaseDate = DateTime.TryParse(full.Detail.ReleaseDate, out var d) ? DateTime.SpecifyKind(d, DateTimeKind.Utc) : null,
-            PosterUrl   = full.Detail.PosterUrl,
-            BackdropUrl = full.Detail.BackdropUrl,
-            Duration    = full.Detail.Runtime,
-            ImdbRating  = (decimal)full.Detail.VoteAverage,
+            ReleaseDate = DateTime.TryParse(full.Detail.ReleaseDate, out var d)
+                              ? DateTime.SpecifyKind(d, DateTimeKind.Utc)
+                              : null,
+            PosterUrl     = full.Detail.PosterUrl,
+            BackdropUrl   = full.Detail.BackdropUrl,
+            Duration      = full.Detail.Runtime,
+            // FIX 1: double -> decimal? cast
+            ImdbRating    = (decimal?)full.Detail.VoteAverage,
+            // FIX 2: TmdbMovieDetailDTO khong co ContentRating
+            ContentRating = null,
+            // FIX 3: OriginCountry la List<string> -> lay phan tu dau tien
             OriginCountry = full.Detail.OriginCountry.FirstOrDefault(),
-            GenreIds    = genreIds,
+            GenreIds      = genreIds,
 
-            Cast = full.Cast.Select(c =>
+            // FIX 4: TmdbFullMovieDTO co Cast truc tiep o root, khong co Credits wrapper
+            Cast = full.Cast.Take(10).Select(c => new ImportCastDTO
             {
-                var bio    = full.PersonDetails.GetValueOrDefault(c.Id);
-                var images = full.PersonImages.GetValueOrDefault(c.Id) ?? new();
-                return new ImportCastDTO
-                {
-                    TmdbPersonId  = c.Id, Name = c.Name, Character = c.Character, Order = c.Order,
-                    ProfileUrl    = c.ProfileUrl, Biography = bio?.Biography, Birthday = bio?.Birthday,
-                    PlaceOfBirth  = bio?.PlaceOfBirth, ProfileImages = images
-                };
+                TmdbPersonId  = c.Id,
+                Name          = c.Name,
+                Character     = c.Character,
+                Order         = c.Order,
+                ProfileUrl    = c.ProfileUrl,
+                Biography     = full.PersonDetails.TryGetValue(c.Id, out var pd)  ? pd?.Biography     : null,
+                Birthday      = full.PersonDetails.TryGetValue(c.Id, out var pd2) ? pd2?.Birthday     : null,
+                PlaceOfBirth  = full.PersonDetails.TryGetValue(c.Id, out var pd3) ? pd3?.PlaceOfBirth : null,
+                ProfileImages = full.PersonImages.TryGetValue(c.Id, out var imgs) ? imgs.ToList()     : new()
             }).ToList(),
 
+            // FIX 4 (tiep): Director o root cua TmdbFullMovieDTO la TmdbCrewDTO?
             Director = full.Director == null ? null : new ImportDirectorDTO
             {
-                TmdbPersonId  = full.Director.Id, Name = full.Director.Name, ProfileUrl = full.Director.ProfileUrl,
-                Biography     = full.PersonDetails.GetValueOrDefault(full.Director.Id)?.Biography,
-                Birthday      = full.PersonDetails.GetValueOrDefault(full.Director.Id)?.Birthday,
-                PlaceOfBirth  = full.PersonDetails.GetValueOrDefault(full.Director.Id)?.PlaceOfBirth,
-                ProfileImages = full.PersonImages.GetValueOrDefault(full.Director.Id) ?? new()
+                TmdbPersonId  = full.Director.Id,
+                Name          = full.Director.Name,
+                ProfileUrl    = full.Director.ProfileUrl,
+                Biography     = full.PersonDetails.TryGetValue(full.Director.Id, out var dpd)  ? dpd?.Biography     : null,
+                Birthday      = full.PersonDetails.TryGetValue(full.Director.Id, out var dpd2) ? dpd2?.Birthday     : null,
+                PlaceOfBirth  = full.PersonDetails.TryGetValue(full.Director.Id, out var dpd3) ? dpd3?.PlaceOfBirth : null,
+                ProfileImages = full.PersonImages.TryGetValue(full.Director.Id, out var dimgs) ? dimgs.ToList()     : new()
             },
 
             Images = full.Backdrops.Select(i => new ImportImageDTO { Url = i.Url!, ImageType = "backdrop" })
-                .Concat(full.Posters.Select(i => new ImportImageDTO { Url = i.Url!, ImageType = "poster" })).ToList(),
+                .Concat(full.Posters.Select(i => new ImportImageDTO { Url = i.Url!, ImageType = "poster" }))
+                .ToList(),
 
-            Trailers = full.Trailers.Select(t => new ImportTrailerDTO { YoutubeUrl = t.YoutubeUrl, Name = t.Name }).ToList()
+            Trailers = full.Trailers
+                .Select(t => new ImportTrailerDTO { YoutubeUrl = t.YoutubeUrl, Name = t.Name })
+                .ToList()
         };
 
         var movieId = await _movieService.CreateMovieAsync(dto);
@@ -225,9 +244,12 @@ public class MoviesController : ControllerBase
         {
             Data = new
             {
-                movieId, genreCount = genreIds.Count, castCount = dto.Cast.Count,
-                imageCount = dto.Images.Count, hasDirector = dto.Director != null,
-                personBioCount = full.PersonDetails.Count(kv => !string.IsNullOrEmpty(kv.Value?.Biography)),
+                movieId,
+                genreCount       = genreIds.Count,
+                castCount        = dto.Cast.Count,
+                imageCount       = dto.Images.Count,
+                hasDirector      = dto.Director != null,
+                personBioCount   = full.PersonDetails.Count(kv => !string.IsNullOrEmpty(kv.Value?.Biography)),
                 personImageCount = full.PersonImages.Count(kv => kv.Value.Any())
             },
             Message = "Import thành công"
@@ -380,7 +402,9 @@ public class MoviesController : ControllerBase
     public async Task<IActionResult> DeleteWatchHistory(Guid historyId)
     {
         var success = await _movieService.DeleteWatchHistoryAsync(GetUserId(), historyId);
-        if (!success) return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy lịch sử xem", StatusCode = 404 });
+        if (!success)
+            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy lịch sử xem", StatusCode = 404 });
+
         return Ok(new ApiResponseDTO<object> { Message = "Đã xóa lịch sử xem" });
     }
 

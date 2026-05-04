@@ -2,103 +2,149 @@
 
 namespace UIAMovie.Application.DTOs;
 
-/// <summary>Request DTO - Tạo/Cập nhật rating & review</summary>
+/// <summary>
+/// Request DTO — Tạo/Cập nhật rating &amp; review.
+/// Chỉ cung cấp đúng 1 trong 3 tổ hợp:
+///   • { movieId }              → review phim
+///   • { tvShowId }             → review cả show
+///   • { tvShowId, episodeId }  → review từng tập
+/// </summary>
 public class RatingReviewDTO
 {
-    public Guid MovieId { get; set; }
-    public int Rating { get; set; }            // 1-10
+    public Guid? MovieId   { get; set; }
+    public Guid? TvShowId  { get; set; }
+    /// <summary>Chỉ điền khi muốn review một tập cụ thể (kèm TvShowId).</summary>
+    public Guid? EpisodeId { get; set; }
+
+    public int     Rating     { get; set; }   // 1-10
     public string? ReviewText { get; set; }
-    public bool IsSpoiler { get; set; } = false;
+    public bool    IsSpoiler  { get; set; } = false;
 }
 
-/// <summary>Response DTO - Chi tiết review (full info)</summary>
+// ── Response DTOs ─────────────────────────────────────────────────────────────
+
 public class ReviewDTO
 {
     public Guid Id { get; set; }
-    public Guid MovieId { get; set; }
-    public Guid UserId { get; set; }
-    public string UserName { get; set; }
+
+    public Guid? MovieId   { get; set; }
+    public Guid? TvShowId  { get; set; }
+    /// <summary>null nếu đây là review cấp show, có giá trị nếu review từng tập.</summary>
+    public Guid? EpisodeId { get; set; }
+    /// <summary>Tiện hiển thị — số tập (VD: "S2E5"). null khi không phải episode review.</summary>
+    public string? EpisodeLabel { get; set; }
+
+    public Guid    UserId     { get; set; }
+    public string  UserName   { get; set; } = string.Empty;
     public string? UserAvatar { get; set; }
-    public int Rating { get; set; }
+
+    public int     Rating     { get; set; }
     public string? ReviewText { get; set; }
-    public bool IsSpoiler { get; set; }
-    public DateTime CreatedAt { get; set; }
+    public bool    IsSpoiler  { get; set; }
+    public DateTime  CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 }
 
-/// <summary>Response DTO - Tóm tắt review cho list view</summary>
 public class ReviewSummaryDTO
 {
-    public Guid Id { get; set; }
-    public string UserName { get; set; }
+    public Guid    Id         { get; set; }
+    public string  UserName   { get; set; } = string.Empty;
     public string? UserAvatar { get; set; }
-    public int Rating { get; set; }
+    public int     Rating     { get; set; }
     public string? ReviewText { get; set; }
-    public bool IsSpoiler { get; set; }
+    public bool    IsSpoiler  { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
-/// <summary>Response DTO - Thống kê rating của phim</summary>
+// ── Stats DTOs ────────────────────────────────────────────────────────────────
+
 public class MovieRatingStatsDTO
 {
-    public Guid MovieId { get; set; }
-    public decimal AverageRating { get; set; }      // 0.00 - 10.00
-    public int TotalReviews { get; set; }
-    /// <summary>Dictionary&lt;Rating (1-10), Count&gt;</summary>
+    public Guid    MovieId    { get; set; }
+    public decimal AverageRating { get; set; }
+    public int     TotalReviews  { get; set; }
     public Dictionary<int, int> RatingDistribution { get; set; } = new();
 }
 
-/// <summary>Response DTO - Tạo review thành công</summary>
-public class CreateReviewResponseDTO
+public class TvShowRatingStatsDTO
 {
-    public Guid ReviewId { get; set; }
-    public string Message { get; set; } = "Review đã được tạo thành công";
+    public Guid    TvShowId     { get; set; }
+    public decimal AverageRating { get; set; }
+    public int     TotalReviews  { get; set; }
+    public Dictionary<int, int> RatingDistribution { get; set; } = new();
 }
 
-/// <summary>Response DTO - Danh sách reviews của phim</summary>
+public class EpisodeRatingStatsDTO
+{
+    public Guid    EpisodeId    { get; set; }
+    public Guid    TvShowId     { get; set; }
+    public decimal AverageRating { get; set; }
+    public int     TotalReviews  { get; set; }
+    public Dictionary<int, int> RatingDistribution { get; set; } = new();
+}
+
+// ── List Response DTOs ────────────────────────────────────────────────────────
+
 public class MovieReviewsResponseDTO
 {
-    public Guid MovieId { get; set; }
-    public string MovieTitle { get; set; }
+    public Guid   MovieId    { get; set; }
+    public string MovieTitle { get; set; } = string.Empty;
     public List<ReviewDTO> Reviews { get; set; } = new();
 }
 
-/// <summary>Response DTO - User reviews</summary>
+public class TvShowReviewsResponseDTO
+{
+    public Guid   TvShowId    { get; set; }
+    public string TvShowTitle { get; set; } = string.Empty;
+    public List<ReviewDTO> Reviews { get; set; } = new();
+}
+
+public class EpisodeReviewsResponseDTO
+{
+    public Guid   EpisodeId    { get; set; }
+    public Guid   TvShowId     { get; set; }
+    public string EpisodeLabel { get; set; } = string.Empty;   // VD: "S1E3 - Tên tập"
+    public List<ReviewDTO> Reviews { get; set; } = new();
+}
+
 public class UserReviewsResponseDTO
 {
     public int TotalReviews { get; set; }
     public List<ReviewDTO> Reviews { get; set; } = new();
 }
 
-/// <summary>Response DTO - Check user reviewed</summary>
 public class CheckReviewResponseDTO
 {
-    public bool HasReview { get; set; }
-    public ReviewDTO? Review { get; set; }
+    public bool       HasReview { get; set; }
+    public ReviewDTO? Review    { get; set; }
+}
+
+public class CreateReviewResponseDTO
+{
+    public Guid   ReviewId { get; set; }
+    public string Message  { get; set; } = "Review đã được tạo thành công";
 }
 
 /// <summary>
-/// Response DTO - TẤT CẢ reviews toàn hệ thống (có phân trang).
-/// Dùng cho GET /api/ratingreview — homepage carousel fetch 1 request.
-/// ReviewDTO đã có MovieId để client join với danh sách phim lấy posterUrl/title.
+/// Tất cả reviews toàn hệ thống — phân trang, dùng cho homepage carousel.
+/// ReviewDTO chứa MovieId / TvShowId / EpisodeId để client tự join.
 /// </summary>
 public class AllReviewsResponseDTO
 {
-    public List<ReviewDTO> Items { get; set; } = new();
+    public List<ReviewDTO> Items      { get; set; } = new();
     public int TotalCount { get; set; }
     public int PageNumber { get; set; }
-    public int PageSize { get; set; }
+    public int PageSize   { get; set; }
     public int TotalPages => TotalCount == 0 ? 0 : (TotalCount + PageSize - 1) / PageSize;
 }
 
-/// <summary>Response DTO - Danh sách reviews với phân trang (per-movie)</summary>
 public class PaginatedReviewsDTO
 {
-    public Guid MovieId { get; set; }
-    public string MovieTitle { get; set; }
+    public Guid   MovieId    { get; set; }
+    public string MovieTitle { get; set; } = string.Empty;
     public List<ReviewDTO> Reviews { get; set; } = new();
     public int TotalCount { get; set; }
     public int PageNumber { get; set; }
-    public int PageSize { get; set; }
+    public int PageSize   { get; set; }
     public int TotalPages => (TotalCount + PageSize - 1) / PageSize;
 }

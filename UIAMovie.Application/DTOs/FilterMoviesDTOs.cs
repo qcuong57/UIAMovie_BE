@@ -2,6 +2,7 @@
 
 public class FilterMoviesDTO
 {
+    public List<Guid>? Ids { get; set; }
     public List<Guid>? GenreIds { get; set; }
     public decimal? MinRating { get; set; }
     public decimal? MaxRating { get; set; }

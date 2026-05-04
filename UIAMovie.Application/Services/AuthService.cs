@@ -9,7 +9,7 @@ namespace UIAMovie.Application.Services;
 public interface IAuthService
 {
     Task<(bool Success, string Message)> RegisterAsync(string email, string username, string password);
-    Task<(LoginResponseDTO? Response, Guid? PendingUserId)> LoginAsync(string email, string password);
+    Task<(LoginResponseDTO? Response, Guid? PendingUserId, string? ErrorMessage)> LoginAsync(string email, string password);
     Task<bool> SendOtpAsync(Guid userId);
     Task<LoginResponseDTO?> VerifyOtpAsync(Guid userId, string code);
     Task LogoutAsync(Guid userId);
@@ -71,20 +71,26 @@ public class AuthService : IAuthService
         return (true, "Đăng ký thành công");
     }
 
-    public async Task<(LoginResponseDTO? Response, Guid? PendingUserId)> LoginAsync(
+    public async Task<(LoginResponseDTO? Response, Guid? PendingUserId, string? ErrorMessage)> LoginAsync(
         string email, string password)
     {
         var user = await FindUserByEmailAsync(email);
-        if (user == null) return (null, null);
-        if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash)) return (null, null);
+        if (user == null)
+            return (null, null, "Email không tồn tại trong hệ thống");
+
+        if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
+            return (null, null, "Mật khẩu không đúng");
+
+        if (!user.IsActive)
+            return (null, null, "Tài khoản đã bị khóa, vui lòng liên hệ hỗ trợ");
 
         if (user.Is2FaEnabled)
         {
             await SendOtpAsync(user.Id);
-            return (null, user.Id);
+            return (null, user.Id, null);
         }
 
-        return (await CreateSessionAsync(user), null);
+        return (await CreateSessionAsync(user), null, null);
     }
 
     public async Task<bool> SendOtpAsync(Guid userId)

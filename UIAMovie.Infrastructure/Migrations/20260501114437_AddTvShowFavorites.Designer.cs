@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using UIAMovie.Infrastructure.Data;
@@ -11,9 +12,11 @@ using UIAMovie.Infrastructure.Data;
 namespace UIAMovie.Infrastructure.Migrations
 {
     [DbContext(typeof(MovieDbContext))]
-    partial class MovieDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260501114437_AddTvShowFavorites")]
+    partial class AddTvShowFavorites
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -389,16 +392,13 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<Guid?>("EpisodeId")
-                        .HasColumnType("uuid");
-
                     b.Property<bool>("IsPublished")
                         .HasColumnType("boolean");
 
                     b.Property<bool>("IsSpoiler")
                         .HasColumnType("boolean");
 
-                    b.Property<Guid?>("MovieId")
+                    b.Property<Guid>("MovieId")
                         .HasColumnType("uuid");
 
                     b.Property<int>("Rating")
@@ -406,9 +406,6 @@ namespace UIAMovie.Infrastructure.Migrations
 
                     b.Property<string>("ReviewText")
                         .HasColumnType("text");
-
-                    b.Property<Guid?>("TvShowId")
-                        .HasColumnType("uuid");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -418,11 +415,7 @@ namespace UIAMovie.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("EpisodeId");
-
                     b.HasIndex("MovieId");
-
-                    b.HasIndex("TvShowId");
 
                     b.HasIndex("UserId", "MovieId");
 
@@ -578,28 +571,6 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.ToTable("TvShowDirectors");
                 });
 
-            modelBuilder.Entity("UIAMovie.Domain.Entities.TvShowFavorite", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("AddedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("TvShowId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TvShowId");
-
-                    b.ToTable("TvShowFavorites");
-                });
-
             modelBuilder.Entity("UIAMovie.Domain.Entities.TvShowGenre", b =>
                 {
                     b.Property<Guid>("Id")
@@ -682,39 +653,6 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.ToTable("TvShowVideos");
                 });
 
-            modelBuilder.Entity("UIAMovie.Domain.Entities.TvShowWatchHistory", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid?>("EpisodeId")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("IsCompleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<int>("ProgressSeconds")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("TvShowId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("WatchedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EpisodeId");
-
-                    b.HasIndex("TvShowId");
-
-                    b.ToTable("TvShowWatchHistory");
-                });
-
             modelBuilder.Entity("UIAMovie.Domain.Entities.User", b =>
                 {
                     b.Property<Guid>("Id")
@@ -784,7 +722,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$vU/i.On9oQ5JixsMdwhXZ.kXbNfpUaYrIwWsAEOfodX3ax5sNJND6",
+                            PasswordHash = "$2a$11$IilSfMCZ9F9rylXVe9AA5.hCGY.VSegyUFD4ewD8jUvl/sNVuH4ZO",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
@@ -981,18 +919,11 @@ namespace UIAMovie.Infrastructure.Migrations
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.RatingReview", b =>
                 {
-                    b.HasOne("UIAMovie.Domain.Entities.Episode", "Episode")
-                        .WithMany()
-                        .HasForeignKey("EpisodeId");
-
                     b.HasOne("UIAMovie.Domain.Entities.Movie", "Movie")
                         .WithMany("RatingReviews")
                         .HasForeignKey("MovieId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
-                    b.HasOne("UIAMovie.Domain.Entities.TvShow", "TvShow")
-                        .WithMany()
-                        .HasForeignKey("TvShowId");
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.HasOne("UIAMovie.Domain.Entities.User", "User")
                         .WithMany("RatingReviews")
@@ -1000,11 +931,7 @@ namespace UIAMovie.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("Episode");
-
                     b.Navigation("Movie");
-
-                    b.Navigation("TvShow");
 
                     b.Navigation("User");
                 });
@@ -1058,17 +985,6 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Navigation("TvShow");
                 });
 
-            modelBuilder.Entity("UIAMovie.Domain.Entities.TvShowFavorite", b =>
-                {
-                    b.HasOne("UIAMovie.Domain.Entities.TvShow", "TvShow")
-                        .WithMany()
-                        .HasForeignKey("TvShowId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("TvShow");
-                });
-
             modelBuilder.Entity("UIAMovie.Domain.Entities.TvShowGenre", b =>
                 {
                     b.HasOne("UIAMovie.Domain.Entities.Genre", "Genre")
@@ -1106,23 +1022,6 @@ namespace UIAMovie.Infrastructure.Migrations
                         .HasForeignKey("TvShowId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.Navigation("TvShow");
-                });
-
-            modelBuilder.Entity("UIAMovie.Domain.Entities.TvShowWatchHistory", b =>
-                {
-                    b.HasOne("UIAMovie.Domain.Entities.Episode", "Episode")
-                        .WithMany()
-                        .HasForeignKey("EpisodeId");
-
-                    b.HasOne("UIAMovie.Domain.Entities.TvShow", "TvShow")
-                        .WithMany("TvShowWatchHistories")
-                        .HasForeignKey("TvShowId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Episode");
 
                     b.Navigation("TvShow");
                 });
@@ -1208,8 +1107,6 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Navigation("TvShowImages");
 
                     b.Navigation("TvShowVideos");
-
-                    b.Navigation("TvShowWatchHistories");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.User", b =>

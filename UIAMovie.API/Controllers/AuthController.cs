@@ -24,11 +24,21 @@ public class AuthController : ControllerBase
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterDTO dto)
     {
+        if (!ModelState.IsValid)
+            return BadRequest(new ApiErrorResponseDTO
+            {
+                Message = ModelState.Values
+                    .SelectMany(v => v.Errors)
+                    .Select(e => e.ErrorMessage)
+                    .FirstOrDefault() ?? "Dữ liệu không hợp lệ",
+                StatusCode = 400
+            });
+
         var (success, message) = await _authService.RegisterAsync(
             dto.Email, dto.Username, dto.Password);
 
-        return success 
-            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = message })
             : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 
@@ -41,7 +51,7 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginDTO dto)
     {
-        var (result, pendingUserId) = await _authService.LoginAsync(dto.Email, dto.Password);
+        var (result, pendingUserId, errorMessage) = await _authService.LoginAsync(dto.Email, dto.Password);
 
         // Login thành công, không cần 2FA
         if (result != null)
@@ -55,8 +65,12 @@ public class AuthController : ControllerBase
                 Message = "OTP đã được gửi đến email của bạn"
             });
 
-        // Sai email/password
-        return Unauthorized(new ApiErrorResponseDTO { Message = "Email hoặc mật khẩu không đúng", StatusCode = 401 });
+        // Sai thông tin — trả message cụ thể
+        return Unauthorized(new ApiErrorResponseDTO
+        {
+            Message = errorMessage ?? "Email hoặc mật khẩu không đúng",
+            StatusCode = 401
+        });
     }
 
     // ─── OTP ─────────────────────────────────────────────────────────────────
