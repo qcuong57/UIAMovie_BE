@@ -198,6 +198,7 @@ public class MovieService : IMovieService
         movie.Title       = dto.Title       ?? movie.Title;
         movie.Description = dto.Description ?? movie.Description;
         movie.ImdbRating  = dto.ImdbRating  ?? movie.ImdbRating;
+        if (dto.IsPremium.HasValue) movie.IsPremium = dto.IsPremium.Value;
         movie.UpdatedAt   = DateTime.UtcNow;
 
         _movieRepository.Update(movie);
@@ -720,6 +721,7 @@ public class MovieService : IMovieService
         Duration      = m.Duration,
         Rating        = m.ImdbRating,
         OriginCountry = m.OriginCountry,
+        IsPremium     = m.IsPremium,
 
         Genres = m.MovieGenres?
             .Select(g => g.Genre?.Name ?? "")
@@ -803,6 +805,7 @@ public class MovieService : IMovieService
             Duration       = base_.Duration,
             Rating         = base_.Rating,
             OriginCountry  = base_.OriginCountry,
+            IsPremium      = base_.IsPremium,
             Genres         = base_.Genres,
             Videos         = base_.Videos,
             TrailerKey     = base_.TrailerKey,

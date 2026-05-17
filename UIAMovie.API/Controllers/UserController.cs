@@ -50,8 +50,8 @@ public class UserController : ControllerBase
     public async Task<IActionResult> UpdateUser(Guid id, [FromBody] UpdateUserDTO dto)
     {
         var (success, message) = await _userService.UpdateUserAsync(id, dto);
-        return success 
-            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = message })
             : NotFound(new ApiErrorResponseDTO { Message = message, StatusCode = 404 });
     }
 
@@ -61,8 +61,8 @@ public class UserController : ControllerBase
     public async Task<IActionResult> UpdateRole(Guid id, [FromBody] UpdateRoleDTO dto)
     {
         var (success, message) = await _userService.UpdateUserRoleAsync(id, dto.Role);
-        return success 
-            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = message })
             : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 
@@ -81,6 +81,32 @@ public class UserController : ControllerBase
             : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy user", StatusCode = 404 });
     }
 
+    /// <summary>[Admin] Khóa tài khoản user</summary>
+    [HttpPost("{id:guid}/ban")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> BanUser(Guid id, [FromBody] BanUserDTO dto)
+    {
+        // Không cho phép admin tự khóa chính mình
+        if (id == GetUserId())
+            return BadRequest(new ApiErrorResponseDTO { Message = "Không thể tự khóa tài khoản của mình", StatusCode = 400 });
+
+        var (success, message) = await _userService.BanUserAsync(id, dto);
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = message })
+            : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
+    }
+
+    /// <summary>[Admin] Mở khóa tài khoản user</summary>
+    [HttpPost("{id:guid}/unban")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> UnbanUser(Guid id)
+    {
+        var (success, message) = await _userService.UnbanUserAsync(id);
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = message })
+            : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // USER (chính mình)
     // ═══════════════════════════════════════════════════════════════════
@@ -90,8 +116,8 @@ public class UserController : ControllerBase
     public async Task<IActionResult> GetMe()
     {
         var user = await _userService.GetUserByIdAsync(GetUserId());
-        return user == null 
-            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy user", StatusCode = 404 }) 
+        return user == null
+            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy user", StatusCode = 404 })
             : Ok(new ApiResponseDTO<object> { Data = user, Message = "Thành công" });
     }
 
@@ -100,8 +126,8 @@ public class UserController : ControllerBase
     public async Task<IActionResult> UpdateMe([FromBody] UpdateUserDTO dto)
     {
         var (success, message) = await _userService.UpdateUserAsync(GetUserId(), dto);
-        return success 
-            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = message })
             : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 
@@ -110,8 +136,8 @@ public class UserController : ControllerBase
     public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordDTO dto)
     {
         var (success, message) = await _userService.ChangePasswordAsync(GetUserId(), dto);
-        return success 
-            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = message })
             : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 

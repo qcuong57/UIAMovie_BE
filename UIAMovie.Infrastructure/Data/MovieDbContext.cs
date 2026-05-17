@@ -40,6 +40,12 @@ public class MovieDbContext : DbContext
     public DbSet<TvShowVideo> TvShowVideos { get; set; }
     public DbSet<TvShowFavorite> TvShowFavorites { get; set; }
 
+    public DbSet<UserSubscription> UserSubscriptions { get; set; }
+    public DbSet<PaymentOrder> PaymentOrders { get; set; }
+
+    public DbSet<MovieSubtitle> MovieSubtitles { get; set; }
+    public DbSet<EpisodeSubtitle> EpisodeSubtitles { get; set; }
+
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -88,6 +94,22 @@ public class MovieDbContext : DbContext
                 .WithMany(m => m.MovieImages)
                 .HasForeignKey(e => e.MovieId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MovieSubtitle>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.MovieId, e.LanguageCode }).IsUnique();
+
+            entity.HasOne(e => e.Movie)
+                .WithMany()
+                .HasForeignKey(e => e.MovieId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.Property(e => e.LanguageCode).HasMaxLength(10).IsRequired();
+            entity.Property(e => e.LanguageName).HasMaxLength(100).IsRequired();
+            entity.Property(e => e.Source).HasMaxLength(50);
+            entity.Property(e => e.Status).HasConversion<int>();
         });
 
         // ── TvShow ────────────────────────────────────────────────────────────────
@@ -197,7 +219,24 @@ public class MovieDbContext : DbContext
                 .HasForeignKey(e => e.TvShowId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
+        
+// ── EpisodeSubtitle ───────────────────────────────────────────────────────────
+        modelBuilder.Entity<EpisodeSubtitle>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            // Một tập phim chỉ có 1 subtitle cho mỗi ngôn ngữ
+            entity.HasIndex(e => new { e.EpisodeId, e.LanguageCode }).IsUnique();
 
+            entity.HasOne(e => e.Episode)
+                .WithMany() // Episode không cần nav EpisodeSubtitles
+                .HasForeignKey(e => e.EpisodeId)
+                .OnDelete(DeleteBehavior.Cascade); // Xóa episode → xóa subtitle theo
+
+            entity.Property(e => e.LanguageCode).HasMaxLength(10).IsRequired();
+            entity.Property(e => e.LanguageName).HasMaxLength(100).IsRequired();
+            entity.Property(e => e.Source).HasMaxLength(50);
+            entity.Property(e => e.Status).HasConversion<int>();
+        });
 
         // ── Genre ─────────────────────────────────────────────────────────────
         modelBuilder.Entity<Genre>(entity =>
@@ -320,6 +359,38 @@ public class MovieDbContext : DbContext
                 .WithMany(m => m.RatingReviews)
                 .HasForeignKey(r => r.MovieId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── UserSubscription ──────────────────────────────────────────────────
+        modelBuilder.Entity<UserSubscription>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId); // query nhanh theo user
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.Property(e => e.SubscriptionType)
+                .HasMaxLength(50)
+                .IsRequired();
+        });
+
+        // ── PaymentOrder ──────────────────────────────────────────────────────
+        modelBuilder.Entity<PaymentOrder>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.OrderCode).IsUnique();
+            entity.HasIndex(e => e.UserId);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.Property(e => e.Amount)
+                .HasPrecision(18, 2);
         });
 
         // ── Seed Admin ────────────────────────────────────────────────────────

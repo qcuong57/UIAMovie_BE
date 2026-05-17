@@ -14,6 +14,8 @@ public class Movie
     public string? ContentRating  { get; set; }
     /// <summary>Mã quốc gia sản xuất — ISO 3166-1 alpha-2, VD: "US", "KR", "JP"</summary>
     public string? OriginCountry  { get; set; }
+    /// <summary>TRUE = chỉ dành cho user Premium. Mặc định false (free).</summary>
+    public bool IsPremium { get; set; } = false;
     public Guid? UploadedBy { get; set; }
     public bool IsPublished { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

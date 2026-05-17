@@ -11,4 +11,10 @@ public interface IUserService
     Task<(bool Success, string Message)> UpdateUserRoleAsync(Guid id, string role); // ← Thêm dòng này
     Task<bool> DeleteUserAsync(Guid id);
     Task<(bool Success, string Message)> ChangePasswordAsync(Guid id, ChangePasswordDTO dto);
+    
+    /// <summary>Khóa tài khoản + kick session ngay lập tức</summary>
+    Task<(bool Success, string Message)> BanUserAsync(Guid id, BanUserDTO dto);
+ 
+    /// <summary>Mở khóa tài khoản</summary>
+    Task<(bool Success, string Message)> UnbanUserAsync(Guid id);
 }

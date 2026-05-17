@@ -12,6 +12,8 @@ public class User
     public bool Is2FaEnabled { get; set; }
     public string? TwoFaSecret { get; set; }
     public bool IsActive { get; set; } = true;
+    public string? BanReason { get; set; }      // ← Lý do khóa tài khoản
+    public DateTime? BannedAt { get; set; }     // ← Thời điểm bị khóa
     public DateTime? LastLogin { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
@@ -21,7 +23,6 @@ public class User
     public ICollection<Favorite> Favorites { get; set; } = new List<Favorite>();
     public ICollection<WatchHistory> WatchHistory { get; set; } = new List<WatchHistory>();
     public ICollection<RatingReview> RatingReviews { get; set; } = new List<RatingReview>();
-
 }
 
 public class UserSession

@@ -5,4 +5,5 @@ public interface IEmailService
 {
     Task SendOtpEmailAsync(string toEmail, string otp);
     Task SendResetPasswordEmailAsync(string toEmail, string otp);
+    Task SendRegisterOtpEmailAsync(string toEmail, string otp);
 }

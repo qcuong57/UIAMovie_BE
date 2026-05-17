@@ -28,6 +28,12 @@ public class TvShowDTO
     public int?      NumberOfSeasons  { get; set; }
     public int?      NumberOfEpisodes { get; set; }
 
+    /// <summary>
+    /// TRUE = TV show này chỉ dành cho user Premium.
+    /// Frontend dùng để hiển thị badge "PREMIUM" trên poster.
+    /// </summary>
+    public bool IsPremium { get; set; }
+
     public List<string>         Genres     { get; set; } = new();
     public List<TvShowVideoDTO> Videos     { get; set; } = new();
     public string?              TrailerKey { get; set; }
@@ -39,6 +45,13 @@ public class TvShowDTO
 
     /// <summary>Danh sách season kèm episode — chỉ có khi gọi GetByIdWithDetailsAsync.</summary>
     public List<SeasonDTO> Seasons { get; set; } = new();
+
+    /// <summary>
+    /// Thông tin quyền truy cập của user hiện tại đối với TV show này.
+    /// NULL khi trả về từ list/search (để tối ưu performance).
+    /// Chỉ có giá trị khi gọi GET /api/tvshows/{id} với JWT token.
+    /// </summary>
+    public ContentAccessDTO? Access { get; set; }
 }
 
 /// <summary>
@@ -91,6 +104,11 @@ public class TvShowSummaryDTO
     public int?      NumberOfSeasons  { get; set; }
     public int?      NumberOfEpisodes { get; set; }
     public string?   TrailerKey       { get; set; }
+    /// <summary>
+    /// TRUE = TV show này chỉ dành cho user Premium.
+    /// Frontend dùng để hiển thị badge "PREMIUM" trên poster.
+    /// </summary>
+    public bool      IsPremium        { get; set; }
     public List<string> Genres        { get; set; } = new();
 }
 
@@ -112,6 +130,9 @@ public class CreateTvShowDTO
     public string?   Status           { get; set; }
     public int?      NumberOfSeasons  { get; set; }
     public int?      NumberOfEpisodes { get; set; }
+
+    /// <summary>TRUE = TV show này chỉ dành cho Premium user. Mặc định false (free).</summary>
+    public bool IsPremium { get; set; } = false;
 
     public List<Guid>              GenreIds { get; set; } = new();
     public List<ImportCastDTO>     Cast     { get; set; } = new();
@@ -153,6 +174,8 @@ public class UpdateTvShowDTO
     public string?  Description { get; set; }
     public decimal? ImdbRating  { get; set; }
     public string?  Status      { get; set; }
+    /// <summary>Cập nhật trạng thái Premium của TV show. NULL = không thay đổi.</summary>
+    public bool?    IsPremium   { get; set; }
 }
 
 // ── Filter DTO ────────────────────────────────────────────────────────────────
@@ -216,10 +239,16 @@ public class TvShowCastDTO
 
 public class SyncResultDTO
 {
-    public bool   Success     { get; set; }
-    public int    NewEpisodes { get; set; }
-    public int    NewSeasons  { get; set; }
-    public string Message     { get; set; } = string.Empty;
+    public bool        Success            { get; set; }
+    public int         NewEpisodes        { get; set; }
+    public int         NewSeasons         { get; set; }
+    public string      Message            { get; set; } = string.Empty;
+    /// <summary>
+    /// Bug 4 fix: season numbers whose server-side cache was invalidated during this sync.
+    /// Frontend SeasonAccordion must reset loaded=false for any season whose number
+    /// appears in this list, forcing a re-fetch instead of serving its stale snapshot.
+    /// </summary>
+    public List<int>   InvalidatedSeasons { get; set; } = new();
 }
 
 public class TvShowWatchHistoryDTO

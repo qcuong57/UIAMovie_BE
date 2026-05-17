@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using UIAMovie.Infrastructure.Data;
@@ -11,9 +12,11 @@ using UIAMovie.Infrastructure.Data;
 namespace UIAMovie.Infrastructure.Migrations
 {
     [DbContext(typeof(MovieDbContext))]
-    partial class MovieDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260512132842_AddIsPremiumToTvShows")]
+    partial class AddIsPremiumToTvShows
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -66,63 +69,6 @@ namespace UIAMovie.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("Episodes");
-                });
-
-            modelBuilder.Entity("UIAMovie.Domain.Entities.EpisodeSubtitle", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Content")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("EpisodeId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ErrorMessage")
-                        .HasColumnType("text");
-
-                    b.Property<bool>("IsDefault")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("LanguageCode")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)");
-
-                    b.Property<string>("LanguageName")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<string>("Source")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("TranslatedFrom")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("UploadedBy")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EpisodeId", "LanguageCode")
-                        .IsUnique();
-
-                    b.ToTable("EpisodeSubtitles");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.Favorite", b =>
@@ -336,63 +282,6 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.HasIndex("MovieId");
 
                     b.ToTable("MovieImages");
-                });
-
-            modelBuilder.Entity("UIAMovie.Domain.Entities.MovieSubtitle", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Content")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("ErrorMessage")
-                        .HasColumnType("text");
-
-                    b.Property<bool>("IsDefault")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("LanguageCode")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)");
-
-                    b.Property<string>("LanguageName")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<Guid>("MovieId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Source")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("TranslatedFrom")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("UploadedBy")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("MovieId", "LanguageCode")
-                        .IsUnique();
-
-                    b.ToTable("MovieSubtitles");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.MovieVideo", b =>
@@ -974,7 +863,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$QQAkKJ1.cud3eTQi5wTkJOVt3KC.iA/D9QmmZjgPtOXplkGjXcUJ.",
+                            PasswordHash = "$2a$11$CGAefc/dFIbw1uQ5NnZGD.upCesrOIjm90zb9kqr8aNpgae6pycDm",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
@@ -1093,17 +982,6 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Navigation("Season");
                 });
 
-            modelBuilder.Entity("UIAMovie.Domain.Entities.EpisodeSubtitle", b =>
-                {
-                    b.HasOne("UIAMovie.Domain.Entities.Episode", "Episode")
-                        .WithMany()
-                        .HasForeignKey("EpisodeId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Episode");
-                });
-
             modelBuilder.Entity("UIAMovie.Domain.Entities.Favorite", b =>
                 {
                     b.HasOne("UIAMovie.Domain.Entities.Movie", "Movie")
@@ -1184,17 +1062,6 @@ namespace UIAMovie.Infrastructure.Migrations
                 {
                     b.HasOne("UIAMovie.Domain.Entities.Movie", "Movie")
                         .WithMany("MovieImages")
-                        .HasForeignKey("MovieId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Movie");
-                });
-
-            modelBuilder.Entity("UIAMovie.Domain.Entities.MovieSubtitle", b =>
-                {
-                    b.HasOne("UIAMovie.Domain.Entities.Movie", "Movie")
-                        .WithMany()
                         .HasForeignKey("MovieId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

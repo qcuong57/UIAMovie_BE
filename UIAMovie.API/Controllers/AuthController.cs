@@ -20,7 +20,11 @@ public class AuthController : ControllerBase
 
     // ─── Register ────────────────────────────────────────────────────────────
 
-    /// <summary>Đăng ký tài khoản mới</summary>
+    /// <summary>
+    /// Bước 1: Gửi thông tin đăng ký.
+    /// Hệ thống gửi OTP về email, chưa lưu vào DB.
+    /// Gọi /register/verify-otp để hoàn tất.
+    /// </summary>
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterDTO dto)
     {
@@ -38,6 +42,34 @@ public class AuthController : ControllerBase
             dto.Email, dto.Username, dto.Password);
 
         return success
+            ? Ok(new ApiResponseDTO<object>
+            {
+                Message = message,
+                Data    = new { email = dto.Email, requiresOtp = true }
+            })
+            : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
+    }
+
+    /// <summary>
+    /// Bước 2: Xác nhận OTP đăng ký.
+    /// Đúng OTP → tạo User trong DB và trả về thành công.
+    /// </summary>
+    [HttpPost("register/verify-otp")]
+    public async Task<IActionResult> VerifyRegisterOtp([FromBody] VerifyRegisterOtpDTO dto)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(new ApiErrorResponseDTO
+            {
+                Message = ModelState.Values
+                    .SelectMany(v => v.Errors)
+                    .Select(e => e.ErrorMessage)
+                    .FirstOrDefault() ?? "Dữ liệu không hợp lệ",
+                StatusCode = 400
+            });
+
+        var (success, message) = await _authService.VerifyRegisterOtpAsync(dto.Email, dto.Code);
+
+        return success
             ? Ok(new ApiResponseDTO<object> { Message = message })
             : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
@@ -51,24 +83,34 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginDTO dto)
     {
-        var (result, pendingUserId, errorMessage) = await _authService.LoginAsync(dto.Email, dto.Password);
+        var (result, pendingUserId, errorMessage, banReason) =
+            await _authService.LoginAsync(dto.Email, dto.Password);
 
-        // Login thành công, không cần 2FA
         if (result != null)
-            return Ok(new ApiResponseDTO<LoginResponseDTO> { Data = result, Message = "Đăng nhập thành công" });
+            return Ok(new ApiResponseDTO<LoginResponseDTO>
+            {
+                Data    = result,
+                Message = "Đăng nhập thành công"
+            });
 
-        // 2FA bật → OTP đã được gửi tự động
         if (pendingUserId.HasValue)
             return Ok(new ApiResponseDTO<object>
             {
-                Data = new { requiresOtp = true, userId = pendingUserId },
+                Data    = new { requiresOtp = true, userId = pendingUserId },
                 Message = "OTP đã được gửi đến email của bạn"
             });
 
-        // Sai thông tin — trả message cụ thể
+        if (banReason != null)
+            return Unauthorized(new ApiErrorResponseDTO
+            {
+                Message    = errorMessage ?? "Tài khoản đã bị khóa",
+                BanReason  = banReason,
+                StatusCode = 401
+            });
+
         return Unauthorized(new ApiErrorResponseDTO
         {
-            Message = errorMessage ?? "Email hoặc mật khẩu không đúng",
+            Message    = errorMessage ?? "Email hoặc mật khẩu không đúng",
             StatusCode = 401
         });
     }
@@ -95,8 +137,16 @@ public class AuthController : ControllerBase
         var result = await _authService.VerifyOtpAsync(dto.UserId, dto.Code);
 
         return result != null
-            ? Ok(new ApiResponseDTO<LoginResponseDTO> { Data = result, Message = "Xác thực OTP thành công" })
-            : BadRequest(new ApiErrorResponseDTO { Message = "Mã OTP không đúng hoặc đã hết hạn", StatusCode = 400 });
+            ? Ok(new ApiResponseDTO<LoginResponseDTO>
+            {
+                Data    = result,
+                Message = "Xác thực OTP thành công"
+            })
+            : BadRequest(new ApiErrorResponseDTO
+            {
+                Message    = "Mã OTP không đúng hoặc đã hết hạn",
+                StatusCode = 400
+            });
     }
 
     // ─── 2FA ─────────────────────────────────────────────────────────────────
@@ -109,12 +159,19 @@ public class AuthController : ControllerBase
     [Authorize]
     public async Task<IActionResult> Enable2FA()
     {
-        var userId = GetUserId();
+        var userId  = GetUserId();
         var success = await _authService.SendOtpAsync(userId);
 
         return success
-            ? Ok(new ApiResponseDTO<object> { Message = "OTP đã gửi đến email, gọi /otp/verify để bật 2FA" })
-            : BadRequest(new ApiErrorResponseDTO { Message = "Không thể gửi OTP", StatusCode = 400 });
+            ? Ok(new ApiResponseDTO<object>
+            {
+                Message = "OTP đã gửi đến email, gọi /otp/verify để bật 2FA"
+            })
+            : BadRequest(new ApiErrorResponseDTO
+            {
+                Message    = "Không thể gửi OTP",
+                StatusCode = 400
+            });
     }
 
     /// <summary>
@@ -125,11 +182,11 @@ public class AuthController : ControllerBase
     [Authorize]
     public async Task<IActionResult> Disable2FA([FromBody] VerifyOtpDTO dto)
     {
-        var userId = GetUserId();
+        var userId          = GetUserId();
         var (success, message) = await _authService.Disable2FAAsync(userId, dto.Code);
 
-        return success 
-            ? Ok(new ApiResponseDTO<object> { Message = message }) 
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = message })
             : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 
@@ -141,7 +198,10 @@ public class AuthController : ControllerBase
     {
         await _authService.ForgotPasswordAsync(dto.Email);
         // Luôn trả OK để không tiết lộ email có tồn tại hay không
-        return Ok(new ApiResponseDTO<object> { Message = "Nếu email tồn tại, mã OTP đã được gửi" });
+        return Ok(new ApiResponseDTO<object>
+        {
+            Message = "Nếu email tồn tại, mã OTP đã được gửi"
+        });
     }
 
     /// <summary>Đặt lại mật khẩu bằng OTP nhận từ email</summary>
@@ -149,24 +209,42 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDTO dto)
     {
         if (dto.NewPassword != dto.ConfirmPassword)
-            return BadRequest(new ApiErrorResponseDTO { Message = "Mật khẩu xác nhận không khớp", StatusCode = 400 });
+            return BadRequest(new ApiErrorResponseDTO
+            {
+                Message    = "Mật khẩu xác nhận không khớp",
+                StatusCode = 400
+            });
 
         var success = await _authService.ResetPasswordAsync(
             dto.Email, dto.Code, dto.NewPassword);
 
         return success
             ? Ok(new ApiResponseDTO<object> { Message = "Đặt lại mật khẩu thành công" })
-            : BadRequest(new ApiErrorResponseDTO { Message = "Mã OTP không đúng hoặc đã hết hạn", StatusCode = 400 });
+            : BadRequest(new ApiErrorResponseDTO
+            {
+                Message    = "Mã OTP không đúng hoặc đã hết hạn",
+                StatusCode = 400
+            });
     }
-    
+
+    // ─── Refresh Token ───────────────────────────────────────────────────────
+
     [HttpPost("refresh-token")]
     public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenDTO dto)
     {
         var result = await _authService.RefreshTokenAsync(dto.RefreshToken);
 
         return result != null
-            ? Ok(new ApiResponseDTO<LoginResponseDTO> { Data = result, Message = "Refresh token thành công" })
-            : Unauthorized(new ApiErrorResponseDTO { Message = "Refresh token không hợp lệ hoặc đã hết hạn", StatusCode = 401 });
+            ? Ok(new ApiResponseDTO<LoginResponseDTO>
+            {
+                Data    = result,
+                Message = "Refresh token thành công"
+            })
+            : Unauthorized(new ApiErrorResponseDTO
+            {
+                Message    = "Refresh token không hợp lệ hoặc đã hết hạn",
+                StatusCode = 401
+            });
     }
 
     // ─── Logout ──────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ using StackExchange.Redis;
 using UIAMovie.API.Filters;
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Application.Services;
+using UIAMovie.Application.Services.Payment;
 using UIAMovie.Application.Validators;
 using UIAMovie.Domain.Entities;
 using UIAMovie.Infrastructure.Caching;
@@ -19,35 +20,40 @@ using UIAMovie.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = 500 * 1024 * 1024;
+});
+
 // Database
 builder.Services.AddDbContext<MovieDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 // Redis
 var redisUrl = builder.Configuration["Redis:ConnectionString"];
- 
+
 builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
 {
-    var uri    = new Uri(redisUrl!);
-    var host   = uri.Host;
-    var port   = uri.Port;
-    var pass   = Uri.UnescapeDataString(uri.UserInfo.Split(':')[1]);
- 
+    var uri = new Uri(redisUrl!);
+    var host = uri.Host;
+    var port = uri.Port;
+    var pass = Uri.UnescapeDataString(uri.UserInfo.Split(':')[1]);
+
     var options = new ConfigurationOptions
     {
-        EndPoints          = { { host, port } },
-        Password           = pass,
-        Ssl                = true,
-        SslProtocols       = System.Security.Authentication.SslProtocols.Tls12,
+        EndPoints = { { host, port } },
+        Password = pass,
+        Ssl = true,
+        SslProtocols = System.Security.Authentication.SslProtocols.Tls12,
         AbortOnConnectFail = false,
-        ConnectRetry       = 5,
-        ConnectTimeout     = 10000,
-        SyncTimeout        = 10000,
+        ConnectRetry = 5,
+        ConnectTimeout = 10000,
+        SyncTimeout = 10000,
     };
- 
+
     return ConnectionMultiplexer.Connect(options);
 });
- 
+
 builder.Services.AddScoped<ICacheService, RedisCacheService>();
 
 // Repositories
@@ -76,13 +82,22 @@ builder.Services.AddScoped<IRepository<MovieDirector>, Repository<MovieDirector>
 builder.Services.AddScoped<IRepository<MovieImage>, Repository<MovieImage>>();
 builder.Services.AddHttpClient<IGroqService, GroqService>();
 builder.Services.AddScoped<ITvShowService, TvShowService>();
-builder.Services.AddScoped<IRepository<TvShowVideo>,   Repository<TvShowVideo>>();
-builder.Services.AddScoped<IRepository<TvShowImage>,   Repository<TvShowImage>>();
-builder.Services.AddScoped<IRepository<TvShowGenre>,   Repository<TvShowGenre>>();
-builder.Services.AddScoped<IRepository<TvShowCast>,    Repository<TvShowCast>>();
+builder.Services.AddScoped<IRepository<TvShowVideo>, Repository<TvShowVideo>>();
+builder.Services.AddScoped<IRepository<TvShowImage>, Repository<TvShowImage>>();
+builder.Services.AddScoped<IRepository<TvShowGenre>, Repository<TvShowGenre>>();
+builder.Services.AddScoped<IRepository<TvShowCast>, Repository<TvShowCast>>();
 builder.Services.AddScoped<IRepository<TvShowDirector>, Repository<TvShowDirector>>();
-builder.Services.AddScoped<IRepository<Season>,        Repository<Season>>();
-builder.Services.AddScoped<IRepository<Episode>,       Repository<Episode>>();
+builder.Services.AddScoped<ISubtitleRepository, SubtitleRepository>();
+builder.Services.AddScoped<IEpisodeSubtitleRepository, EpisodeSubtitleRepository>();
+builder.Services.AddScoped<ISubtitleService, SubtitleService>();
+builder.Services.AddScoped<IEpisodeSubtitleService, EpisodeSubtitleService>();
+builder.Services.AddScoped<IRepository<Season>, Repository<Season>>();
+builder.Services.AddScoped<IRepository<Episode>, Repository<Episode>>();
+builder.Services.AddScoped<ISubscriptionChecker, SubscriptionChecker>();
+builder.Services.AddScoped<IPaymentService, PaymentService>();
+builder.Services.AddScoped<IVnpayPaymentService, VnpayPaymentService>();
+builder.Services.Configure<VnpayOptions>(
+    builder.Configuration.GetSection("VNPay"));
 
 // JWT Configuration
 var jwtSettings = builder.Configuration.GetSection("Jwt");
@@ -115,7 +130,8 @@ builder.Services.AddControllers()
     .ConfigureApiBehaviorOptions(options =>
     {
         options.InvalidModelStateResponseFactory = ValidationErrorFilter.Handler;
-    });builder.Services.AddEndpointsApiExplorer();
+    });
+builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();

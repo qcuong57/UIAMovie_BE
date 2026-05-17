@@ -14,6 +14,7 @@ public interface ITvShowService
     Task<TvShowDTO?> GetTvShowByTmdbIdAsync(int tmdbId);
     Task<Guid> CreateTvShowAsync(CreateTvShowDTO dto);
     Task<bool> UpdateTvShowAsync(Guid id, UpdateTvShowDTO dto);
+    Task<bool> SetPremiumAsync(Guid id, bool isPremium);
     Task<bool> DeleteTvShowAsync(Guid id);
     Task<IEnumerable<TvShowSummaryDTO>> SearchTvShowsAsync(string query);
     Task<IEnumerable<TvShowSummaryDTO>> GetTvShowsByGenreAsync(Guid genreId);
@@ -239,6 +240,7 @@ public class TvShowService : ITvShowService
             Status           = dto.Status,
             NumberOfSeasons  = dto.NumberOfSeasons,
             NumberOfEpisodes = dto.NumberOfEpisodes,
+            IsPremium        = dto.IsPremium,
             IsPublished      = true
         };
 
@@ -267,6 +269,7 @@ public class TvShowService : ITvShowService
         show.Description = dto.Description ?? show.Description;
         show.ImdbRating  = dto.ImdbRating  ?? show.ImdbRating;
         show.Status      = dto.Status      ?? show.Status;
+        if (dto.IsPremium.HasValue) show.IsPremium = dto.IsPremium.Value;
 
         _tvShowRepository.Update(show);
         await _tvShowRepository.SaveChangesAsync();
@@ -274,6 +277,21 @@ public class TvShowService : ITvShowService
         var genreIds    = await _tvShowGenreRepository.FindAsync(g => g.TvShowId == id);
         var genreIdList = genreIds.Select(g => g.GenreId).ToList();
 
+        await InvalidateTvShowCachesAsync(id, genreIdList);
+        return true;
+    }
+
+    public async Task<bool> SetPremiumAsync(Guid id, bool isPremium)
+    {
+        var show = await _tvShowRepository.GetByIdAsync(id);
+        if (show == null) return false;
+
+        show.IsPremium = isPremium;
+        _tvShowRepository.Update(show);
+        await _tvShowRepository.SaveChangesAsync();
+
+        var genreIds    = await _tvShowGenreRepository.FindAsync(g => g.TvShowId == id);
+        var genreIdList = genreIds.Select(g => g.GenreId).ToList();
         await InvalidateTvShowCachesAsync(id, genreIdList);
         return true;
     }
@@ -605,12 +623,27 @@ public class TvShowService : ITvShowService
             {
                 season.EpisodeCount = existingNums.Count + episodesToInsert.Count;
                 _seasonRepository.Update(season);
+
+                // Bug 1 fix: flush episodes AND the season.EpisodeCount update together
+                // so neither is lost when repositories do not share the same DbContext unit.
+                await _episodeRepository.SaveChangesAsync();
+                await _seasonRepository.SaveChangesAsync();
             }
         }
 
+        // Bug 3 fix: always invalidate show cache when admin explicitly triggers sync,
+        // even when no new content was found (metadata / status may still have changed).
+        var syncedSeasonNumbers = full.SeasonDetails.Values
+            .Where(s => s.SeasonNumber > 0)
+            .Select(s => s.SeasonNumber)
+            .ToList();
+        var genreRowsAlways = await _tvShowGenreRepository.FindAsync(g => g.TvShowId == id);
+        var genreIdsAlways  = genreRowsAlways.Select(g => g.GenreId).ToList();
+        // Bug 2 fix: season numbers forwarded here so their cache keys are evicted too.
+        await InvalidateTvShowCachesAsync(id, genreIdsAlways, syncedSeasonNumbers);
+
         if (newEpisodes > 0 || newSeasons > 0)
         {
-            await _episodeRepository.SaveChangesAsync();
 
             show.NumberOfSeasons  = full.Detail.NumberOfSeasons;
             show.NumberOfEpisodes = full.Detail.NumberOfEpisodes;
@@ -620,18 +653,16 @@ public class TvShowService : ITvShowService
 
             _tvShowRepository.Update(show);
             await _tvShowRepository.SaveChangesAsync();
-
-            var genreRows = await _tvShowGenreRepository.FindAsync(g => g.TvShowId == id);
-            var genreIds  = genreRows.Select(g => g.GenreId).ToList();
-            await InvalidateTvShowCachesAsync(id, genreIds);
         }
 
         return new SyncResultDTO
         {
-            Success     = true,
-            NewEpisodes = newEpisodes,
-            NewSeasons  = newSeasons,
-            Message     = $"Sync thành công: Cập nhật thêm {newSeasons} season mới, {newEpisodes} tập mới"
+            Success            = true,
+            NewEpisodes        = newEpisodes,
+            NewSeasons         = newSeasons,
+            Message            = $"Sync thành công: Cập nhật thêm {newSeasons} season mới, {newEpisodes} tập mới",
+            // Bug 4 fix: tell the frontend exactly which seasons were cache-busted.
+            InvalidatedSeasons = syncedSeasonNumbers
         };
     }
 
@@ -825,16 +856,26 @@ public class TvShowService : ITvShowService
 
     // ─── Cache invalidation ───────────────────────────────────────────────────
 
-    private async Task InvalidateTvShowCachesAsync(Guid showId, List<Guid> genreIds)
+    private async Task InvalidateTvShowCachesAsync(Guid showId, List<Guid> genreIds,
+        IEnumerable<int>? seasonNumbers = null)
     {
         await _cacheService.RemoveAsync(string.Format(TVSHOW_CACHE_KEY, showId));
 
         var keysToRemove = genreIds
             .Select(gid => string.Format(GENRE_CACHE_KEY, gid))
             .Append(AI_CONTEXTS_KEY)
-            .Append(AI_ALL_DTOS_KEY)
-            .ToArray();
-        await _cacheService.RemoveManyAsync(keysToRemove);
+            .Append(AI_ALL_DTOS_KEY);
+
+        // Bug 2 fix: evict every season cache that was touched during sync.
+        // Without this, GET /api/tvshows/{id}/seasons/{n} keeps returning stale
+        // episodes from Redis for up to 6 hours after a sync.
+        if (seasonNumbers != null)
+        {
+            keysToRemove = keysToRemove.Concat(
+                seasonNumbers.Select(n => string.Format(SEASON_CACHE_KEY, showId, n)));
+        }
+
+        await _cacheService.RemoveManyAsync(keysToRemove.ToArray());
     }
 
     // ─── Mapping ──────────────────────────────────────────────────────────────
@@ -856,6 +897,7 @@ public class TvShowService : ITvShowService
             .Where(v => v.VideoType == "trailer" && !string.IsNullOrEmpty(v.VideoUrl))
             .Select(v => ExtractYoutubeKey(v.VideoUrl))
             .FirstOrDefault(k => k != null),
+        IsPremium = t.IsPremium,
         Genres = t.TvShowGenres?
             .Select(g => g.Genre?.Name ?? "")
             .Where(n => n != "")
@@ -877,6 +919,7 @@ public class TvShowService : ITvShowService
         Status           = t.Status,
         NumberOfSeasons  = t.NumberOfSeasons,
         NumberOfEpisodes = t.NumberOfEpisodes,
+        IsPremium        = t.IsPremium,
 
         Genres = t.TvShowGenres?
             .Select(g => g.Genre?.Name ?? "")

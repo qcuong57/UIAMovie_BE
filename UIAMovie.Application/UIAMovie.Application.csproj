@@ -17,6 +17,7 @@
         <PackageReference Include="Microsoft.AspNetCore.Http" Version="2.3.9" />
         <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.0" />
         <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.3" />
+        <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.3" />
         <PackageReference Include="System.Threading.RateLimiting" Version="10.0.6" />
     </ItemGroup>
 

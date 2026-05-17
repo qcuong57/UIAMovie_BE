@@ -17,6 +17,8 @@ public class TvShow
     public DateTime? FirstAirDate   { get; set; }
     public DateTime? LastAirDate    { get; set; }
     public bool    IsPublished      { get; set; } = true;
+    /// <summary>TRUE = chỉ dành cho user Premium. Mặc định false (free).</summary>
+    public bool    IsPremium        { get; set; } = false;
 
     // Navigation
     public ICollection<TvShowGenre>        TvShowGenres        { get; set; } = new List<TvShowGenre>();

@@ -19,17 +19,20 @@ public class TvShowsController : ControllerBase
     private readonly ITmdbService      _tmdbService;
     private readonly IGenreService     _genreService;
     private readonly ICloudinaryService _cloudinaryService;
+    private readonly ISubscriptionChecker _subscriptionChecker;
 
     public TvShowsController(
         ITvShowService      tvShowService,
         ITmdbService        tmdbService,
         IGenreService       genreService,
-        ICloudinaryService  cloudinaryService)
+        ICloudinaryService  cloudinaryService,
+        ISubscriptionChecker subscriptionChecker)
     {
-        _tvShowService     = tvShowService;
-        _tmdbService       = tmdbService;
-        _genreService      = genreService;
-        _cloudinaryService = cloudinaryService;
+        _tvShowService       = tvShowService;
+        _tmdbService         = tmdbService;
+        _genreService        = genreService;
+        _cloudinaryService   = cloudinaryService;
+        _subscriptionChecker = subscriptionChecker;
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -47,9 +50,141 @@ public class TvShowsController : ControllerBase
     public async Task<IActionResult> GetById(Guid id)
     {
         var show = await _tvShowService.GetTvShowByIdAsync(id);
-        return show == null
-            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy TV show", StatusCode = 404 })
-            : Ok(new ApiResponseDTO<object> { Data = show, Message = "Thành công" });
+        if (show == null)
+            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy TV show", StatusCode = 404 });
+
+        // Gắn ContentAccessDTO nếu user đã đăng nhập
+        var userId = TryGetUserId();
+        if (userId.HasValue)
+        {
+            show.Access = await BuildContentAccessAsync(show, userId.Value);
+        }
+        else if (show.IsPremium)
+        {
+            // User chưa đăng nhập nhưng show là Premium
+            show.Access = new ContentAccessDTO
+            {
+                CanWatch        = false,
+                RequiresPremium = true,
+                BlockReason     = "Đăng nhập và nâng cấp Premium để xem TV show này"
+            };
+        }
+
+        return Ok(new ApiResponseDTO<object> { Data = show, Message = "Thành công" });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // WATCH — Premium gate cho TV show & episode
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Endpoint để frontend lấy danh sách video URL của TV show (trailer/teaser).
+    ///
+    /// Logic:
+    ///   - Show FREE    → trả về videos cho mọi user (kể cả chưa đăng nhập)
+    ///   - Show PREMIUM → phải đăng nhập + có Premium hợp lệ
+    ///
+    /// GET /api/tvshows/{id}/watch
+    /// </summary>
+    [HttpGet("{id:guid}/watch")]
+    public async Task<IActionResult> WatchTvShow(Guid id)
+    {
+        var show = await _tvShowService.GetTvShowByIdAsync(id);
+        if (show == null)
+            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy TV show", StatusCode = 404 });
+
+        if (!show.IsPremium)
+        {
+            return Ok(new ApiResponseDTO<object>
+            {
+                Data    = new { canWatch = true, videos = show.Videos },
+                Message = "Thành công"
+            });
+        }
+
+        var userId = TryGetUserId();
+        if (!userId.HasValue)
+            return Unauthorized(new ApiErrorResponseDTO
+            {
+                Message    = "Vui lòng đăng nhập để xem TV show Premium",
+                StatusCode = 401
+            });
+
+        var canWatch = await _subscriptionChecker.CanWatchPremiumContentAsync(userId.Value);
+        if (!canWatch)
+        {
+            var isPremium = await _subscriptionChecker.IsPremiumAsync(userId.Value);
+            var reason    = isPremium
+                ? "Tài khoản của bạn đã bị khóa"
+                : "Nâng cấp lên Premium để xem TV show này";
+
+            return StatusCode(403, new ApiErrorResponseDTO { Message = reason, StatusCode = 403 });
+        }
+
+        return Ok(new ApiResponseDTO<object>
+        {
+            Data    = new { canWatch = true, videos = show.Videos },
+            Message = "Thành công"
+        });
+    }
+
+    /// <summary>
+    /// Endpoint để frontend lấy video URL của một episode cụ thể.
+    ///
+    /// Logic:
+    ///   - Show FREE    → trả về videoUrl cho mọi user
+    ///   - Show PREMIUM → phải đăng nhập + có Premium hợp lệ
+    ///
+    /// GET /api/tvshows/{id}/seasons/{seasonNumber}/episodes/{episodeNumber}/watch
+    /// </summary>
+    [HttpGet("{id:guid}/seasons/{seasonNumber:int}/episodes/{episodeNumber:int}/watch")]
+    public async Task<IActionResult> WatchEpisode(Guid id, int seasonNumber, int episodeNumber)
+    {
+        // Lấy show để kiểm tra IsPremium
+        var show = await _tvShowService.GetTvShowByIdAsync(id);
+        if (show == null)
+            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy TV show", StatusCode = 404 });
+
+        var episode = await _tvShowService.GetEpisodeAsync(id, seasonNumber, episodeNumber);
+        if (episode == null)
+            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy episode", StatusCode = 404 });
+
+        if (!show.IsPremium)
+        {
+            return Ok(new ApiResponseDTO<object>
+            {
+                Data    = new { canWatch = true, videoUrl = episode.VideoUrl },
+                Message = "Thành công"
+            });
+        }
+
+        var userId = TryGetUserId();
+        if (!userId.HasValue)
+            return Unauthorized(new ApiErrorResponseDTO
+            {
+                Message    = "Vui lòng đăng nhập để xem TV show Premium",
+                StatusCode = 401
+            });
+
+        var canWatch = await _subscriptionChecker.CanWatchPremiumContentAsync(userId.Value);
+        if (!canWatch)
+        {
+            var isPremium = await _subscriptionChecker.IsPremiumAsync(userId.Value);
+            var reason    = isPremium
+                ? "Tài khoản của bạn đã bị khóa"
+                : "Nâng cấp lên Premium để xem tập này";
+
+            return StatusCode(403, new ApiErrorResponseDTO { Message = reason, StatusCode = 403 });
+        }
+
+        // Ghi lại tiến độ xem (fire-and-forget)
+        _ = _tvShowService.UpdateWatchProgressAsync(userId.Value, id, episode.Id, 0, false);
+
+        return Ok(new ApiResponseDTO<object>
+        {
+            Data    = new { canWatch = true, videoUrl = episode.VideoUrl },
+            Message = "Thành công"
+        });
     }
 
     [HttpGet("search/actor")]
@@ -318,8 +453,8 @@ public class TvShowsController : ControllerBase
 
     [HttpPost("{id:guid}/videos")]
     [Authorize(Roles = Roles.Admin)]
-    [RequestSizeLimit(5_368_709_120)]
-    [RequestFormLimits(MultipartBodyLengthLimit = 5_368_709_120)]
+    [RequestSizeLimit(500 * 1024 * 1024)]       // 500MB
+    [RequestFormLimits(MultipartBodyLengthLimit = 500 * 1024 * 1024)]
     public async Task<IActionResult> UploadVideo(Guid id, [FromForm] UploadTvShowVideoDTO dto)
     {
         if (dto.VideoFile == null || dto.VideoFile.Length == 0)
@@ -415,6 +550,26 @@ public class TvShowsController : ControllerBase
             : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy TV show", StatusCode = 404 });
     }
 
+    /// <summary>
+    /// [Admin] Bật/tắt Premium cho TV show nhanh mà không cần UpdateTvShowDTO đầy đủ.
+    /// PATCH /api/tvshows/{id}/premium
+    /// Body: { "isPremium": true }
+    /// </summary>
+    [HttpPatch("{id:guid}/premium")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> SetPremium(Guid id, [FromBody] SetTvShowPremiumDTO dto)
+    {
+        var success = await _tvShowService.SetPremiumAsync(id, dto.IsPremium);
+        return success
+            ? Ok(new ApiResponseDTO<object>
+            {
+                Message = dto.IsPremium
+                    ? "Đã đặt TV show thành Premium"
+                    : "Đã chuyển TV show về Free"
+            })
+            : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy TV show", StatusCode = 404 });
+    }
+
     [HttpDelete("{id:guid}")]
     [Authorize(Roles = Roles.Admin)]
     public async Task<IActionResult> Delete(Guid id)
@@ -438,6 +593,15 @@ public class TvShowsController : ControllerBase
             return BadRequest(new ApiErrorResponseDTO { Message = "Không lấy được data từ TMDB", StatusCode = 400 });
 
         var result = await _tvShowService.SyncNewEpisodesAsync(id, fullData);
+
+        if (result.Success && result.InvalidatedSeasons.Count > 0)
+        {
+            // Bug 4 fix: tell the client which season caches were busted so
+            // SeasonAccordion can reset loaded=false for those seasons and
+            // re-fetch instead of serving its stale in-memory snapshot.
+            Response.Headers["X-Cache-Invalidated"] =
+                string.Join(",", result.InvalidatedSeasons);
+        }
 
         return result.Success
             ? Ok(new ApiResponseDTO<object> { Data = result, Message = result.Message })
@@ -487,6 +651,30 @@ public class TvShowsController : ControllerBase
 
     // ─── Helper ──────────────────────────────────────────────────────────────
 
+    /// <summary>Build ContentAccessDTO dựa trên IsPremium của show và subscription của user.</summary>
+    private async Task<ContentAccessDTO> BuildContentAccessAsync(TvShowDTO show, Guid userId)
+    {
+        if (!show.IsPremium)
+            return new ContentAccessDTO { CanWatch = true, RequiresPremium = false };
+
+        var canWatch = await _subscriptionChecker.CanWatchPremiumContentAsync(userId);
+        return new ContentAccessDTO
+        {
+            CanWatch        = canWatch,
+            RequiresPremium = true,
+            BlockReason     = canWatch ? null : "Nâng cấp lên Premium để xem TV show này"
+        };
+    }
+
+    /// <summary>Lấy userId từ JWT — null nếu chưa đăng nhập.</summary>
+    private Guid? TryGetUserId()
+    {
+        var claim = User.FindFirstValue(ClaimTypes.NameIdentifier)
+                 ?? User.FindFirstValue("sub");
+
+        return Guid.TryParse(claim, out var id) ? id : null;
+    }
+
     private Guid GetUserId() =>
         Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value
                    ?? Guid.Empty.ToString());
@@ -502,4 +690,12 @@ public class TvShowsController : ControllerBase
 
         return match.Success ? match.Groups[1].Value : null;
     }
+}
+
+// ─── Helper DTO ───────────────────────────────────────────────────────────────
+
+/// <summary>Body cho PATCH /api/tvshows/{id}/premium</summary>
+public class SetTvShowPremiumDTO
+{
+    public bool IsPremium { get; set; }
 }

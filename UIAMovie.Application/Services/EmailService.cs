@@ -22,6 +22,9 @@ public class EmailService : IEmailService
     public async Task SendResetPasswordEmailAsync(string toEmail, string otp) =>
         await SendEmailAsync(toEmail, "Đặt lại mật khẩu - UIAMovie", BuildOtpTemplate(otp, "đặt lại mật khẩu"));
 
+    public async Task SendRegisterOtpEmailAsync(string toEmail, string otp) =>
+        await SendEmailAsync(toEmail, "Xác nhận đăng ký tài khoản - UIAMovie", BuildRegisterOtpTemplate(otp));
+
     private async Task SendEmailAsync(string toEmail, string subject, string htmlBody)
     {
         var message = new MimeMessage();
@@ -53,6 +56,19 @@ public class EmailService : IEmailService
                         color:#e50914;padding:16px 0;">{otp}</div>
             <p style="color:#888;">Mã có hiệu lực trong <strong>10 phút</strong>.
                Không chia sẻ mã này với bất kỳ ai.</p>
+        </div>
+    """;
+
+    private static string BuildRegisterOtpTemplate(string otp) => $"""
+        <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;
+                    padding:32px;border:1px solid #eee;border-radius:8px;">
+            <h2 style="color:#e50914;">UIAMovie</h2>
+            <p>Chào mừng bạn đến với <strong>UIAMovie</strong>! 🎬</p>
+            <p>Để hoàn tất đăng ký, hãy nhập mã xác nhận bên dưới:</p>
+            <div style="font-size:36px;font-weight:bold;letter-spacing:8px;
+                        color:#e50914;padding:16px 0;">{otp}</div>
+            <p style="color:#888;">Mã có hiệu lực trong <strong>10 phút</strong>.
+               Nếu bạn không thực hiện đăng ký này, vui lòng bỏ qua email.</p>
         </div>
     """;
 }

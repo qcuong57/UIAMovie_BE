@@ -9,7 +9,8 @@ namespace UIAMovie.Application.Services;
 public interface IAuthService
 {
     Task<(bool Success, string Message)> RegisterAsync(string email, string username, string password);
-    Task<(LoginResponseDTO? Response, Guid? PendingUserId, string? ErrorMessage)> LoginAsync(string email, string password);
+    Task<(bool Success, string Message)> VerifyRegisterOtpAsync(string email, string code);
+    Task<(LoginResponseDTO? Response, Guid? PendingUserId, string? ErrorMessage, string? BanReason)> LoginAsync(string email, string password);
     Task<bool> SendOtpAsync(Guid userId);
     Task<LoginResponseDTO?> VerifyOtpAsync(Guid userId, string code);
     Task LogoutAsync(Guid userId);
@@ -27,12 +28,15 @@ public class AuthService : IAuthService
     private readonly IEmailService _emailService;
     private readonly ICacheService _cacheService;
 
-    private const string OTP_PREFIX        = "otp:";
-    private const string RESET_PREFIX      = "reset:";
-    private const string USER_EMAIL_PREFIX = "user:email:";
-    private const string USER_ID_PREFIX    = "user:id:";
+    private const string OTP_PREFIX             = "otp:";
+    private const string RESET_PREFIX           = "reset:";
+    private const string USER_EMAIL_PREFIX      = "user:email:";
+    private const string USER_ID_PREFIX         = "user:id:";
+    private const string REGISTER_OTP_PREFIX    = "register:otp:";
+    private const string REGISTER_PENDING_PREFIX = "register:pending:";
 
-    private static readonly TimeSpan RefreshTokenLifetime = TimeSpan.FromDays(7);
+    private static readonly TimeSpan RefreshTokenLifetime  = TimeSpan.FromDays(7);
+    private static readonly TimeSpan RegisterOtpLifetime   = TimeSpan.FromMinutes(10);
 
     public AuthService(
         IRepository<User> userRepository,
@@ -48,18 +52,70 @@ public class AuthService : IAuthService
         _cacheService      = cacheService;
     }
 
+    // ─── Register (Step 1): Lưu pending vào cache, gửi OTP ──────────────────
+
     public async Task<(bool Success, string Message)> RegisterAsync(
         string email, string username, string password)
     {
+        // Kiểm tra email đã tồn tại trong DB chưa
         var existing = await FindUserByEmailAsync(email);
         if (existing != null)
             return (false, "Email đã được đăng ký");
 
-        var user = new User
+        // Kiểm tra xem email đã có pending registration chưa (tránh spam)
+        var alreadyPending = await _cacheService.GetAsync<PendingRegistration>(
+            $"{REGISTER_PENDING_PREFIX}{email.ToLower()}");
+        if (alreadyPending != null)
+            return (false, "Email này đang chờ xác nhận OTP. Vui lòng kiểm tra hộp thư hoặc chờ mã hết hạn.");
+
+        // Lưu thông tin đăng ký tạm vào cache
+        var pending = new PendingRegistration
         {
             Email        = email,
             Username     = username,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password)
+        };
+
+        var otp = GenerateOtp();
+
+        await _cacheService.SetAsync(
+            $"{REGISTER_PENDING_PREFIX}{email.ToLower()}", pending, RegisterOtpLifetime);
+        await _cacheService.SetAsync(
+            $"{REGISTER_OTP_PREFIX}{email.ToLower()}", otp, RegisterOtpLifetime);
+
+        await _emailService.SendRegisterOtpEmailAsync(email, otp);
+
+        return (true, "Mã xác nhận đã được gửi đến email của bạn. Vui lòng nhập OTP để hoàn tất đăng ký.");
+    }
+
+    // ─── Register (Step 2): Xác nhận OTP → lưu User vào DB ─────────────────
+
+    public async Task<(bool Success, string Message)> VerifyRegisterOtpAsync(string email, string code)
+    {
+        var emailKey = email.ToLower();
+
+        var storedOtp = await _cacheService.GetAsync<string>($"{REGISTER_OTP_PREFIX}{emailKey}");
+        if (storedOtp == null || storedOtp != code)
+            return (false, "Mã OTP không đúng hoặc đã hết hạn");
+
+        var pending = await _cacheService.GetAsync<PendingRegistration>($"{REGISTER_PENDING_PREFIX}{emailKey}");
+        if (pending == null)
+            return (false, "Phiên đăng ký đã hết hạn. Vui lòng đăng ký lại.");
+
+        // Kiểm tra lại lần cuối phòng race condition
+        var existing = await FindUserByEmailAsync(pending.Email);
+        if (existing != null)
+        {
+            await CleanupRegisterCacheAsync(emailKey);
+            return (false, "Email đã được đăng ký bởi người khác.");
+        }
+
+        // Tạo user và lưu vào DB
+        var user = new User
+        {
+            Email        = pending.Email,
+            Username     = pending.Username,
+            PasswordHash = pending.PasswordHash,
             Role         = Roles.User,
             IsActive     = true
         };
@@ -68,30 +124,37 @@ public class AuthService : IAuthService
         await _userRepository.SaveChangesAsync();
         await CacheUserAsync(user);
 
-        return (true, "Đăng ký thành công");
+        // Dọn cache pending
+        await CleanupRegisterCacheAsync(emailKey);
+
+        return (true, "Đăng ký thành công! Bạn có thể đăng nhập ngay bây giờ.");
     }
 
-    public async Task<(LoginResponseDTO? Response, Guid? PendingUserId, string? ErrorMessage)> LoginAsync(
+    // ─── Login ───────────────────────────────────────────────────────────────
+
+    public async Task<(LoginResponseDTO? Response, Guid? PendingUserId, string? ErrorMessage, string? BanReason)> LoginAsync(
         string email, string password)
     {
         var user = await FindUserByEmailAsync(email);
         if (user == null)
-            return (null, null, "Email không tồn tại trong hệ thống");
+            return (null, null, "Email không tồn tại trong hệ thống", null);
 
         if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
-            return (null, null, "Mật khẩu không đúng");
+            return (null, null, "Mật khẩu không đúng", null);
 
         if (!user.IsActive)
-            return (null, null, "Tài khoản đã bị khóa, vui lòng liên hệ hỗ trợ");
+            return (null, null, "Tài khoản đã bị khóa", user.BanReason);
 
         if (user.Is2FaEnabled)
         {
             await SendOtpAsync(user.Id);
-            return (null, user.Id, null);
+            return (null, user.Id, null, null);
         }
 
-        return (await CreateSessionAsync(user), null, null);
+        return (await CreateSessionAsync(user), null, null, null);
     }
+
+    // ─── OTP (2FA / Login) ───────────────────────────────────────────────────
 
     public async Task<bool> SendOtpAsync(Guid userId)
     {
@@ -125,6 +188,8 @@ public class AuthService : IAuthService
         return await CreateSessionAsync(user);
     }
 
+    // ─── 2FA Disable ─────────────────────────────────────────────────────────
+
     public async Task<(bool Success, string Message)> Disable2FAAsync(Guid userId, string code)
     {
         var stored = await _cacheService.GetAsync<string>($"{OTP_PREFIX}{userId}");
@@ -143,6 +208,8 @@ public class AuthService : IAuthService
 
         return (true, "Đã tắt xác thực 2 lớp");
     }
+
+    // ─── Forgot / Reset Password ─────────────────────────────────────────────
 
     public async Task<bool> ForgotPasswordAsync(string email)
     {
@@ -176,6 +243,8 @@ public class AuthService : IAuthService
         return true;
     }
 
+    // ─── Logout ──────────────────────────────────────────────────────────────
+
     public async Task LogoutAsync(Guid userId)
     {
         var sessions = await _sessionRepository.FindAsync(s => s.UserId == userId);
@@ -185,6 +254,8 @@ public class AuthService : IAuthService
 
         await _sessionRepository.SaveChangesAsync();
     }
+
+    // ─── Refresh Token ───────────────────────────────────────────────────────
 
     public async Task<LoginResponseDTO?> RefreshTokenAsync(string refreshToken)
     {
@@ -224,8 +295,16 @@ public class AuthService : IAuthService
         return BuildLoginResponse(newAccessToken, newRefreshToken, user);
     }
 
+    // ─── Private Helpers ─────────────────────────────────────────────────────
+
     private static string GenerateOtp() =>
         Random.Shared.Next(100000, 999999).ToString();
+
+    private async Task CleanupRegisterCacheAsync(string emailKey)
+    {
+        await _cacheService.RemoveAsync($"{REGISTER_OTP_PREFIX}{emailKey}");
+        await _cacheService.RemoveAsync($"{REGISTER_PENDING_PREFIX}{emailKey}");
+    }
 
     private async Task<User?> FindUserByEmailAsync(string email)
     {
@@ -287,4 +366,16 @@ public class AuthService : IAuthService
                 CreatedAt        = user.CreatedAt
             }
         };
+}
+
+// ─── Internal DTO (không expose ra ngoài) ────────────────────────────────────
+
+/// <summary>
+/// Dữ liệu đăng ký tạm thời được lưu trong cache, chờ xác nhận OTP.
+/// </summary>
+internal sealed class PendingRegistration
+{
+    public string Email        { get; init; } = string.Empty;
+    public string Username     { get; init; } = string.Empty;
+    public string PasswordHash { get; init; } = string.Empty;
 }

@@ -7,30 +7,26 @@ using UIAMovie.Infrastructure.Data.Repositories;
 
 namespace UIAMovie.Application.Services;
 
-// public interface IUserService
-// {
-//     Task<PaginatedDTO<UserDTO>> GetUsersAsync(UserQueryDTO query);
-//     Task<UserDTO?> GetUserByIdAsync(Guid id);
-//     Task<(bool Success, string Message)> UpdateUserAsync(Guid id, UpdateUserDTO dto);
-//     Task<(bool Success, string Message)> UpdateUserRoleAsync(Guid id, string role); // ← Admin
-//     Task<bool> DeleteUserAsync(Guid id);
-//     Task<(bool Success, string Message)> ChangePasswordAsync(Guid id, ChangePasswordDTO dto);
-// }
-
 public class UserService : IUserService
 {
-    private readonly IRepository<User> _userRepository;
-    private readonly ICacheService     _cacheService;
+    private readonly IRepository<User>             _userRepository;
+    private readonly IRepository<UserSession>       _sessionRepository;
+    private readonly IRepository<UserSubscription>  _subRepository;
+    private readonly ICacheService                  _cacheService;
 
     private const string USER_CACHE_KEY  = "user:id:{0}";
     private const string USERS_LIST_KEY  = "users:list:{0}:{1}:{2}:{3}"; // page,size,search,role
 
     public UserService(
-        IRepository<User> userRepository,
-        ICacheService     cacheService)
+        IRepository<User>             userRepository,
+        IRepository<UserSession>      sessionRepository,
+        IRepository<UserSubscription> subRepository,
+        ICacheService                 cacheService)
     {
-        _userRepository = userRepository;
-        _cacheService   = cacheService;
+        _userRepository    = userRepository;
+        _sessionRepository = sessionRepository;
+        _subRepository     = subRepository;
+        _cacheService      = cacheService;
     }
 
     public async Task<PaginatedDTO<UserDTO>> GetUsersAsync(UserQueryDTO query)
@@ -71,11 +67,18 @@ public class UserService : IUserService
         var pageSize   = query.PageSize > 0 ? query.PageSize : 10;
         var pageNumber = query.PageNumber > 0 ? query.PageNumber : 1;
 
-        var items = users
+        var pagedUsers = users
             .Skip((pageNumber - 1) * pageSize)
             .Take(pageSize)
-            .Select(MapToDTO)
             .ToList();
+
+        // Load subscription records cho batch này
+        var userIds  = pagedUsers.Select(u => u.Id).ToHashSet();
+        var allSubs  = await _subRepository.FindAsync(s => userIds.Contains(s.UserId));
+        var subMap   = allSubs.GroupBy(s => s.UserId)
+                              .ToDictionary(g => g.Key, g => g.OrderByDescending(s => s.ExpiredAt).First());
+
+        var items = pagedUsers.Select(u => MapToDTO(u, subMap.GetValueOrDefault(u.Id))).ToList();
 
         return new PaginatedDTO<UserDTO>
         {
@@ -93,9 +96,12 @@ public class UserService : IUserService
             async () =>
             {
                 var user = await _userRepository.GetByIdAsync(id);
-                return user == null ? null : MapToDTO(user);
+                if (user == null) return null;
+                var subs = await _subRepository.FindAsync(s => s.UserId == id);
+                var sub  = subs.OrderByDescending(s => s.ExpiredAt).FirstOrDefault();
+                return MapToDTO(user, sub);
             },
-            TimeSpan.FromMinutes(30));
+            TimeSpan.FromMinutes(5)); // giảm xuống 5 phút vì có sub data thay đổi thường xuyên
     }
 
     public async Task<(bool Success, string Message)> UpdateUserAsync(Guid id, UpdateUserDTO dto)
@@ -167,15 +173,80 @@ public class UserService : IUserService
         return (true, "Đổi mật khẩu thành công");
     }
 
-    private static UserDTO MapToDTO(User u) => new()
+    public async Task<(bool Success, string Message)> BanUserAsync(Guid id, BanUserDTO dto)
     {
-        Id               = u.Id,
-        Email            = u.Email,
-        Username         = u.Username,
-        AvatarUrl        = u.AvatarUrl,
-        SubscriptionType = u.SubscriptionType,
-        Role             = u.Role,
-        Is2FaEnabled     = u.Is2FaEnabled,
-        CreatedAt        = u.CreatedAt
-    };
+        var user = await _userRepository.GetByIdAsync(id);
+        if (user == null) return (false, "Không tìm thấy user");
+
+        if (!user.IsActive)
+            return (false, "Tài khoản đã bị khóa trước đó");
+
+        user.IsActive   = false;
+        user.BanReason  = dto.Reason?.Trim();
+        user.BannedAt   = DateTime.UtcNow;
+        user.UpdatedAt  = DateTime.UtcNow;
+
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync();
+
+        // Xóa toàn bộ session → kick khỏi hệ thống ngay lập tức
+        var sessions = await _sessionRepository.FindAsync(s => s.UserId == id);
+        foreach (var s in sessions)
+            _sessionRepository.Remove(s);
+        await _sessionRepository.SaveChangesAsync();
+
+        await InvalidateUserCacheAsync(user);
+        return (true, $"Đã khóa tài khoản {user.Email}");
+    }
+
+    public async Task<(bool Success, string Message)> UnbanUserAsync(Guid id)
+    {
+        var user = await _userRepository.GetByIdAsync(id);
+        if (user == null) return (false, "Không tìm thấy user");
+
+        if (user.IsActive)
+            return (false, "Tài khoản chưa bị khóa");
+
+        user.IsActive  = true;
+        user.BanReason = null;
+        user.BannedAt  = null;
+        user.UpdatedAt = DateTime.UtcNow;
+
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync();
+
+        await InvalidateUserCacheAsync(user);
+        return (true, $"Đã mở khóa tài khoản {user.Email}");
+    }
+
+    private async Task InvalidateUserCacheAsync(User user)
+    {
+        await _cacheService.RemoveAsync(string.Format(USER_CACHE_KEY, user.Id));
+        await _cacheService.RemoveAsync($"user:email:{user.Email.ToLower()}");
+    }
+
+    private static UserDTO MapToDTO(User u, UserSubscription? sub = null)
+    {
+        // Subscription type: ưu tiên record từ bảng UserSubscription (chính xác hơn),
+        // fallback về field trên User nếu không có record
+        var subType    = sub?.SubscriptionType ?? (u.SubscriptionType == "free" ? null : u.SubscriptionType);
+        var expiredAt  = sub?.ExpiredAt;
+        var isExpired  = expiredAt.HasValue && expiredAt.Value < DateTime.UtcNow;
+
+        return new UserDTO
+        {
+            Id                      = u.Id,
+            Email                   = u.Email,
+            Username                = u.Username,
+            AvatarUrl               = u.AvatarUrl,
+            SubscriptionType        = isExpired ? null : subType,   // null nếu đã hết hạn
+            SubscriptionExpiredAt   = expiredAt,
+            SubscriptionStartedAt   = sub?.StartedAt,
+            Role                    = u.Role,
+            Is2FaEnabled            = u.Is2FaEnabled,
+            CreatedAt               = u.CreatedAt,
+            IsActive                = u.IsActive,
+            BanReason               = u.BanReason,
+        };
+    }
 }

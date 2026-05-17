@@ -1,4 +1,8 @@
-﻿using Microsoft.AspNetCore.Http;
+﻿// UIAMovie.Application/DTOs/MovieDTOs.cs
+// THÊM: IsPremium vào MovieDTO và CreateMovieDTO
+// THÊM: Access (ContentAccessDTO) vào MovieDTO để frontend biết user có xem được không
+
+using Microsoft.AspNetCore.Http;
 
 namespace UIAMovie.Application.DTOs;
 
@@ -15,6 +19,12 @@ public class MovieDTO
     /// <summary>Mã quốc gia sản xuất — ISO 3166-1 alpha-2, VD: "US", "KR", "JP"</summary>
     public string?   OriginCountry { get; set; }
 
+    /// <summary>
+    /// TRUE = phim này chỉ dành cho user Premium.
+    /// Frontend dùng để hiển thị badge "PREMIUM" trên poster.
+    /// </summary>
+    public bool IsPremium { get; set; }
+
     public List<string>        Genres     { get; set; } = new();
     public List<MovieVideoDTO> Videos     { get; set; } = new();
     public string?             TrailerKey { get; set; }
@@ -24,6 +34,13 @@ public class MovieDTO
 
     public string?          Director       { get; set; }
     public PersonDetailDTO? DirectorDetail { get; set; }
+
+    /// <summary>
+    /// Thông tin quyền truy cập của user hiện tại đối với phim này.
+    /// NULL khi trả về từ list/search (để tối ưu performance).
+    /// Chỉ có giá trị khi gọi GET /api/movies/{id} với JWT token.
+    /// </summary>
+    public ContentAccessDTO? Access { get; set; }
 }
 
 /// <summary>
@@ -56,7 +73,11 @@ public class CreateMovieDTO
     public string?   ContentRating { get; set; }
     /// <summary>Mã quốc gia sản xuất — ISO 3166-1 alpha-2, VD: "US", "KR"</summary>
     public string?   OriginCountry { get; set; }
-    public List<Guid> GenreIds     { get; set; } = new();
+
+    /// <summary>TRUE = phim này chỉ dành cho Premium user. Mặc định false (free).</summary>
+    public bool IsPremium { get; set; } = false;
+
+    public List<Guid> GenreIds { get; set; } = new();
 
     public List<ImportCastDTO>    Cast     { get; set; } = new();
     public ImportDirectorDTO?     Director { get; set; }
@@ -69,6 +90,9 @@ public class UpdateMovieDTO
     public string?  Title       { get; set; }
     public string?  Description { get; set; }
     public decimal? ImdbRating  { get; set; }
+
+    /// <summary>Cập nhật trạng thái Premium của phim. NULL = không thay đổi.</summary>
+    public bool? IsPremium { get; set; }
 }
 
 // ── Video DTOs ────────────────────────────────────────────────────────────────
