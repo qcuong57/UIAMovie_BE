@@ -251,18 +251,6 @@ public class SyncResultDTO
     public List<int>   InvalidatedSeasons { get; set; } = new();
 }
 
-public class TvShowWatchHistoryDTO
-{
-    public Guid      Id              { get; set; }
-    public Guid      TvShowId        { get; set; }
-    public string    TvShowTitle     { get; set; } = string.Empty;
-    public string?   PosterUrl       { get; set; }
-    /// <summary>null nếu track ở level show, có giá trị nếu track từng episode.</summary>
-    public Guid?     EpisodeId       { get; set; }
-    public DateTime  WatchedAt       { get; set; }
-    public int       ProgressSeconds { get; set; }
-    public bool      IsCompleted     { get; set; }
-}
 
 /// <summary>
 /// Request body cho POST /api/tvshows/history.

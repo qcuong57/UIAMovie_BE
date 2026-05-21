@@ -507,19 +507,49 @@ public class TvShowService : ITvShowService
         var histories = await _watchHistoryRepository.FindAsync(h => h.UserId == userId);
         var tvShowIds = histories.Select(h => h.TvShowId).Distinct().ToList();
 
-        var shows = await _tvShowRepository.GetPagedAsync(new FilterTvShowsDTO
+        // FIX: GetPagedAsync trả về tuple (IEnumerable<TvShow>, int)
+        // không phải PaginatedDTO — phải destructure đúng cách
+        var (showList, _) = await _tvShowRepository.GetPagedAsync(new FilterTvShowsDTO
         {
             Ids      = tvShowIds,
             PageSize = tvShowIds.Count > 0 ? tvShowIds.Count : 1
         });
 
-        var showMap = shows.Items.ToDictionary(t => t.Id);
+        var showMap = showList.ToDictionary(t => t.Id);
+
+        // Load episode + season metadata cho tất cả episodeId có trong history
+        var episodeIds = histories
+            .Where(h => h.EpisodeId.HasValue)
+            .Select(h => h.EpisodeId!.Value)
+            .Distinct()
+            .ToList();
+
+        // episodeId → (SeasonNumber, EpisodeNumber, Title, Runtime)
+        var episodeMeta = new Dictionary<Guid, (int SeasonNumber, int EpisodeNumber, string? Title, int? Runtime)>();
+
+        if (episodeIds.Any())
+        {
+            var episodes  = await _episodeRepository.FindAsync(e => episodeIds.Contains(e.Id));
+            var seasonIds = episodes.Select(e => e.SeasonId).Distinct().ToList();
+            var seasons   = await _seasonRepository.FindAsync(s => seasonIds.Contains(s.Id));
+            var seasonMap = seasons.ToDictionary(s => s.Id, s => s.SeasonNumber);
+
+            foreach (var e in episodes)
+            {
+                var seasonNumber = seasonMap.TryGetValue(e.SeasonId, out var sn) ? sn : 0;
+                episodeMeta[e.Id] = (seasonNumber, e.EpisodeNumber, e.Title, e.Runtime);
+            }
+        }
 
         return histories
             .Where(h => showMap.ContainsKey(h.TvShowId))
             .Select(h =>
             {
                 var t = showMap[h.TvShowId];
+                (int SeasonNumber, int EpisodeNumber, string? Title, int? Runtime)? ep =
+                    h.EpisodeId.HasValue && episodeMeta.TryGetValue(h.EpisodeId.Value, out var meta)
+                        ? meta : null;
+
                 return new TvShowWatchHistoryDTO
                 {
                     Id              = h.Id,
@@ -527,6 +557,10 @@ public class TvShowService : ITvShowService
                     TvShowTitle     = t.Title,
                     PosterUrl       = t.PosterUrl,
                     EpisodeId       = h.EpisodeId,
+                    SeasonNumber    = ep?.SeasonNumber,
+                    EpisodeNumber   = ep?.EpisodeNumber,
+                    EpisodeName     = ep?.Title,
+                    EpisodeRuntime  = ep?.Runtime,
                     WatchedAt       = h.WatchedAt,
                     ProgressSeconds = h.ProgressSeconds,
                     IsCompleted     = h.IsCompleted

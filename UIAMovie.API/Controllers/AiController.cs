@@ -37,28 +37,31 @@ namespace UIAMovie.Controllers;
 [Route("api/[controller]")]
 public sealed class AiController : ControllerBase
 {
-    private readonly IGroqService          _groq;
-    private readonly IMovieService         _movies;
-    private readonly IRatingReviewService  _reviews;
-    private readonly ICacheService         _cache;
+    private readonly IGroqService _groq;
+    private readonly IMovieService _movies;
+    private readonly IRatingReviewService _reviews;
+    private readonly ICacheService _cache;
     private readonly ILogger<AiController> _logger;
 
     private const string MovieContextsCacheKey = "ai:movie_contexts";
-    private const string AllMovieDtosCacheKey  = "ai:all_movie_dtos";
+
+    private const string AllMovieDtosCacheKey = "ai:all_movie_dtos";
+
     // TTL 30 phút — giảm tần suất query DB (Neon free tier: 128 max connections)
     private static readonly TimeSpan ContextCacheTtl = TimeSpan.FromMinutes(30);
 
-    private const int MaxQueryLength       = 200;
+    private const int MaxQueryLength = 200;
+
     // [FIX-1] Thêm giới hạn message chat
     private const int MaxChatMessageLength = 500;
     private const int DescriptionMaxLength = 200;
-    private const int MovieFetchPageSize   = 500;
-    private const int MaxHistoryTurns      = 20;
-    private const int MaxMovieCards        = 6;
+    private const int MovieFetchPageSize = 500;
+    private const int MaxHistoryTurns = 20;
+    private const int MaxMovieCards = 6;
 
     // Chống thundering herd: chỉ 1 request được phép query DB khi cache miss
     private static readonly SemaphoreSlim _contextCacheLock = new(1, 1);
-    private static readonly SemaphoreSlim _dtoCacheLock     = new(1, 1);
+    private static readonly SemaphoreSlim _dtoCacheLock = new(1, 1);
 
     // Keywords để detect câu hỏi về cast/director
     private static readonly string[] CastKeywords =
@@ -69,17 +72,17 @@ public sealed class AiController : ControllerBase
     ];
 
     public AiController(
-        IGroqService          groq,
-        IMovieService         movies,
-        IRatingReviewService  reviews,
-        ICacheService         cache,
+        IGroqService groq,
+        IMovieService movies,
+        IRatingReviewService reviews,
+        ICacheService cache,
         ILogger<AiController> logger)
     {
-        _groq    = groq;
-        _movies  = movies;
+        _groq = groq;
+        _movies = movies;
         _reviews = reviews;
-        _cache   = cache;
-        _logger  = logger;
+        _cache = cache;
+        _logger = logger;
     }
 
     // ─── POST /api/ai/chat ────────────────────────────────────────────────────
@@ -107,11 +110,11 @@ public sealed class AiController : ControllerBase
             // ── Intent routing ────────────────────────────────────────────────
             return intent switch
             {
-                "site"    => await HandleSiteChatAsync(dto),
-                "mood"    => await HandleMoodChatAsync(dto),
+                "site" => await HandleSiteChatAsync(dto),
+                "mood" => await HandleMoodChatAsync(dto),
                 "compare" => await HandleCompareChatAsync(dto),
-                "review"  => await HandleReviewChatAsync(dto),
-                _         => await HandleMovieChatAsync(dto),
+                "review" => await HandleReviewChatAsync(dto),
+                _ => await HandleMovieChatAsync(dto),
             };
         }
         catch (Exception ex)
@@ -135,7 +138,7 @@ public sealed class AiController : ControllerBase
             return BadRequest(ApiResponse.Fail("Mood không được để trống."));
 
         var normalizedMood = dto.Mood.Trim().ToLowerInvariant();
-        var cacheKey       = $"ai:mood:{normalizedMood}";
+        var cacheKey = $"ai:mood:{normalizedMood}";
 
         try
         {
@@ -152,7 +155,7 @@ public sealed class AiController : ControllerBase
 
             // Filter + score phim theo genre match
             var subset = FilterMoviesForMood(contexts, targetGenres, limit: 20);
-            var csv    = AiMovieCsvBuilder.Build(subset); // [FIX-2] Dùng shared helper
+            var csv = AiMovieCsvBuilder.Build(subset); // [FIX-2] Dùng shared helper
 
             var targetGenresStr = targetGenres.Length > 0
                 ? string.Join(", ", targetGenres)
@@ -166,19 +169,19 @@ public sealed class AiController : ControllerBase
                 var page = await _movies.GetMoviesAsync(
                     new FilterMoviesDTO { Ids = ids, PageSize = ids.Count });
                 var map = page.Items.ToDictionary(m => m.Id);
-                movies  = ids.Where(map.ContainsKey).Select(id => map[id]).Take(9).ToList();
+                movies = ids.Where(map.ContainsKey).Select(id => map[id]).Take(9).ToList();
             }
             else
             {
                 // Fallback: top phim theo genre match
                 var allDtos = await GetAllMovieDtosAsync();
                 movies = FallbackRecommend(allDtos, targetGenres.ToList(), take: 9
-                    );
+                );
             }
 
             var result = new MoodRecommendResultDTO
             {
-                Mood   = dto.Mood,
+                Mood = dto.Mood,
                 Movies = movies,
             };
 
@@ -228,25 +231,25 @@ public sealed class AiController : ControllerBase
                 return NotFound(ApiResponse.Fail($"Không tìm thấy phim với ID: {dto.MovieIdB}"));
 
             var userPrompt = MoviePrompts.BuildCompareUser(
-                titleA:    movieA.Title,
-                genresA:   string.Join(", ", movieA.Genres),
-                ratingA:   (double)(movieA.Rating ?? 0),
+                titleA: movieA.Title,
+                genresA: string.Join(", ", movieA.Genres),
+                ratingA: (double)(movieA.Rating ?? 0),
                 directorA: movieA.Director ?? "Không rõ",
-                yearA:     movieA.ReleaseDate?.Year,
-                descA:     TruncateDescription(movieA.Description),
-                titleB:    movieB.Title,
-                genresB:   string.Join(", ", movieB.Genres),
-                ratingB:   (double)(movieB.Rating ?? 0),
+                yearA: movieA.ReleaseDate?.Year,
+                descA: TruncateDescription(movieA.Description),
+                titleB: movieB.Title,
+                genresB: string.Join(", ", movieB.Genres),
+                ratingB: (double)(movieB.Rating ?? 0),
                 directorB: movieB.Director ?? "Không rõ",
-                yearB:     movieB.ReleaseDate?.Year,
-                descB:     TruncateDescription(movieB.Description));
+                yearB: movieB.ReleaseDate?.Year,
+                descB: TruncateDescription(movieB.Description));
 
             var markdownTable = await _groq.ChatAsync(userPrompt, MoviePrompts.CompareSystem);
 
             var result = new CompareResultDTO
             {
-                MovieA        = movieA,
-                MovieB        = movieB,
+                MovieA = movieA,
+                MovieB = movieB,
                 MarkdownTable = markdownTable,
             };
 
@@ -294,11 +297,12 @@ public sealed class AiController : ControllerBase
 
             if (reviewTexts.Count == 0)
                 return Ok(ApiResponse.Ok(
-                    new ReviewSummaryResultDTO { MovieId = dto.MovieId, Summary = "Chưa có đánh giá nào cho phim này." },
+                    new ReviewSummaryResultDTO
+                        { MovieId = dto.MovieId, Summary = "Chưa có đánh giá nào cho phim này." },
                     "Tóm tắt đánh giá"));
 
             var userPrompt = MoviePrompts.BuildReviewUser(movie.Title, reviewTexts);
-            var summary    = await _groq.ChatAsync(userPrompt, MoviePrompts.ReviewSystem);
+            var summary = await _groq.ChatAsync(userPrompt, MoviePrompts.ReviewSystem);
 
             var result = new ReviewSummaryResultDTO
             {
@@ -326,14 +330,20 @@ public sealed class AiController : ControllerBase
     public async Task<IActionResult> Recommend()
     {
         Guid userId;
-        try { userId = GetUserId(); }
-        catch (UnauthorizedAccessException ex) { return Unauthorized(ApiResponse.Fail(ex.Message)); }
+        try
+        {
+            userId = GetUserId();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(ApiResponse.Fail(ex.Message));
+        }
 
         try
         {
             var (history, contexts) = await FetchDataAsync(userId);
 
-            var watchedIds      = history.Select(h => h.MovieId).ToHashSet();
+            var watchedIds = history.Select(h => h.MovieId).ToHashSet();
             var watchedTitleSet = history.Select(h => h.MovieTitle).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             var inProgressIds = history
@@ -357,14 +367,14 @@ public sealed class AiController : ControllerBase
             var recommendedIds = await _groq.RecommendMoviesAsync(watchedTitles, favoriteGenres, unwatched);
 
             List<MovieDTO> result;
-            string         message;
+            string message;
 
             if (recommendedIds.Count > 0)
             {
                 var page = await _movies.GetMoviesAsync(new FilterMoviesDTO
                     { Ids = recommendedIds, PageSize = recommendedIds.Count });
                 var map = page.Items.ToDictionary(m => m.Id);
-                result  = recommendedIds.Where(map.ContainsKey).Select(id => map[id]).Take(9).ToList();
+                result = recommendedIds.Where(map.ContainsKey).Select(id => map[id]).Take(9).ToList();
                 message = "Gợi ý AI";
             }
             else
@@ -372,7 +382,7 @@ public sealed class AiController : ControllerBase
                 var allMovieDtos = await GetAllMovieDtosAsync();
                 result = FallbackRecommend(
                     allMovieDtos.Where(m => !watchedTitleSet.Contains(m.Title)
-                                        && !inProgressIds.Contains(m.Id)).ToList(),
+                                            && !inProgressIds.Contains(m.Id)).ToList(),
                     favoriteGenres, take: 9);
                 message = "Gợi ý phổ biến";
             }
@@ -399,7 +409,7 @@ public sealed class AiController : ControllerBase
 
         try
         {
-            var basic    = (await _movies.SearchMoviesAsync(q)).ToList();
+            var basic = (await _movies.SearchMoviesAsync(q)).ToList();
             var contexts = await GetCachedContextsAsync();
 
             if (basic.Count >= 5)
@@ -411,9 +421,9 @@ public sealed class AiController : ControllerBase
                 return Ok(ApiResponse.Ok(basic,
                     basic.Count > 0 ? "Kết quả tìm kiếm" : "Không tìm thấy kết quả phù hợp."));
 
-            var page  = await _movies.GetMoviesAsync(
+            var page = await _movies.GetMoviesAsync(
                 new FilterMoviesDTO { Ids = aiIds, PageSize = aiIds.Count });
-            var map   = page.Items.ToDictionary(m => m.Id);
+            var map = page.Items.ToDictionary(m => m.Id);
             var aiSet = aiIds.ToHashSet();
 
             var merged = aiIds
@@ -440,11 +450,11 @@ public sealed class AiController : ControllerBase
     private async Task<IActionResult> HandleSiteChatAsync(AiChatRequestDTO dto)
     {
         var systemContext = MoviePrompts.SiteGuideSystem
-                         + "\n\n"
-                         + MoviePrompts.SiteKnowledge;
+                            + "\n\n"
+                            + MoviePrompts.SiteKnowledge;
 
         var history = BuildCleanHistory(dto.History);
-        var reply   = await _groq.ChatAsync(dto.Message, systemContext, history);
+        var reply = await _groq.ChatAsync(dto.Message, systemContext, history);
 
         return Ok(ApiResponse.Ok(new
         {
@@ -480,8 +490,8 @@ public sealed class AiController : ControllerBase
             : $"Không có phim nào thật sự phù hợp với tâm trạng \"{detectedMood}\" trong danh sách hiện tại.";
 
         var systemContext = MoviePrompts.ChatSystem + "\n\n" + moodContext;
-        var history       = BuildCleanHistory(dto.History);
-        var reply         = await _groq.ChatAsync(dto.Message, systemContext, history);
+        var history = BuildCleanHistory(dto.History);
+        var reply = await _groq.ChatAsync(dto.Message, systemContext, history);
 
         return Ok(ApiResponse.Ok(new
         {
@@ -508,7 +518,7 @@ public sealed class AiController : ControllerBase
         }
 
         var cacheKey = BuildCompareCacheKey(movieA.Id, movieB.Id);
-        var cached   = await _cache.GetAsync<CompareResultDTO>(cacheKey);
+        var cached = await _cache.GetAsync<CompareResultDTO>(cacheKey);
 
         CompareResultDTO result;
         if (cached != null)
@@ -524,25 +534,25 @@ public sealed class AiController : ControllerBase
                 return await HandleMovieChatAsync(dto);
 
             var userPrompt = MoviePrompts.BuildCompareUser(
-                titleA:    movieADetail.Title,
-                genresA:   string.Join(", ", movieADetail.Genres),
-                ratingA:   (double)(movieADetail.Rating ?? 0),
+                titleA: movieADetail.Title,
+                genresA: string.Join(", ", movieADetail.Genres),
+                ratingA: (double)(movieADetail.Rating ?? 0),
                 directorA: movieADetail.Director ?? "Không rõ",
-                yearA:     movieADetail.ReleaseDate?.Year,
-                descA:     TruncateDescription(movieADetail.Description),
-                titleB:    movieBDetail.Title,
-                genresB:   string.Join(", ", movieBDetail.Genres),
-                ratingB:   (double)(movieBDetail.Rating ?? 0),
+                yearA: movieADetail.ReleaseDate?.Year,
+                descA: TruncateDescription(movieADetail.Description),
+                titleB: movieBDetail.Title,
+                genresB: string.Join(", ", movieBDetail.Genres),
+                ratingB: (double)(movieBDetail.Rating ?? 0),
                 directorB: movieBDetail.Director ?? "Không rõ",
-                yearB:     movieBDetail.ReleaseDate?.Year,
-                descB:     TruncateDescription(movieBDetail.Description));
+                yearB: movieBDetail.ReleaseDate?.Year,
+                descB: TruncateDescription(movieBDetail.Description));
 
             var markdownTable = await _groq.ChatAsync(userPrompt, MoviePrompts.CompareSystem);
 
             result = new CompareResultDTO
             {
-                MovieA        = movieADetail,
-                MovieB        = movieBDetail,
+                MovieA = movieADetail,
+                MovieB = movieBDetail,
                 MarkdownTable = markdownTable,
             };
 
@@ -551,7 +561,7 @@ public sealed class AiController : ControllerBase
 
         return Ok(ApiResponse.Ok(new
         {
-            reply  = $"Đây là bảng so sánh giữa **{result.MovieA.Title}** và **{result.MovieB.Title}**:",
+            reply = $"Đây là bảng so sánh giữa **{result.MovieA.Title}** và **{result.MovieB.Title}**:",
             movies = new[] { result.MovieA, result.MovieB },
             intent = "compare",
             compareTable = result.MarkdownTable,
@@ -565,7 +575,7 @@ public sealed class AiController : ControllerBase
     private async Task<IActionResult> HandleReviewChatAsync(AiChatRequestDTO dto)
     {
         var contexts = await GetCachedContextsAsync();
-        var lower    = dto.Message.ToLowerInvariant();
+        var lower = dto.Message.ToLowerInvariant();
 
         // [FIX-5] Dùng fuzzy match để tìm phim được nhắc đến
         var mentioned = contexts
@@ -578,7 +588,7 @@ public sealed class AiController : ControllerBase
             return await HandleMovieChatAsync(dto);
 
         var cacheKey = $"ai:review:{mentioned.Id}";
-        var cached   = await _cache.GetAsync<ReviewSummaryResultDTO>(cacheKey);
+        var cached = await _cache.GetAsync<ReviewSummaryResultDTO>(cacheKey);
 
         string summary;
         if (cached != null)
@@ -600,8 +610,8 @@ public sealed class AiController : ControllerBase
             else
             {
                 var userPrompt = MoviePrompts.BuildReviewUser(mentioned.Title, reviewTexts);
-                summary        = await _groq.ChatAsync(userPrompt, MoviePrompts.ReviewSystem);
-                summary        = string.IsNullOrWhiteSpace(summary)
+                summary = await _groq.ChatAsync(userPrompt, MoviePrompts.ReviewSystem);
+                summary = string.IsNullOrWhiteSpace(summary)
                     ? "Không thể tóm tắt đánh giá lúc này."
                     : summary;
 
@@ -611,7 +621,7 @@ public sealed class AiController : ControllerBase
         }
 
         var history = BuildCleanHistory(dto.History);
-        var reply   = await _groq.ChatAsync(
+        var reply = await _groq.ChatAsync(
             $"Hãy trình bày tóm tắt đánh giá sau cho phim \"{mentioned.Title}\" một cách tự nhiên: {summary}",
             MoviePrompts.ChatSystem,
             history);
@@ -629,24 +639,24 @@ public sealed class AiController : ControllerBase
     /// </summary>
     private async Task<IActionResult> HandleMovieChatAsync(AiChatRequestDTO dto)
     {
-        var contexts  = await GetCachedContextsAsync();
+        var contexts = await GetCachedContextsAsync();
         var topMovies = SelectMoviesForChat(contexts, dto.Message, dto.History, limit: 30);
 
         var movieLines = topMovies.Select(m =>
             $"- Phim: {m.Title} | Thể loại: {m.Genres} | Điểm: {m.Rating}/10");
 
         var dbContext = "Dưới đây là dữ liệu các phim đang có trên website của bạn:\n"
-                      + string.Join("\n", movieLines)
-                      + "\n\nQUY TẮC BẮT BUỘC: Nếu người dùng hỏi xin phim, tư vấn phim, CHỈ ĐƯỢC PHÉP lấy các phim trong danh sách trên để trả lời. TUYỆT ĐỐI KHÔNG tự bịa ra phim ở ngoài.";
+                        + string.Join("\n", movieLines)
+                        + "\n\nQUY TẮC BẮT BUỘC: Nếu người dùng hỏi xin phim, tư vấn phim, CHỈ ĐƯỢC PHÉP lấy các phim trong danh sách trên để trả lời. TUYỆT ĐỐI KHÔNG tự bịa ra phim ở ngoài.";
 
         var castContext = await BuildCastContextIfNeededAsync(dto.Message, dto.History, topMovies);
         if (!string.IsNullOrEmpty(castContext))
             dbContext += "\n\n" + castContext;
 
         var fullSystemContext = MoviePrompts.ChatSystem + "\n\n" + dbContext;
-        var history           = BuildCleanHistory(dto.History);
+        var history = BuildCleanHistory(dto.History);
 
-        var reply              = await _groq.ChatAsync(dto.Message, fullSystemContext, history);
+        var reply = await _groq.ChatAsync(dto.Message, fullSystemContext, history);
         var mentionedMovieDtos = await ExtractMentionedMoviesAsync(reply, topMovies);
 
         return Ok(ApiResponse.Ok(new
@@ -662,7 +672,7 @@ public sealed class AiController : ControllerBase
     private static List<ChatMessageDTO> BuildCleanHistory(List<ChatMessageDTO> history)
         => history
             .Where(h => h.Role is "user" or "assistant"
-                     && !string.IsNullOrWhiteSpace(h.Content))
+                        && !string.IsNullOrWhiteSpace(h.Content))
             .TakeLast(MaxHistoryTurns)
             .Select(h => new ChatMessageDTO { Role = h.Role, Content = h.Content.Trim() })
             .ToList();
@@ -678,6 +688,7 @@ public sealed class AiController : ControllerBase
             if (lower.Contains(mood))
                 return mood;
         }
+
         return string.Empty;
     }
 
@@ -702,7 +713,7 @@ public sealed class AiController : ControllerBase
         if (titleTokens.Count == 0) return 0;
 
         var matchedTokens = titleTokens.Count(t => messageLower.Contains(t));
-        var ratio         = (double)matchedTokens / titleTokens.Count;
+        var ratio = (double)matchedTokens / titleTokens.Count;
 
         // Cần ít nhất 60% token match để tránh false positive
         return ratio >= 0.6 ? (int)(ratio * 80) : 0;
@@ -713,7 +724,7 @@ public sealed class AiController : ControllerBase
     /// VD: "so sánh inception vs dark knight" → match "Inception" và "The Dark Knight".
     /// </summary>
     private static (MovieContext? A, MovieContext? B) FindTwoMoviesInMessage(
-        string             message,
+        string message,
         List<MovieContext> contexts)
     {
         var lower = message.ToLowerInvariant();
@@ -742,7 +753,7 @@ public sealed class AiController : ControllerBase
     private async Task<List<MovieDTO>> GetMoodMoviesInternalAsync(string normalizedMood)
     {
         var cacheKey = $"ai:mood:{normalizedMood}";
-        var cached   = await _cache.GetAsync<MoodRecommendResultDTO>(cacheKey);
+        var cached = await _cache.GetAsync<MoodRecommendResultDTO>(cacheKey);
         if (cached != null) return cached.Movies;
 
         var contexts = await GetCachedContextsAsync();
@@ -752,7 +763,7 @@ public sealed class AiController : ControllerBase
             : [];
 
         var subset = FilterMoviesForMood(contexts, targetGenres, limit: 20);
-        var csv    = AiMovieCsvBuilder.Build(subset); // [FIX-2]
+        var csv = AiMovieCsvBuilder.Build(subset); // [FIX-2]
 
         var targetGenresStr = targetGenres.Length > 0
             ? string.Join(", ", targetGenres)
@@ -766,7 +777,7 @@ public sealed class AiController : ControllerBase
             var page = await _movies.GetMoviesAsync(
                 new FilterMoviesDTO { Ids = ids, PageSize = ids.Count });
             var map = page.Items.ToDictionary(m => m.Id);
-            movies  = ids.Where(map.ContainsKey).Select(id => map[id]).ToList();
+            movies = ids.Where(map.ContainsKey).Select(id => map[id]).ToList();
         }
         else
         {
@@ -785,8 +796,8 @@ public sealed class AiController : ControllerBase
 
     private static List<MovieContext> FilterMoviesForMood(
         List<MovieContext> all,
-        string[]           targetGenres,
-        int                limit)
+        string[] targetGenres,
+        int limit)
     {
         if (targetGenres.Length == 0)
             return all.OrderByDescending(m => m.Rating).Take(limit).ToList();
@@ -799,7 +810,9 @@ public sealed class AiController : ControllerBase
             .OrderByDescending(m =>
             {
                 var genreMatch = m.Genres.Split(',')
-                    .Any(g => genreSet.Contains(g.Trim().ToLowerInvariant())) ? 3 : 0;
+                    .Any(g => genreSet.Contains(g.Trim().ToLowerInvariant()))
+                    ? 3
+                    : 0;
                 return genreMatch + m.Rating * 0.1;
             })
             .Take(limit)
@@ -818,7 +831,7 @@ public sealed class AiController : ControllerBase
     /// KHÔNG gọi DB thêm — dùng GetAllMovieDtosAsync() đã cache sẵn (TTL 30 phút).
     /// </summary>
     private async Task<List<MovieDTO>> ExtractMentionedMoviesAsync(
-        string            reply,
+        string reply,
         List<MovieContext> topMovies)
     {
         if (string.IsNullOrWhiteSpace(reply) || topMovies.Count == 0)
@@ -829,7 +842,7 @@ public sealed class AiController : ControllerBase
         var matchedIds = topMovies
             .Select(m => new
             {
-                Id       = m.Id,
+                Id = m.Id,
                 Position = replyLower.IndexOf(m.Title.ToLowerInvariant(), StringComparison.Ordinal),
             })
             .Where(x => x.Position >= 0)
@@ -865,12 +878,12 @@ public sealed class AiController : ControllerBase
     /// Nếu có → tìm phim liên quan trong topMovies → fetch detail → build cast/director context.
     /// </summary>
     private async Task<string> BuildCastContextIfNeededAsync(
-        string                message,
-        List<ChatMessageDTO>  history,
-        List<MovieContext>    topMovies)
+        string message,
+        List<ChatMessageDTO> history,
+        List<MovieContext> topMovies)
     {
         var fullText = string.Join(" ", history.TakeLast(2).Select(h => h.Content)) + " " + message;
-        var lower    = fullText.ToLowerInvariant();
+        var lower = fullText.ToLowerInvariant();
 
         var isCastQuery = CastKeywords.Any(k => lower.Contains(k));
         if (!isCastQuery) return string.Empty;
@@ -925,13 +938,13 @@ public sealed class AiController : ControllerBase
     }
 
     private static List<MovieContext> SelectMoviesForChat(
-        List<MovieContext>    all,
-        string               currentMessage,
+        List<MovieContext> all,
+        string currentMessage,
         List<ChatMessageDTO> history,
-        int                  limit)
+        int limit)
     {
         var recentText = string.Join(" ", history.TakeLast(3).Select(h => h.Content))
-                       + " " + currentMessage;
+                         + " " + currentMessage;
 
         var tokens = recentText
             .ToLowerInvariant()
@@ -956,13 +969,13 @@ public sealed class AiController : ControllerBase
 
     private static double CalcChatScore(MovieContext m, HashSet<string> tokens)
     {
-        var titleLower  = m.Title.ToLowerInvariant();
+        var titleLower = m.Title.ToLowerInvariant();
         var genresLower = m.Genres.ToLowerInvariant();
-        var descLower   = m.Description.ToLowerInvariant();
+        var descLower = m.Description.ToLowerInvariant();
 
-        var titleHit = tokens.Count(t => titleLower.Contains(t))  * 3.0;
+        var titleHit = tokens.Count(t => titleLower.Contains(t)) * 3.0;
         var genreHit = tokens.Count(t => genresLower.Contains(t)) * 2.0;
-        var descHit  = tokens.Count(t => descLower.Contains(t))   * 1.0;
+        var descHit = tokens.Count(t => descLower.Contains(t)) * 1.0;
 
         return titleHit + genreHit + descHit;
     }
@@ -1008,7 +1021,7 @@ public sealed class AiController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(description)) return string.Empty;
         if (description.Length <= DescriptionMaxLength) return description.Trim();
-        var cut       = description[..DescriptionMaxLength];
+        var cut = description[..DescriptionMaxLength];
         var lastSpace = cut.LastIndexOf(' ');
         return (lastSpace > 0 ? cut[..lastSpace] : cut).Trim();
     }
@@ -1016,7 +1029,7 @@ public sealed class AiController : ControllerBase
     private async Task<(List<WatchHistoryDTO> history, List<MovieContext> contexts)>
         FetchDataAsync(Guid userId)
     {
-        var history  = await _movies.GetWatchHistoryAsync(userId);
+        var history = await _movies.GetWatchHistoryAsync(userId);
         var contexts = await GetCachedContextsAsync();
         return (history.ToList(), contexts);
     }
@@ -1035,16 +1048,16 @@ public sealed class AiController : ControllerBase
             var page = await _movies.GetMoviesAsync(new FilterMoviesDTO
             {
                 PageSize = MovieFetchPageSize,
-                SortBy   = "rating",
+                SortBy = "rating",
                 SortDesc = true
             });
 
             var contexts = page.Items.Select(m => new MovieContext(
-                Id:          m.Id,
-                Title:       m.Title,
-                Genres:      string.Join(", ", m.Genres),
-                Rating:      (double)(m.Rating ?? 0),
-                Year:        m.ReleaseDate?.Year,
+                Id: m.Id,
+                Title: m.Title,
+                Genres: string.Join(", ", m.Genres),
+                Rating: (double)(m.Rating ?? 0),
+                Year: m.ReleaseDate?.Year,
                 Description: TruncateDescription(m.Description)
             )).ToList();
 
@@ -1071,7 +1084,7 @@ public sealed class AiController : ControllerBase
             var page = await _movies.GetMoviesAsync(new FilterMoviesDTO
             {
                 PageSize = MovieFetchPageSize,
-                SortBy   = "rating",
+                SortBy = "rating",
                 SortDesc = true
             });
 
@@ -1103,7 +1116,7 @@ public record MoodRequestDTO
 
 public record MoodRecommendResultDTO
 {
-    public string         Mood   { get; init; } = string.Empty;
+    public string Mood { get; init; } = string.Empty;
     public List<MovieDTO> Movies { get; init; } = [];
 }
 
@@ -1115,9 +1128,9 @@ public record CompareRequestDTO
 
 public record CompareResultDTO
 {
-    public MovieDTO MovieA        { get; init; } = null!;
-    public MovieDTO MovieB        { get; init; } = null!;
-    public string   MarkdownTable { get; init; } = string.Empty;
+    public MovieDTO MovieA { get; init; } = null!;
+    public MovieDTO MovieB { get; init; } = null!;
+    public string MarkdownTable { get; init; } = string.Empty;
 }
 
 // DTOs cho Review endpoint
@@ -1128,7 +1141,7 @@ public record ReviewRequestDTO
 
 public record ReviewSummaryResultDTO
 {
-    public Guid   MovieId { get; init; }
+    public Guid MovieId { get; init; }
     public string Summary { get; init; } = string.Empty;
 }
 
@@ -1140,4 +1153,4 @@ file static class ApiResponse
 
     internal static ApiResponseDTO<object> Fail(string message)
         => new() { Message = message, Success = false };
-}   
+}
