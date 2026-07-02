@@ -207,7 +207,38 @@ public class PaymentController : ControllerBase
         }
     }
     
-     /// <summary>
+    // ── User: Tự hủy subscription ─────────────────────────────────────────────
+
+    /// <summary>
+    /// User tự hủy gói Premium của chính mình.
+    /// DELETE /api/payments/subscription/me
+    /// </summary>
+    [Authorize]
+    [HttpDelete("subscription/me")]
+    public async Task<IActionResult> CancelMySubscription()
+    {
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized();
+
+        try
+        {
+            await _paymentService.AdminRevokeSubscriptionAsync(userId.Value);
+            return Ok(new { message = "Hủy gói Premium thành công." });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "CancelMySubscription failed for user {UserId}", userId);
+            return StatusCode(500, new { message = "Không thể hủy gói. Vui lòng thử lại." });
+        }
+    }
+
+    // ── Admin: Doanh thu ──────────────────────────────────────────────────────
+
+    /// <summary>
     /// [Admin] Tổng quan doanh thu: tổng tiền, MoM growth, active Premium users...
     /// GET /api/payments/admin/revenue/summary
     /// </summary>

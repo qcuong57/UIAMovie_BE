@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using UIAMovie.Infrastructure.Data;
@@ -11,9 +12,11 @@ using UIAMovie.Infrastructure.Data;
 namespace UIAMovie.Infrastructure.Migrations
 {
     [DbContext(typeof(MovieDbContext))]
-    partial class MovieDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260623134400_AddAdvertisements")]
+    partial class AddAdvertisements
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -22,7 +25,7 @@ namespace UIAMovie.Infrastructure.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("UIAMovie.Domain.Entities.AdContentOverride", b =>
+            modelBuilder.Entity("UIAMovie.Domain.Entities.AdSchedule", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -62,9 +65,7 @@ namespace UIAMovie.Infrastructure.Migrations
 
                     b.HasIndex("ContentType", "ContentId");
 
-                    b.HasIndex("ContentType", "ContentId", "IsActive");
-
-                    b.ToTable("AdContentOverrides");
+                    b.ToTable("AdSchedules");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.Advertisement", b =>
@@ -261,47 +262,6 @@ namespace UIAMovie.Infrastructure.Migrations
                         .HasFilter("\"TmdbGenreId\" IS NOT NULL");
 
                     b.ToTable("Genres");
-                });
-
-            modelBuilder.Entity("UIAMovie.Domain.Entities.GlobalAdSlot", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AdvertisementId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("AppliesTo")
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("DisplayOrder")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<int?>("MidRollOffsetSeconds")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Position")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AdvertisementId");
-
-                    b.HasIndex("AppliesTo");
-
-                    b.HasIndex("AppliesTo", "IsActive");
-
-                    b.ToTable("GlobalAdSlots");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.Movie", b =>
@@ -1103,7 +1063,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$HF0euuVMbVlssmrgPknfI.ANifCXdbE6dJxPvXbhZw9RrGKwHABAK",
+                            PasswordHash = "$2a$11$DEswnRjH8V4Awvb8D7cVKuvdqlB96sTuJOMlnX.5Algi4Q2kRVFxy",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
@@ -1211,10 +1171,10 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.ToTable("WatchHistories");
                 });
 
-            modelBuilder.Entity("UIAMovie.Domain.Entities.AdContentOverride", b =>
+            modelBuilder.Entity("UIAMovie.Domain.Entities.AdSchedule", b =>
                 {
                     b.HasOne("UIAMovie.Domain.Entities.Advertisement", "Advertisement")
-                        .WithMany("Overrides")
+                        .WithMany("Schedules")
                         .HasForeignKey("AdvertisementId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -1261,17 +1221,6 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Navigation("Movie");
 
                     b.Navigation("User");
-                });
-
-            modelBuilder.Entity("UIAMovie.Domain.Entities.GlobalAdSlot", b =>
-                {
-                    b.HasOne("UIAMovie.Domain.Entities.Advertisement", "Advertisement")
-                        .WithMany("GlobalSlots")
-                        .HasForeignKey("AdvertisementId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Advertisement");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.MovieCast", b =>
@@ -1577,9 +1526,7 @@ namespace UIAMovie.Infrastructure.Migrations
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.Advertisement", b =>
                 {
-                    b.Navigation("GlobalSlots");
-
-                    b.Navigation("Overrides");
+                    b.Navigation("Schedules");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.Genre", b =>

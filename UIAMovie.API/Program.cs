@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -94,6 +95,8 @@ builder.Services.AddScoped<IEpisodeSubtitleService, EpisodeSubtitleService>();
 builder.Services.AddScoped<IRepository<Season>, Repository<Season>>();
 builder.Services.AddScoped<IRepository<Episode>, Repository<Episode>>();
 builder.Services.AddScoped<ISubscriptionChecker, SubscriptionChecker>();
+builder.Services.AddScoped<IAdRepository, AdRepository>();
+builder.Services.AddScoped<IAdService, AdService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IVnpayPaymentService, VnpayPaymentService>();
 builder.Services.Configure<VnpayOptions>(
@@ -130,6 +133,10 @@ builder.Services.AddControllers()
     .ConfigureApiBehaviorOptions(options =>
     {
         options.InvalidModelStateResponseFactory = ValidationErrorFilter.Handler;
+    })
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     });
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

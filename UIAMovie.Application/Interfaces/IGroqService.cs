@@ -35,6 +35,22 @@ public interface IGroqService
         string mood,
         string targetGenres,
         string movieCsv);
+
+    // ─── TV Show ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Gợi ý TV show từ database — trả về danh sách Guid đã được rank.
+    /// </summary>
+    Task<List<Guid>> RecommendTvShowsAsync(
+        List<string>        watchedTitles,
+        List<string>        favoriteGenres,
+        List<TvShowContext> availableShows);
+
+    /// <summary>
+    /// AI-powered search TV show — hiểu ngôn ngữ tự nhiên.
+    /// Ví dụ: "phim bộ hàn lãng mạn" / "series nhiều mùa hay nhất"
+    /// </summary>
+    Task<List<Guid>> SmartSearchTvShowsAsync(string query, List<TvShowContext> availableShows);
 }
 
 /// <summary>Context phim gửi lên Groq — đủ metadata để AI hiểu, không thừa token</summary>
@@ -45,4 +61,15 @@ public record MovieContext(
     double Rating,
     int?   Year,
     string Description    // 200 ký tự đầu
+);
+
+/// <summary>Context TV show gửi lên Groq — tương tự MovieContext, thêm NumberOfSeasons</summary>
+public record TvShowContext(
+    Guid   Id,
+    string Title,
+    string Genres,           // "Drama, Romance"
+    double Rating,
+    int?   Year,             // FirstAirDate?.Year
+    string Description,      // 200 ký tự đầu
+    int?   NumberOfSeasons
 );

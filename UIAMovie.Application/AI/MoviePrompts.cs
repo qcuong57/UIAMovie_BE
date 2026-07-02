@@ -21,6 +21,12 @@ namespace UIAMovie.Application.AI;
 /// [v3] Fixes:
 ///   [FIX-3] DetectIntent: xử lý multi-intent — ưu tiên intent cụ thể nhất,
 ///           không bỏ sót khi câu hỏi chứa cả mood lẫn compare.
+///
+/// [v4] TV Show support:
+///   - TvShowRecommendSystem + BuildTvShowRecommendUser → gợi ý series
+///   - TvShowSearchSystem + BuildTvShowSearchUser       → tìm kiếm series
+///   - DetectIntent: nhận biết câu hỏi về phim bộ/series → intent "tvshow"
+///   - TvShowKeywords: keyword set riêng cho series
 /// </summary>
 public static class MoviePrompts
 {
@@ -28,8 +34,13 @@ public static class MoviePrompts
     // Token estimate: ~40 tokens system + user message. Output capped at 300 tokens.
     public const string ChatSystem =
         "Bạn là trợ lý AI của UIAMovie. Trả lời bằng tiếng Việt, ngắn gọn, tối đa 3 câu. " +
-        "Không lặp câu hỏi. Nếu câu hỏi không liên quan đến phim hoặc website UIAMovie, " +
-        "hãy lịch sự từ chối và gợi ý user hỏi về phim hoặc tính năng website.";
+        "Không lặp câu hỏi. Bạn có thể tư vấn về phim lẻ (phim chiếu rạp, phim điện ảnh), " +
+        "phim bộ, series, TV show và tính năng website UIAMovie. " +
+        "Khi user hỏi về 'phim chiếu rạp', 'phim lẻ' hoặc 'phim điện ảnh': " +
+        "CHỈ gợi ý phim lẻ thuộc thể loại Action/Drama/Thriller/Comedy/Adventure/Romance. " +
+        "TUYỆT ĐỐI KHÔNG gợi ý anime, hoạt hình dài tập (Dragon Ball, One Piece...) hay phim bộ nhiều tập. " +
+        "Nếu câu hỏi không liên quan đến phim, series hoặc website UIAMovie, " +
+        "hãy lịch sự từ chối và gợi ý user hỏi về phim, series hoặc tính năng website.";
 
     // ─── Site Guide ───────────────────────────────────────────────────────────
     // Token estimate: ~120 tokens system+knowledge + user message. Output capped at 200 tokens.
@@ -67,7 +78,7 @@ public static class MoviePrompts
         - Lịch sử xem: Hồ sơ → Lịch sử — lưu tự động, tiếp tục xem từ điểm dừng.
         - Đánh giá phim: Vào trang chi tiết phim → cuộn xuống → Viết đánh giá (cần đăng nhập).
         - Tìm kiếm: Ô tìm kiếm trên thanh điều hướng, hỗ trợ tìm theo tên, diễn viên, thể loại.
-        - AI Chat: Nút chat góc dưới phải — hỏi về phim, tâm trạng, so sánh phim.
+        - AI Chat: Nút chat góc dưới phải — hỏi về phim, phim bộ, tâm trạng, so sánh phim.
 
         [HỖ TRỢ KỸ THUẬT]
         - Phim bị giật/lag: Kiểm tra tốc độ mạng, giảm chất lượng trong trình phát video.
@@ -204,11 +215,46 @@ public static class MoviePrompts
         - Mô tả: {descB}
         """;
 
+    // ─── TV Show Recommend ────────────────────────────────────────────────────
+    // Token estimate: ~20 shows × 130 chars ≈ 750 tokens input. Output: 9 GUIDs ≈ 36 tokens.
+    public const string TvShowRecommendSystem =
+        "TV show recommendation engine. Output ONLY a valid JSON array of UUIDs. No explanation, no markdown.";
+
+    /// <param name="watched">Comma-separated list of watched TV show titles (max 15)</param>
+    /// <param name="genres">Comma-separated list of preferred genres</param>
+    /// <param name="showCsv">id|title|genres|rating|seasons|description, one entry per line</param>
+    public static string BuildTvShowRecommendUser(
+        string watched,
+        string genres,
+        string showCsv) => $"""
+        Watched TV shows: {watched}
+        Preferred genres: {genres}
+        Available TV shows (id|title|genres|rating|seasons|description):
+        {showCsv}
+        Rules: exclude watched, prefer genre match, then high rating, use description to understand content. Return EXACTLY 9 UUIDs, no more, no less.
+        Output: ["uuid1","uuid2",...]
+        """;
+
+    // ─── TV Show Smart Search ─────────────────────────────────────────────────
+    // Token estimate: ~25 shows × 130 chars ≈ 900 tokens input. Output: 15 GUIDs ≈ 60 tokens.
+    public const string TvShowSearchSystem =
+        "TV show search engine. Output ONLY a valid JSON array of UUIDs. No explanation, no markdown.";
+
+    /// <param name="query">Natural language search query from user</param>
+    /// <param name="showCsv">id|title|genres|rating|seasons|description, one entry per line</param>
+    public static string BuildTvShowSearchUser(string query, string showCsv) => $"""
+        Find TV shows matching: "{query}"
+        Catalog (id|title|genres|rating|seasons|description):
+        {showCsv}
+        Use description to understand content. Match by meaning, not just keywords.
+        Output: ["uuid1",...] (max 15). Empty array [] if no match.
+        """;
+
     // ─── Intent Detection (keyword-based, zero AI call) ───────────────────────
 
     /// <summary>
     /// [FIX-3] Phân loại intent câu hỏi dựa trên keyword — không tốn token Groq.
-    /// Trả về một trong: "movie" | "site" | "mood" | "compare" | "review"
+    /// Trả về một trong: "movie" | "site" | "mood" | "compare" | "review" | "tvshow"
     ///
     /// Multi-intent handling:
     ///   Mỗi intent được tính điểm độc lập. Intent có score cao nhất thắng.
@@ -216,8 +262,8 @@ public static class MoviePrompts
     ///       → mood score: 2 (buồn + tâm trạng), compare score: 1 (hay hơn)
     ///       → mood thắng → route đúng.
     ///
-    ///   Ưu tiên tie-break: compare > review > mood > site > movie
-    ///   (compare và review là intent cụ thể hơn mood/site)
+    ///   Ưu tiên tie-break: compare > review > tvshow > mood > site > movie
+    ///   (compare và review là intent cụ thể nhất; tvshow cụ thể hơn mood chung chung)
     /// </summary>
     public static string DetectIntent(string message, IEnumerable<string>? recentHistory = null)
     {
@@ -229,7 +275,16 @@ public static class MoviePrompts
             ["compare"] = 0,
             ["review"]  = 0,
             ["mood"]    = 0,
+            ["tvshow"]  = 0,
             ["site"]    = 0,
+        };
+
+        // ── Movie-specific keywords — boost score "movie" để tránh false positive tvshow ──
+        // Khi user hỏi "phim chiếu rạp", "phim lẻ" → route về movie handler, không phải tvshow
+        var movieSpecificKeywords = new[]
+        {
+            "chiếu rạp", "phim lẻ", "phim điện ảnh", "cinema", "phim mới nhất",
+            "phim hay nhất", "phim hot", "blockbuster",
         };
 
         // ── Compare keywords ──────────────────────────────────────────────────
@@ -248,17 +303,33 @@ public static class MoviePrompts
         foreach (var mood in MoodGenreMap.Keys)
             if (text.Contains(mood)) scores["mood"]++;
 
+        // ── TV Show keywords ──────────────────────────────────────────────────
+        foreach (var kw in TvShowKeywords)
+            if (text.Contains(kw)) scores["tvshow"]++;
+
         // ── Site keywords ─────────────────────────────────────────────────────
         foreach (var kw in SiteKeywords)
             if (text.Contains(kw)) scores["site"]++;
+
+        // ── Movie-specific: nếu có keyword phim lẻ rõ ràng → penalty tvshow ──
+        foreach (var kw in movieSpecificKeywords)
+        {
+            if (text.Contains(kw))
+            {
+                // Giảm tvshow score xuống để tránh route nhầm
+                scores["tvshow"] = Math.Max(0, scores["tvshow"] - 2);
+                break;
+            }
+        }
 
         // ── Tìm intent thắng ─────────────────────────────────────────────────
         // Nếu không intent nào có điểm → default movie
         var maxScore = scores.Values.Max();
         if (maxScore == 0) return "movie";
 
-        // Tie-break theo thứ tự ưu tiên: compare > review > mood > site
-        var priority = new[] { "compare", "review", "mood", "site" };
+        // Tie-break theo thứ tự ưu tiên: compare > review > tvshow > mood > site
+        // tvshow được ưu tiên hơn mood vì "phim bộ" là loại nội dung cụ thể hơn tâm trạng chung
+        var priority = new[] { "compare", "review", "tvshow", "mood", "site" };
         foreach (var intent in priority)
         {
             if (scores[intent] == maxScore)
@@ -288,6 +359,32 @@ public static class MoviePrompts
         "gợi ý cho tâm trạng", "cảm xúc",
     ];
 
+    /// <summary>
+    /// Keyword nhận diện ý định hỏi về TV show / phim bộ / series.
+    /// Tách riêng để dễ bổ sung khi có thêm loại nội dung (anime, reality show...).
+    /// </summary>
+    internal static readonly string[] TvShowKeywords =
+    [
+        "phim bộ", "series", "tv show", "tvshow", "phim dài tập",
+        "season", "nhiều tập", "episode",
+        "phim hàn", "k-drama", "kdrama", "hàn quốc series",
+        "phim trung", "c-drama", "cdrama", "phim trung quốc series",
+        "phim mỹ series", "anime", "hoạt hình series",
+        "returning series", "phim chưa kết thúc",
+        "xem series", "gợi ý series", "phim bộ hay",
+        // Bổ sung: các pattern user hay dùng nhưng chưa có
+        "tập phim", "phim nhiều tập", "phim theo mùa",
+        // "bộ phim" và "drama" bị xóa — quá chung chung, gây false positive cho phim lẻ
+        // "mùa" bị xóa — xuất hiện trong câu hỏi phim lẻ VD: "phim mùa đông", "mùa hè"
+        // "đang chiếu" bị xóa — có thể dùng cho phim lẻ đang chiếu rạp
+        "sitcom", "miniseries", "limited series",
+        "phim nhật", "j-drama", "jdrama",
+        "phim thái", "t-drama",
+        "tập cuối", "season mới", "mùa mới", "mùa tiếp theo",
+        "còn bao nhiêu tập", "mấy mùa", "bao nhiêu mùa",
+        "gợi ý phim bộ", "tìm phim bộ", "phim bộ hay nhất",
+    ];
+
     private static readonly string[] SiteKeywords =
     [
         "đăng ký", "đăng nhập", "tài khoản", "mật khẩu", "thanh toán", "gói",
@@ -300,7 +397,7 @@ public static class MoviePrompts
         => keywords.Any(k => text.Contains(k, StringComparison.OrdinalIgnoreCase));
 }
 
-// ─── AiMovieCsvBuilder — shared helper, loại bỏ duplicate giữa Controller & Service ───
+// ─── AiMovieCsvBuilder — shared helper cho Movie context ─────────────────────
 // [FIX-2] Trước đây BuildMovieCsv tồn tại ở cả AiController lẫn GroqService.
 //         Nay tách ra thành static helper dùng chung — single source of truth.
 
@@ -328,6 +425,42 @@ public static class AiMovieCsvBuilder
                 .Replace("\r", " ");
 
             sb.AppendLine($"{m.Id}|{m.Title}|{m.Genres}|{m.Rating:F1}|{safeDesc}");
+        }
+        return sb.ToString();
+    }
+}
+
+// ─── AiTvShowCsvBuilder — shared helper cho TvShow context ───────────────────
+
+/// <summary>
+/// Shared CSV builder cho TV show context gửi lên Groq.
+/// Format: id|title|genres|rating|seasons|description (one show per line).
+/// Thêm cột "seasons" so với MovieCsv để AI biết độ dài series khi gợi ý.
+/// </summary>
+public static class AiTvShowCsvBuilder
+{
+    private const int DescriptionCsvLength = 150;
+
+    public static string Build(List<TvShowContext> shows)
+    {
+        var sb = new System.Text.StringBuilder(shows.Count * 130);
+        foreach (var s in shows)
+        {
+            var desc = s.Description.Length > DescriptionCsvLength
+                ? s.Description[..DescriptionCsvLength].Trim()
+                : s.Description.Trim();
+
+            // Sanitize: xóa ký tự delimiter và newline khỏi description
+            var safeDesc = desc
+                .Replace('|', ' ')
+                .Replace("\n", " ")
+                .Replace("\r", " ");
+
+            var seasons = s.NumberOfSeasons.HasValue
+                ? $"{s.NumberOfSeasons} mùa"
+                : "N/A";
+
+            sb.AppendLine($"{s.Id}|{s.Title}|{s.Genres}|{s.Rating:F1}|{seasons}|{safeDesc}");
         }
         return sb.ToString();
     }

@@ -46,6 +46,10 @@ public class MovieDbContext : DbContext
     public DbSet<MovieSubtitle> MovieSubtitles { get; set; }
     public DbSet<EpisodeSubtitle> EpisodeSubtitles { get; set; }
 
+    public DbSet<Advertisement> Advertisements { get; set; }
+    public DbSet<GlobalAdSlot> GlobalAdSlots { get; set; }
+    public DbSet<AdContentOverride> AdContentOverrides { get; set; }
+
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -219,7 +223,7 @@ public class MovieDbContext : DbContext
                 .HasForeignKey(e => e.TvShowId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
-        
+
 // ── EpisodeSubtitle ───────────────────────────────────────────────────────────
         modelBuilder.Entity<EpisodeSubtitle>(entity =>
         {
@@ -407,6 +411,60 @@ public class MovieDbContext : DbContext
             IsActive = true,
             CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        });
+
+        // ── Advertisement ─────────────────────────────────────────────────────────
+        modelBuilder.Entity<Advertisement>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Title).HasMaxLength(200).IsRequired();
+            entity.Property(e => e.VideoUrl).HasMaxLength(500);
+            entity.Property(e => e.CloudinaryPublicId).HasMaxLength(200);
+            entity.Property(e => e.ClickThroughUrl).HasMaxLength(500);
+        });
+
+        // ── GlobalAdSlot ──────────────────────────────────────────────────────────
+        modelBuilder.Entity<GlobalAdSlot>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.AppliesTo)
+                .HasConversion<string>()
+                .HasMaxLength(20);
+            entity.Property(e => e.Position)
+                .HasConversion<string>()
+                .HasMaxLength(20);
+
+            // Index để query nhanh theo scope
+            entity.HasIndex(e => e.AppliesTo);
+            entity.HasIndex(e => new { e.AppliesTo, e.IsActive });
+
+            entity.HasOne(e => e.Advertisement)
+                .WithMany(a => a.GlobalSlots)
+                .HasForeignKey(e => e.AdvertisementId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── AdContentOverride ─────────────────────────────────────────────────────
+        modelBuilder.Entity<AdContentOverride>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.ContentType)
+                .HasConversion<string>()
+                .HasMaxLength(20);
+            entity.Property(e => e.Position)
+                .HasConversion<string>()
+                .HasMaxLength(20);
+
+            // Index tra cứu nhanh per-content
+            entity.HasIndex(e => new { e.ContentType, e.ContentId });
+            entity.HasIndex(e => new { e.ContentType, e.ContentId, e.IsActive });
+
+            entity.HasOne(e => e.Advertisement)
+                .WithMany(a => a.Overrides)
+                .HasForeignKey(e => e.AdvertisementId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

@@ -32,6 +32,11 @@ namespace UIAMovie.Infrastructure.Services;
 ///           không được dispose theo instance. Dispose() cũ gây ObjectDisposedException
 ///           khi DI tạo nhiều instance (scoped/transient) rồi dispose từng cái.
 ///           Đăng ký Singleton trong DI để tránh tạo nhiều instance.
+///
+/// [v5] TV Show support:
+///   - RecommendTvShowsAsync: gợi ý series dựa trên lịch sử xem
+///   - SmartSearchTvShowsAsync: tìm kiếm series bằng ngôn ngữ tự nhiên
+///   - SelectTvShowsForRecommend / SelectTvShowsForSearch: helper riêng cho TvShowContext
 /// </summary>
 public sealed class GroqService : IGroqService
 {
@@ -137,7 +142,7 @@ public sealed class GroqService : IGroqService
             : result;
     }
 
-    // ─── Recommend ────────────────────────────────────────────────────────────
+    // ─── Movie Recommend ──────────────────────────────────────────────────────
 
     public async Task<List<Guid>> RecommendMoviesAsync(
         List<string>       watchedTitles,
@@ -178,7 +183,7 @@ public sealed class GroqService : IGroqService
         return await ParseJsonGuidArrayAsync(MoviePrompts.MoodSystem, userMessage);
     }
 
-    // ─── Smart Search ─────────────────────────────────────────────────────────
+    // ─── Movie Smart Search ───────────────────────────────────────────────────
 
     public async Task<List<Guid>> SmartSearchAsync(string query, List<MovieContext> availableMovies)
     {
@@ -200,7 +205,69 @@ public sealed class GroqService : IGroqService
         return result;
     }
 
+    // ─── TV Show Recommend ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Gợi ý TV show dựa trên lịch sử xem.
+    /// Cache key: SHA256(watchedTitles + favoriteGenres) — TTL 30 phút.
+    /// Token estimate: ~20 shows × 130 chars ≈ 750 tokens input. Output: 9 GUIDs ≈ 36 tokens.
+    /// </summary>
+    public async Task<List<Guid>> RecommendTvShowsAsync(
+        List<string>        watchedTitles,
+        List<string>        favoriteGenres,
+        List<TvShowContext> availableShows)
+    {
+        var cacheKey = BuildCacheKeyHash("tv:rec", watchedTitles, favoriteGenres);
+        var cached   = await _cache.GetAsync<List<Guid>>(cacheKey);
+        if (cached != null) return cached;
+
+        var subset      = SelectTvShowsForRecommend(availableShows, favoriteGenres, RecommendMovieLimit);
+        var showCsv     = AiTvShowCsvBuilder.Build(subset);
+        var userMessage = MoviePrompts.BuildTvShowRecommendUser(
+            watched: TruncateJoin(watchedTitles, 15),
+            genres:  string.Join(", ", favoriteGenres),
+            showCsv: showCsv);
+
+        var result = await ParseJsonGuidArrayAsync(MoviePrompts.TvShowRecommendSystem, userMessage);
+
+        if (result.Count > 0)
+            await _cache.SetAsync(cacheKey, result, TimeSpan.FromMinutes(30));
+
+        return result;
+    }
+
+    // ─── TV Show Smart Search ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Tìm kiếm TV show bằng ngôn ngữ tự nhiên.
+    /// Cache key: "ai:tv:search:{normalizedQuery}" — TTL 15 phút.
+    /// Token estimate: ~25 shows × 130 chars ≈ 900 tokens. Output: 15 GUIDs ≈ 60 tokens.
+    /// </summary>
+    public async Task<List<Guid>> SmartSearchTvShowsAsync(
+        string             query,
+        List<TvShowContext> availableShows)
+    {
+        var normalizedQuery = NormalizeSearchQuery(query);
+        var cacheKey        = $"ai:tv:search:{normalizedQuery}";
+
+        var cached = await _cache.GetAsync<List<Guid>>(cacheKey);
+        if (cached != null) return cached;
+
+        var subset      = SelectTvShowsForSearch(availableShows, query, SearchMovieLimit);
+        var showCsv     = AiTvShowCsvBuilder.Build(subset);
+        var userMessage = MoviePrompts.BuildTvShowSearchUser(query, showCsv);
+
+        var result = await ParseJsonGuidArrayAsync(MoviePrompts.TvShowSearchSystem, userMessage);
+
+        if (result.Count > 0)
+            await _cache.SetAsync(cacheKey, result, TimeSpan.FromMinutes(15));
+
+        return result;
+    }
+
     // ─── Private Helpers ──────────────────────────────────────────────────────
+
+    // ── Movie selectors ───────────────────────────────────────────────────────
 
     private static List<MovieContext> SelectMoviesForRecommend(
         List<MovieContext> all, List<string> genres, int limit)
@@ -242,6 +309,59 @@ public sealed class GroqService : IGroqService
             .Take(limit)
             .ToList();
     }
+
+    // ── TV Show selectors ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Chọn top N shows phù hợp nhất để đưa vào prompt recommend.
+    /// Ưu tiên: có description → genre match → rating cao.
+    /// </summary>
+    private static List<TvShowContext> SelectTvShowsForRecommend(
+        List<TvShowContext> all, List<string> genres, int limit)
+    {
+        var genreSet = genres.Select(g => g.ToLowerInvariant()).ToHashSet();
+
+        return all
+            .Where(s => !string.IsNullOrWhiteSpace(s.Description))
+            .OrderByDescending(s =>
+                s.Genres.Split(',').Any(g => genreSet.Contains(g.Trim().ToLowerInvariant())) ? 1 : 0)
+            .ThenByDescending(s => s.Rating)
+            .Take(limit)
+            .Concat(all
+                .Where(s => string.IsNullOrWhiteSpace(s.Description))
+                .OrderByDescending(s => s.Rating))
+            .Take(limit)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Chọn top N shows phù hợp nhất cho search.
+    /// Score: title match (3) > desc match (2) > has desc (2) > genre match (1) > rating (0.1).
+    /// </summary>
+    private static List<TvShowContext> SelectTvShowsForSearch(
+        List<TvShowContext> all, string query, int limit)
+    {
+        var queryTokens = query
+            .ToLowerInvariant()
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(t => t.Length > 2)
+            .ToHashSet();
+
+        return all
+            .OrderByDescending(s =>
+            {
+                var hasDesc  = string.IsNullOrWhiteSpace(s.Description) ? 0 : 2;
+                var titleHit = queryTokens.Any(t => s.Title.ToLowerInvariant().Contains(t)) ? 3 : 0;
+                var genreHit = queryTokens.Any(t => s.Genres.ToLowerInvariant().Contains(t)) ? 1 : 0;
+                var descHit  = !string.IsNullOrWhiteSpace(s.Description) &&
+                               queryTokens.Any(t => s.Description.ToLowerInvariant().Contains(t)) ? 2 : 0;
+                return hasDesc + titleHit + genreHit + descHit + s.Rating * 0.1;
+            })
+            .Take(limit)
+            .ToList();
+    }
+
+    // ── Shared helpers ────────────────────────────────────────────────────────
 
     private static string TruncateJoin(IEnumerable<string> items, int max)
         => string.Join(", ", items.Take(max));
