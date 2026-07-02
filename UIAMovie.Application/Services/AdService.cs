@@ -57,6 +57,9 @@ public class AdService : IAdService
         if (dto.VideoFile == null && string.IsNullOrWhiteSpace(dto.VideoUrl))
             throw new ArgumentException("Phải cung cấp VideoFile hoặc VideoUrl.");
 
+        if (dto.BrandImageFile == null && string.IsNullOrWhiteSpace(dto.BrandImageUrl))
+            throw new ArgumentException("Phải cung cấp BrandImageFile hoặc BrandImageUrl (ảnh nhãn hiệu).");
+
         string? videoUrl           = dto.VideoUrl;
         string? cloudinaryPublicId = null;
 
@@ -67,14 +70,26 @@ public class AdService : IAdService
                 new Uri(videoUrl).AbsolutePath.Split('/').Last());
         }
 
+        string? brandImageUrl               = dto.BrandImageUrl;
+        string? brandImageCloudinaryPublicId = null;
+
+        if (dto.BrandImageFile != null)
+        {
+            brandImageUrl = await _cloudinary.UploadImageAsync(dto.BrandImageFile, "uiamovie/ads/brand");
+            brandImageCloudinaryPublicId = Path.GetFileNameWithoutExtension(
+                new Uri(brandImageUrl).AbsolutePath.Split('/').Last());
+        }
+
         var ad = new Advertisement
         {
-            Title              = dto.Title.Trim(),
-            VideoUrl           = videoUrl,
-            CloudinaryPublicId = cloudinaryPublicId,
-            DurationSeconds    = dto.DurationSeconds,
-            SkipAfterSeconds   = dto.SkipAfterSeconds,
-            ClickThroughUrl    = dto.ClickThroughUrl?.Trim()
+            Title                        = dto.Title.Trim(),
+            VideoUrl                     = videoUrl,
+            CloudinaryPublicId           = cloudinaryPublicId,
+            BrandImageUrl                = brandImageUrl,
+            BrandImageCloudinaryPublicId = brandImageCloudinaryPublicId,
+            DurationSeconds              = dto.DurationSeconds,
+            SkipAfterSeconds             = dto.SkipAfterSeconds,
+            ClickThroughUrl              = dto.ClickThroughUrl?.Trim()
         };
 
         return await _adRepo.AddAsync(ad);
@@ -115,6 +130,26 @@ public class AdService : IAdService
             ad.CloudinaryPublicId = null;
         }
 
+        if (dto.BrandImageFile != null)
+        {
+            if (!string.IsNullOrEmpty(ad.BrandImageCloudinaryPublicId))
+            {
+                try { await _cloudinary.DeleteFileAsync(ad.BrandImageCloudinaryPublicId, "image"); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[AdService] Không xóa được ảnh nhãn hiệu cũ trên Cloudinary {Id}", ad.BrandImageCloudinaryPublicId);
+                }
+            }
+            ad.BrandImageUrl = await _cloudinary.UploadImageAsync(dto.BrandImageFile, "uiamovie/ads/brand");
+            ad.BrandImageCloudinaryPublicId = Path.GetFileNameWithoutExtension(
+                new Uri(ad.BrandImageUrl).AbsolutePath.Split('/').Last());
+        }
+        else if (!string.IsNullOrWhiteSpace(dto.BrandImageUrl))
+        {
+            ad.BrandImageUrl                = dto.BrandImageUrl.Trim();
+            ad.BrandImageCloudinaryPublicId = null;
+        }
+
         await _adRepo.UpdateAsync(ad);
 
         // Invalidate cache toàn bộ contentType (vì global ad thay đổi ảnh hưởng tất cả)
@@ -137,6 +172,15 @@ public class AdService : IAdService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[AdService] Không xóa được Cloudinary file {Id}", ad.CloudinaryPublicId);
+            }
+        }
+
+        if (!string.IsNullOrEmpty(ad.BrandImageCloudinaryPublicId))
+        {
+            try { await _cloudinary.DeleteFileAsync(ad.BrandImageCloudinaryPublicId, "image"); }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[AdService] Không xóa được ảnh nhãn hiệu Cloudinary {Id}", ad.BrandImageCloudinaryPublicId);
             }
         }
 
@@ -386,6 +430,7 @@ public class AdService : IAdService
         {
             AdId                 = x.Ad.Id,
             VideoUrl             = x.Ad.VideoUrl ?? string.Empty,
+            BrandImageUrl        = x.Ad.BrandImageUrl,
             DurationSeconds      = x.Ad.DurationSeconds,
             SkipAfterSeconds     = x.Ad.SkipAfterSeconds,
             ClickThroughUrl      = x.Ad.ClickThroughUrl,
@@ -401,6 +446,7 @@ public class AdService : IAdService
         Id               = ad.Id,
         Title            = ad.Title,
         VideoUrl         = ad.VideoUrl,
+        BrandImageUrl    = ad.BrandImageUrl,
         DurationSeconds  = ad.DurationSeconds,
         SkipAfterSeconds = ad.SkipAfterSeconds,
         ClickThroughUrl  = ad.ClickThroughUrl,

@@ -28,6 +28,10 @@ public class AdDTO
     public Guid Id { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? VideoUrl { get; set; }
+
+    /// <summary>URL ảnh logo/nhãn hiệu của ad.</summary>
+    public string? BrandImageUrl { get; set; }
+
     public int DurationSeconds { get; set; }
     public int? SkipAfterSeconds { get; set; }
     public string? ClickThroughUrl { get; set; }
@@ -49,6 +53,10 @@ public class AdPlaybackDTO
 {
     public Guid AdId { get; set; }
     public string VideoUrl { get; set; } = string.Empty;
+
+    /// <summary>Ảnh logo/nhãn hiệu — player overlay khi phát ad.</summary>
+    public string? BrandImageUrl { get; set; }
+
     public int DurationSeconds { get; set; }
     public int? SkipAfterSeconds { get; set; }
     public string? ClickThroughUrl { get; set; }
@@ -109,6 +117,12 @@ public class CreateAdDTO
     /// <summary>URL video ngoài. Dùng khi không upload file.</summary>
     public string? VideoUrl { get; set; }
 
+    /// <summary>Upload ảnh nhãn hiệu lên Cloudinary. Ưu tiên hơn BrandImageUrl. Bắt buộc: 1 trong 2 phải có giá trị.</summary>
+    public IFormFile? BrandImageFile { get; set; }
+
+    /// <summary>URL ảnh nhãn hiệu ngoài. Dùng khi không upload file.</summary>
+    public string? BrandImageUrl { get; set; }
+
     public int DurationSeconds { get; set; }
 
     /// <summary>NULL = không thể skip. 0 = skip ngay. >0 = skip sau N giây.</summary>
@@ -123,6 +137,12 @@ public class UpdateAdDTO
     public string? Title { get; set; }
     public string? VideoUrl { get; set; }
     public IFormFile? VideoFile { get; set; }
+
+    /// <summary>Thay ảnh nhãn hiệu (nếu có upload mới).</summary>
+    public IFormFile? BrandImageFile { get; set; }
+    /// <summary>Thay ảnh nhãn hiệu bằng URL ngoài (nếu không upload file).</summary>
+    public string? BrandImageUrl { get; set; }
+
     public int? DurationSeconds { get; set; }
     public int? SkipAfterSeconds { get; set; }
     public string? ClickThroughUrl { get; set; }

@@ -13,6 +13,12 @@ public class Advertisement
     /// <summary>Public ID trên Cloudinary — dùng khi upload trực tiếp.</summary>
     public string? CloudinaryPublicId  { get; set; }
 
+    // ── Brand image (nhãn hiệu) ──────────────────────────────────────────────
+    /// <summary>URL ảnh logo/nhãn hiệu — bắt buộc khi tạo ad.</summary>
+    public string? BrandImageUrl                { get; set; }
+    /// <summary>Public ID trên Cloudinary của ảnh nhãn hiệu (nếu upload trực tiếp).</summary>
+    public string? BrandImageCloudinaryPublicId  { get; set; }
+
     // ── Playback config ──────────────────────────────────────────────────────
     public int     DurationSeconds     { get; set; }
     /// <summary>NULL = không được skip. 0 = skip ngay. >0 = skip sau N giây.</summary>

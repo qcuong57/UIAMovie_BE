@@ -421,6 +421,8 @@ public class MovieDbContext : DbContext
             entity.Property(e => e.VideoUrl).HasMaxLength(500);
             entity.Property(e => e.CloudinaryPublicId).HasMaxLength(200);
             entity.Property(e => e.ClickThroughUrl).HasMaxLength(500);
+            entity.Property(e => e.BrandImageUrl).HasMaxLength(500).IsRequired();
+            entity.Property(e => e.BrandImageCloudinaryPublicId).HasMaxLength(200);
         });
 
         // ── GlobalAdSlot ──────────────────────────────────────────────────────────
