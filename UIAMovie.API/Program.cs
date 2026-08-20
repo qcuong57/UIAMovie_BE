@@ -87,6 +87,8 @@ builder.Services.AddScoped<IRepository<TvShowVideo>, Repository<TvShowVideo>>();
 builder.Services.AddScoped<IRepository<TvShowImage>, Repository<TvShowImage>>();
 builder.Services.AddScoped<IRepository<TvShowGenre>, Repository<TvShowGenre>>();
 builder.Services.AddScoped<IRepository<TvShowCast>, Repository<TvShowCast>>();
+builder.Services.AddScoped<IPersonRepository, PersonRepository>();
+builder.Services.AddScoped<IPersonService, PersonService>();
 builder.Services.AddScoped<IRepository<TvShowDirector>, Repository<TvShowDirector>>();
 builder.Services.AddScoped<ISubtitleRepository, SubtitleRepository>();
 builder.Services.AddScoped<IEpisodeSubtitleRepository, EpisodeSubtitleRepository>();

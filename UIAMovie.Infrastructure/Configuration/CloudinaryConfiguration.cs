@@ -26,15 +26,16 @@ public class CloudinaryService : ICloudinaryService
         if (file == null || file.Length == 0)
             throw new ArgumentException("File không hợp lệ");
 
-        var publicId = Guid.NewGuid().ToString();
-
         var uploadParams = new VideoUploadParams
         {
-            File = new FileDescription(file.FileName, file.OpenReadStream()),
-            Folder = folderName,
-            PublicId = publicId,
-            // Không cần Eager nữa — build URL transform bên dưới sẽ tự
-            // trigger transcode on-demand ở request đầu tiên và cache lại.
+            File       = new FileDescription(file.FileName, file.OpenReadStream()),
+            Folder     = folderName,
+            PublicId   = Guid.NewGuid().ToString(),
+            EagerTransforms = new List<Transformation>
+            {
+                new Transformation().Quality("auto:eco").FetchFormat("mp4")
+            },
+            EagerAsync = true,
         };
 
         var uploadResult = await _cloudinary.UploadAsync(uploadParams);
@@ -42,19 +43,7 @@ public class CloudinaryService : ICloudinaryService
         if (uploadResult.Error != null)
             throw new Exception($"Upload lỗi: {uploadResult.Error.Message}");
 
-        // Ép codec H.264 + AAC trong container MP4, tương thích mọi trình duyệt
-        // (đặc biệt Safari iOS / Chrome Android vốn rất kén codec).
-        var deliveryUrl = _cloudinary.Api.UrlVideoUp
-            .Secure(true)
-            .ResourceType("video")
-            .Transform(new Transformation()
-                .Quality("auto")
-                .FetchFormat("mp4")
-                .VideoCodec("h264")
-                .AudioCodec("aac"))
-            .BuildUrl($"{folderName}/{publicId}");
-
-        return deliveryUrl;
+        return uploadResult.SecureUrl.ToString();
     }
 
     public async Task<string> UploadImageAsync(IFormFile file, string folderName)
@@ -64,8 +53,8 @@ public class CloudinaryService : ICloudinaryService
 
         var uploadParams = new ImageUploadParams
         {
-            File = new FileDescription(file.FileName, file.OpenReadStream()),
-            Folder = folderName,
+            File     = new FileDescription(file.FileName, file.OpenReadStream()),
+            Folder   = folderName,
             PublicId = Guid.NewGuid().ToString(),
             Transformation = new Transformation().Quality("auto:good").FetchFormat("auto")
         };

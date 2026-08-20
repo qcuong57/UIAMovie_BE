@@ -831,10 +831,16 @@ public class TvShowService : ITvShowService
     // ─── Person helpers ───────────────────────────────────────────────────────
 
     private async Task<Person> UpsertPersonAsync(
-        int tmdbPersonId, string name, string? profileUrl,
+        int? tmdbPersonId, string name, string? profileUrl,
         string? biography, string? birthday, string? placeOfBirth)
     {
-        var person = await _personRepository.FindOneAsync(p => p.TmdbPersonId == tmdbPersonId);
+        // Có TmdbPersonId (từ import TMDB) → khử trùng lặp theo ID như cũ.
+        // Không có (thêm thủ công) → khử trùng lặp theo Name trong nhóm người "thủ công"
+        // (TmdbPersonId == null), để không tạo Person mới mỗi lần admin gõ lại cùng 1 tên.
+        var person = tmdbPersonId.HasValue
+            ? await _personRepository.FindOneAsync(p => p.TmdbPersonId == tmdbPersonId)
+            : await _personRepository.FindOneAsync(
+                p => p.TmdbPersonId == null && p.Name.ToLower() == name.Trim().ToLower());
 
         if (person == null)
         {

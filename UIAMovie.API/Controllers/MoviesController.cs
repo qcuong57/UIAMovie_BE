@@ -4,6 +4,8 @@
 //   [2] GET /api/movies/{id}/watch    → Premium gate — trả video URL chỉ khi user có quyền
 //   [3] PATCH /api/movies/{id}/premium → Admin toggle IsPremium của phim
 
+using System.IO;
+using System.Linq;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -90,6 +92,18 @@ public class MoviesController : ControllerBase
 
         var movies = await _movieService.SearchMoviesAsync(query);
         return Ok(new ApiResponseDTO<object> { Data = movies, Message = "Thành công" });
+    }
+
+    /// <summary>
+    /// Danh sách thể loại có sẵn trong DB nội bộ (khác /tmdb/genres — cái đó lấy từ TMDB).
+    /// FE dùng để hiển thị ô chọn thể loại khi thêm/sửa phim thủ công.
+    /// GET /api/movies/genres
+    /// </summary>
+    [HttpGet("genres")]
+    public async Task<IActionResult> GetGenres()
+    {
+        var genres = await _genreService.GetAllAsync();
+        return Ok(new ApiResponseDTO<object> { Data = genres, Message = "Thành công" });
     }
 
     [HttpGet("genre/{genreId:guid}")]
@@ -249,6 +263,18 @@ public class MoviesController : ControllerBase
         return Ok(new ApiResponseDTO<object> { Data = genres, Message = "Thành công" });
     }
 
+    /// <summary>
+    /// Tìm diễn viên/đạo diễn (Person) có sẵn trong DB theo tên — dùng cho ô autocomplete
+    /// khi thêm phim thủ công hoặc chỉnh sửa cast của phim import từ TMDB.
+    /// Yêu cầu tối thiểu 2 ký tự.
+    /// </summary>
+    [HttpGet("persons/search")]
+    public async Task<IActionResult> SearchPersons([FromQuery] string query)
+    {
+        var persons = await _movieService.SearchPersonsAsync(query ?? string.Empty);
+        return Ok(new ApiResponseDTO<object> { Data = persons, Message = "Thành công" });
+    }
+
     [HttpGet("tmdb/person/{tmdbPersonId:int}")]
     public async Task<IActionResult> GetTmdbPerson(int tmdbPersonId)
     {
@@ -356,9 +382,61 @@ public class MoviesController : ControllerBase
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // ADMIN — Thêm phim thủ công (không qua TMDB)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Upload 1 ảnh (poster / backdrop / ảnh diễn viên-đạo diễn) lên Cloudinary và trả về URL.
+    /// Dùng cho luồng "thêm phim thủ công": admin có thể upload file HOẶC dán URL có sẵn
+    /// thẳng vào CreateMovieDTO — cả 2 cách đều ra 1 chuỗi URL như nhau, endpoint này chỉ là
+    /// bước phụ để lấy URL khi admin không có sẵn link ảnh.
+    ///
+    /// POST /api/movies/upload-image
+    /// Form-data: file (bắt buộc), type ("poster" | "backdrop" | "person", mặc định "poster")
+    /// Response: { url }
+    /// </summary>
+    // FIX: whitelist content-type + extension cho upload-image — trước đây chỉ giới hạn
+    // size, không check file có phải ảnh không → có thể upload file bất kỳ lên Cloudinary
+    // dưới vỏ bọc "ảnh poster". Đây là check ở tầng ứng dụng (đọc header do client gửi,
+    // có thể bị giả mạo) — không phải xác thực magic-byte thật sự của file. Nếu cần chặt
+    // hơn (chống spoof Content-Type/extension), nên đọc vài byte đầu file để so signature
+    // thật (VD FF D8 FF cho JPEG, 89 50 4E 47 cho PNG) trước khi upload lên Cloudinary.
+    private static readonly string[] AllowedImageExtensions   = { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
+    private static readonly string[] AllowedImageContentTypes =
+        { "image/jpeg", "image/png", "image/webp", "image/gif" };
+
+    [HttpPost("upload-image")]
+    [Authorize(Roles = Roles.Admin)]
+    [RequestSizeLimit(10 * 1024 * 1024)] // 10MB — đủ cho ảnh poster/backdrop/avatar
+    public async Task<IActionResult> UploadImage(IFormFile file, [FromForm] string type = "poster")
+    {
+        if (file == null || file.Length == 0)
+            return BadRequest(new ApiErrorResponseDTO { Message = "File không hợp lệ", StatusCode = 400 });
+
+        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+        var contentType = (file.ContentType ?? "").ToLowerInvariant();
+        if (!AllowedImageExtensions.Contains(ext) || !AllowedImageContentTypes.Contains(contentType))
+            return BadRequest(new ApiErrorResponseDTO
+                { Message = "Chỉ chấp nhận file ảnh (jpg, png, webp, gif)", StatusCode = 400 });
+
+        var allowedTypes = new[] { "poster", "backdrop", "person" };
+        var folder = allowedTypes.Contains(type) ? type : "poster";
+
+        var url = await _cloudinaryService.UploadImageAsync(file, $"uiamovie/movies/{folder}");
+
+        return Ok(new ApiResponseDTO<object> { Data = new { url }, Message = "Upload ảnh thành công" });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // ADMIN — CRUD phim
     // ═══════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Tạo phim — dùng chung cho cả 2 luồng:
+    ///   - Thêm thủ công: FE tự nhập Title/Description/PosterUrl(đã upload hoặc dán URL)/Cast(TmdbPersonId=null)...
+    ///   - (TMDB import thì đi qua action ImportFromTmdb ở trên, action đó tự build DTO rồi gọi CreateMovieAsync)
+    /// TmdbId để null khi tạo thủ công — entity Movie đã hỗ trợ sẵn (TmdbId là int? nullable).
+    /// </summary>
     [HttpPost]
     [Authorize(Roles = Roles.Admin)]
     public async Task<IActionResult> Create([FromBody] CreateMovieDTO dto)
