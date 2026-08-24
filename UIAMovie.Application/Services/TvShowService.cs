@@ -13,6 +13,9 @@ public interface ITvShowService
     Task<TvShowDTO?> GetTvShowByIdAsync(Guid id);
     Task<TvShowDTO?> GetTvShowByTmdbIdAsync(int tmdbId);
     Task<Guid> CreateTvShowAsync(CreateTvShowDTO dto);
+
+    /// <summary>Tìm Person có sẵn trong DB theo tên — dùng cho ô autocomplete chọn diễn viên/đạo diễn khi thêm TV show thủ công.</summary>
+    Task<IEnumerable<PersonSearchDTO>> SearchPersonsAsync(string query);
     Task<bool> UpdateTvShowAsync(Guid id, UpdateTvShowDTO dto);
     Task<bool> SetPremiumAsync(Guid id, bool isPremium);
     Task<bool> DeleteTvShowAsync(Guid id);
@@ -24,6 +27,18 @@ public interface ITvShowService
     Task<SyncResultDTO> SyncNewEpisodesAsync(Guid id, TmdbFullTvShowDTO full);
     Task<SeasonDTO?> GetSeasonAsync(Guid tvShowId, int seasonNumber);
     Task<EpisodeDTO?> GetEpisodeAsync(Guid tvShowId, int seasonNumber, int episodeNumber);
+
+    /// <summary>Sửa tiêu đề/mô tả/poster/ngày phát sóng của 1 season đã tồn tại. False nếu không tìm thấy season.</summary>
+    Task<bool> UpdateSeasonAsync(Guid tvShowId, int seasonNumber, UpdateSeasonDTO dto);
+
+    /// <summary>Sửa tiêu đề/mô tả/ảnh still/thời lượng/rating/ngày phát sóng của 1 episode đã tồn tại. False nếu không tìm thấy episode.</summary>
+    Task<bool> UpdateEpisodeAsync(Guid episodeId, UpdateEpisodeDTO dto);
+
+    /// <summary>Thêm 1 episode mới vào season đã tồn tại (dùng ở trang chi tiết TV show, ngoài luồng tạo show). Null nếu không tìm thấy season.</summary>
+    Task<EpisodeDTO?> AddEpisodeAsync(Guid tvShowId, int seasonNumber, CreateEpisodeDTO dto);
+
+    /// <summary>Xóa 1 episode đã tồn tại. Trả về (found, oldVideoUrl) để controller xóa video trên Cloudinary nếu có.</summary>
+    Task<(bool found, string? oldVideoUrl)> DeleteEpisodeAsync(Guid episodeId);
 
     // ── Videos ────────────────────────────────────────────────────────────────
     Task<bool> AddVideoAsync(Guid tvShowId, string videoUrl, string videoType, string? quality);
@@ -57,6 +72,7 @@ public class TvShowService : ITvShowService
     private readonly IRepository<Episode>            _episodeRepository;
     private readonly IRepository<Person>             _personRepository;
     private readonly IRepository<PersonImage>        _personImageRepository;
+    private readonly IRepository<Genre>              _genreRepository;
     private readonly IRepository<TvShowFavorite>     _favoriteRepository;
     private readonly IRepository<TvShowWatchHistory> _watchHistoryRepository;
     private readonly ICacheService                   _cacheService;
@@ -80,6 +96,7 @@ public class TvShowService : ITvShowService
         IRepository<Episode>             episodeRepository,
         IRepository<Person>              personRepository,
         IRepository<PersonImage>         personImageRepository,
+        IRepository<Genre>               genreRepository,
         IRepository<TvShowFavorite>      favoriteRepository,
         IRepository<TvShowWatchHistory>  watchHistoryRepository,
         ICacheService                    cacheService,
@@ -95,6 +112,7 @@ public class TvShowService : ITvShowService
         _episodeRepository      = episodeRepository;
         _personRepository       = personRepository;
         _personImageRepository  = personImageRepository;
+        _genreRepository        = genreRepository;
         _favoriteRepository     = favoriteRepository;
         _watchHistoryRepository = watchHistoryRepository;
         _cacheService           = cacheService;
@@ -217,10 +235,165 @@ public class TvShowService : ITvShowService
         return episode == null ? null : MapEpisodeToDTO(episode);
     }
 
+    /// <summary>
+    /// Sửa tiêu đề/mô tả/poster/ngày phát sóng của 1 season đã tồn tại.
+    /// Không đụng tới Episodes — thêm/xóa episode nằm ở luồng khác (tạo TV show
+    /// thủ công hoặc đồng bộ TMDB). Field nào DTO gửi null thì giữ nguyên giá trị
+    /// cũ; gửi "" thì xóa (VD: PosterUrl = "" → season hết poster).
+    /// </summary>
+    public async Task<bool> UpdateSeasonAsync(Guid tvShowId, int seasonNumber, UpdateSeasonDTO dto)
+    {
+        var season = await _seasonRepository.FindOneAsync(
+            s => s.TvShowId == tvShowId && s.SeasonNumber == seasonNumber);
+        if (season == null) return false;
+
+        if (dto.Name != null)      season.Name      = dto.Name;
+        if (dto.Overview != null)  season.Overview  = dto.Overview;
+        if (dto.PosterUrl != null) season.PosterUrl = dto.PosterUrl;
+        if (dto.AirDate.HasValue)  season.AirDate   = DateTime.SpecifyKind(dto.AirDate.Value, DateTimeKind.Utc);
+
+        _seasonRepository.Update(season);
+        await _seasonRepository.SaveChangesAsync();
+
+        // Season cache lưu cả Name/Overview/PosterUrl lẫn danh sách Episodes, và
+        // TvShowDTO.Seasons (từ GetByIdWithDetailsAsync) cũng chứa các field này
+        // → phải evict cả 2 cache key, không chỉ riêng season cache.
+        await _cacheService.RemoveAsync(string.Format(SEASON_CACHE_KEY, tvShowId, seasonNumber));
+        await _cacheService.RemoveAsync(string.Format(TVSHOW_CACHE_KEY, tvShowId));
+        return true;
+    }
+
+    /// <summary>
+    /// Sửa tiêu đề/mô tả/ảnh still/thời lượng/rating/ngày phát sóng của 1 episode
+    /// đã tồn tại. Không sửa VideoUrl — dùng SetEpisodeVideoAsync/RemoveEpisodeVideoAsync
+    /// riêng cho việc đó. Field nào DTO gửi null thì giữ nguyên giá trị cũ.
+    /// </summary>
+    public async Task<bool> UpdateEpisodeAsync(Guid episodeId, UpdateEpisodeDTO dto)
+    {
+        var episode = await _episodeRepository.GetByIdAsync(episodeId);
+        if (episode == null) return false;
+
+        if (dto.Title != null)     episode.Title    = dto.Title;
+        if (dto.Overview != null)  episode.Overview = dto.Overview;
+        if (dto.StillUrl != null)  episode.StillUrl = dto.StillUrl;
+        if (dto.Runtime.HasValue)  episode.Runtime  = dto.Runtime;
+        if (dto.Rating.HasValue)   episode.Rating   = dto.Rating;
+        if (dto.AirDate.HasValue)  episode.AirDate  = DateTime.SpecifyKind(dto.AirDate.Value, DateTimeKind.Utc);
+
+        _episodeRepository.Update(episode);
+        await _episodeRepository.SaveChangesAsync();
+
+        // Evict cache của season chứa episode này, giống pattern trong
+        // SetEpisodeVideoAsync/RemoveEpisodeVideoAsync ở trên.
+        var season = await _seasonRepository.GetByIdAsync(episode.SeasonId);
+        if (season != null)
+        {
+            await _cacheService.RemoveAsync(string.Format(SEASON_CACHE_KEY, season.TvShowId, season.SeasonNumber));
+            await _cacheService.RemoveAsync(string.Format(TVSHOW_CACHE_KEY, season.TvShowId));
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Thêm 1 episode mới vào season đã tồn tại — dùng ở trang chi tiết TV show
+    /// (edit season) để bổ sung tập sau khi show đã tạo xong, khác với
+    /// SaveSeasonsAsync (chỉ chạy lúc tạo show mới). VideoUrl luôn null lúc tạo —
+    /// upload video tập là bước riêng (SetEpisodeVideoAsync).
+    /// </summary>
+    public async Task<EpisodeDTO?> AddEpisodeAsync(Guid tvShowId, int seasonNumber, CreateEpisodeDTO dto)
+    {
+        var season = await _seasonRepository.FindOneAsync(
+            s => s.TvShowId == tvShowId && s.SeasonNumber == seasonNumber);
+        if (season == null) return null;
+
+        var episode = new Episode
+        {
+            SeasonId      = season.Id,
+            EpisodeNumber = dto.EpisodeNumber,
+            Title         = dto.Title,
+            Overview      = dto.Overview,
+            StillUrl      = dto.StillUrl,
+            Runtime       = dto.Runtime,
+            Rating        = dto.Rating,
+            AirDate       = dto.AirDate.HasValue
+                                ? DateTime.SpecifyKind(dto.AirDate.Value, DateTimeKind.Utc)
+                                : null
+        };
+        await _episodeRepository.AddAsync(episode);
+        await _episodeRepository.SaveChangesAsync();
+
+        season.EpisodeCount += 1;
+        _seasonRepository.Update(season);
+        await _seasonRepository.SaveChangesAsync();
+
+        await _cacheService.RemoveAsync(string.Format(SEASON_CACHE_KEY, tvShowId, seasonNumber));
+        await _cacheService.RemoveAsync(string.Format(TVSHOW_CACHE_KEY, tvShowId));
+
+        return MapEpisodeToDTO(episode);
+    }
+
+    /// <summary>
+    /// Xóa 1 episode đã tồn tại — dùng ở trang chi tiết TV show (edit season),
+    /// đối xứng với AddEpisodeAsync. Trả về VideoUrl cũ (nếu có) để controller
+    /// dọn file trên Cloudinary, giống pattern RemoveEpisodeVideoAsync.
+    /// </summary>
+    public async Task<(bool found, string? oldVideoUrl)> DeleteEpisodeAsync(Guid episodeId)
+    {
+        var episode = await _episodeRepository.GetByIdAsync(episodeId);
+        if (episode == null) return (false, null);
+
+        var season      = await _seasonRepository.GetByIdAsync(episode.SeasonId);
+        var oldVideoUrl = episode.VideoUrl;
+
+        _episodeRepository.Remove(episode);
+        await _episodeRepository.SaveChangesAsync();
+
+        if (season != null)
+        {
+            season.EpisodeCount = Math.Max(0, season.EpisodeCount - 1);
+            _seasonRepository.Update(season);
+            await _seasonRepository.SaveChangesAsync();
+
+            await _cacheService.RemoveAsync(string.Format(SEASON_CACHE_KEY, season.TvShowId, season.SeasonNumber));
+            await _cacheService.RemoveAsync(string.Format(TVSHOW_CACHE_KEY, season.TvShowId));
+        }
+
+        return (true, oldVideoUrl);
+    }
+
     // ─── Create ───────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Tạo TV show — dùng chung cho cả 2 luồng, giống hệt MovieService.CreateMovieAsync:
+    ///   - Thêm thủ công: FE tự nhập Title/Description/PosterUrl(URL dán sẵn hoặc đã upload
+    ///     qua /upload-image)/Cast(PersonId nếu chọn từ dropdown, hoặc TmdbPersonId=null +
+    ///     Name nếu nhập tay)/Seasons kèm Episodes...
+    ///   - Import từ TMDB: TvShowsController.ImportFromTmdb tự build CreateTvShowDTO từ dữ
+    ///     liệu TMDB rồi gọi thẳng hàm này.
+    /// TmdbId để null khi tạo thủ công — TvShow entity đã hỗ trợ sẵn (TmdbId là int? nullable).
+    ///
+    /// Lưu ý: đây KHÔNG phải transaction thật (xem ghi chú tương tự trong
+    /// MovieService.CreateMovieAsync) — nếu 1 bước phụ (cast/ảnh/season...) fail giữa chừng,
+    /// show vừa tạo sẽ bị xóa bù trừ (compensating action) nhưng các row phụ đã insert thành
+    /// công trước đó có thể "thoáng qua" tồn tại trước khi bị dọn theo cascade delete.
+    /// </summary>
     public async Task<Guid> CreateTvShowAsync(CreateTvShowDTO dto)
     {
+        // Validate GenreIds tồn tại thật trong bảng Genres TRƯỚC khi tạo TvShow —
+        // giống CreateMovieAsync, tránh FE gửi nhầm GUID gây lỗi giữa chừng sau khi
+        // show đã được tạo, hoặc tạo TvShowGenre mồ côi.
+        if (dto.GenreIds.Any())
+        {
+            var distinctGenreIds = dto.GenreIds.Distinct().ToList();
+            var existingGenres = await _genreRepository.FindAsync(g => distinctGenreIds.Contains(g.Id));
+            var existingIds = existingGenres.Select(g => g.Id).ToHashSet();
+            var missingIds = distinctGenreIds.Where(id => !existingIds.Contains(id)).ToList();
+
+            if (missingIds.Any())
+                throw new ArgumentException(
+                    $"Thể loại không tồn tại: {string.Join(", ", missingIds)}");
+        }
+
         var show = new TvShow
         {
             Title            = dto.Title,
@@ -247,15 +420,49 @@ public class TvShowService : ITvShowService
         await _tvShowRepository.AddAsync(show);
         await _tvShowRepository.SaveChangesAsync();
 
-        if (dto.GenreIds.Any())   await SaveGenresAsync(show.Id, dto.GenreIds);
-        if (dto.Cast.Any())       await SaveCastAsync(show.Id, dto.Cast);
-        if (dto.Director != null) await SaveDirectorAsync(show.Id, dto.Director);
-        if (dto.Images.Any())     await SaveImagesAsync(show.Id, dto.Images);
-        if (dto.Trailers.Any())   await SaveTrailersAsync(show.Id, dto.Trailers);
-        if (dto.Seasons.Any())    await SaveSeasonsAsync(show.Id, dto.Seasons);
+        // Compensating action — giống CreateMovieAsync: nếu 1 trong các bước dưới đây
+        // fail giữa chừng, xóa luôn show vừa tạo để không để lại show rác thiếu
+        // cast/ảnh/genre/season trong DB. Không phải transaction thật (xem ghi chú
+        // tương tự trong MovieService.CreateMovieAsync).
+        try
+        {
+            if (dto.GenreIds.Any())   await SaveGenresAsync(show.Id, dto.GenreIds);
+            if (dto.Cast.Any())       await SaveCastAsync(show.Id, dto.Cast);
+            if (dto.Director != null) await SaveDirectorAsync(show.Id, dto.Director);
+            if (dto.Images.Any())     await SaveImagesAsync(show.Id, dto.Images);
+            if (dto.Trailers.Any())   await SaveTrailersAsync(show.Id, dto.Trailers);
+            if (dto.Seasons.Any())    await SaveSeasonsAsync(show.Id, dto.Seasons);
+        }
+        catch
+        {
+            _tvShowRepository.Remove(show);
+            await _tvShowRepository.SaveChangesAsync();
+            throw;
+        }
 
         await InvalidateTvShowCachesAsync(show.Id, dto.GenreIds);
         return show.Id;
+    }
+
+    /// <inheritdoc />
+    public async Task<IEnumerable<PersonSearchDTO>> SearchPersonsAsync(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query) || query.Trim().Length < 2)
+            return Enumerable.Empty<PersonSearchDTO>();
+
+        var normalized = query.Trim().ToLower();
+        var persons = await _personRepository.FindAsync(p => p.Name.ToLower().Contains(normalized));
+
+        return persons
+            .OrderBy(p => p.Name)
+            .Take(20)
+            .Select(p => new PersonSearchDTO
+            {
+                Id = p.Id,
+                Name = p.Name,
+                ProfileUrl = p.ProfileUrl,
+                TmdbPersonId = p.TmdbPersonId
+            });
     }
 
     // ─── Update / Delete ──────────────────────────────────────────────────────
@@ -270,12 +477,49 @@ public class TvShowService : ITvShowService
         show.ImdbRating  = dto.ImdbRating  ?? show.ImdbRating;
         show.Status      = dto.Status      ?? show.Status;
         if (dto.IsPremium.HasValue) show.IsPremium = dto.IsPremium.Value;
+        if (dto.PosterUrl != null) show.PosterUrl = dto.PosterUrl;
+        if (dto.BackdropUrl != null) show.BackdropUrl = dto.BackdropUrl;
 
         _tvShowRepository.Update(show);
         await _tvShowRepository.SaveChangesAsync();
 
-        var genreIds    = await _tvShowGenreRepository.FindAsync(g => g.TvShowId == id);
-        var genreIdList = genreIds.Select(g => g.GenreId).ToList();
+        // Thay thế cast nếu FE có gửi (NULL = giữ nguyên, [] = xóa hết)
+        if (dto.Cast != null)
+        {
+            await ReplaceCastAsync(id, dto.Cast);
+        }
+
+        // Thay thế đạo diễn nếu FE có gửi
+        if (dto.Director != null)
+        {
+            await ReplaceDirectorAsync(id, dto.Director);
+        }
+
+        // Thay thế thể loại nếu FE có gửi (NULL = giữ nguyên, [] = xóa hết)
+        if (dto.GenreIds != null)
+        {
+            var distinctGenreIds = dto.GenreIds.Distinct().ToList();
+            if (distinctGenreIds.Any())
+            {
+                var existingGenres = await _genreRepository.FindAsync(g => distinctGenreIds.Contains(g.Id));
+                var existingIds = existingGenres.Select(g => g.Id).ToHashSet();
+                var missingIds = distinctGenreIds.Where(gid => !existingIds.Contains(gid)).ToList();
+
+                if (missingIds.Any())
+                    throw new ArgumentException(
+                        $"Thể loại không tồn tại: {string.Join(", ", missingIds)}");
+            }
+            await ReplaceGenresAsync(id, distinctGenreIds);
+        }
+
+        // Thay thế ảnh backdrop (gallery) nếu FE có gửi (NULL = giữ nguyên, [] = xóa hết)
+        if (dto.BackdropImages != null)
+        {
+            await ReplaceImagesByTypeAsync(id, "backdrop", dto.BackdropImages);
+        }
+
+        var showWithGenres = await _tvShowRepository.GetByIdWithDetailsAsync(id);
+        var genreIdList = showWithGenres?.TvShowGenres.Select(g => g.GenreId).ToList() ?? new();
 
         await InvalidateTvShowCachesAsync(id, genreIdList);
         return true;
@@ -700,11 +944,20 @@ public class TvShowService : ITvShowService
         };
     }
 
-    // ─── Save helpers ─────────────────────────────────────────────────────────
+    // ─── Replace helpers (dùng cho luồng chỉnh sửa thủ công) ───────────────────
+    // Đồng bộ với MovieService.Replace* — xóa toàn bộ dữ liệu cũ rồi ghi lại từ đầu,
+    // khác với Save*Async (chỉ dùng khi TẠO show, thêm mới không đụng dữ liệu có sẵn).
 
-    private async Task SaveGenresAsync(Guid showId, List<Guid> genreIds)
+    private async Task ReplaceGenresAsync(Guid showId, List<Guid> genreIds)
     {
-        foreach (var genreId in genreIds)
+        var old = (await _tvShowGenreRepository.FindAsync(x => x.TvShowId == showId)).ToList();
+        foreach (var o in old)
+        {
+            _tvShowGenreRepository.Remove(o);
+        }
+        await _tvShowGenreRepository.SaveChangesAsync();
+
+        foreach (var genreId in genreIds.Distinct())
         {
             await _tvShowGenreRepository.AddAsync(new TvShowGenre
             {
@@ -715,11 +968,150 @@ public class TvShowService : ITvShowService
         await _tvShowGenreRepository.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// Thay thế toàn bộ ảnh của TV show theo 1 ImageType cụ thể (VD "backdrop") bằng danh sách mới —
+    /// dùng cho gallery ảnh khi chỉnh sửa thủ công. Không đụng tới ImageType khác.
+    /// </summary>
+    private async Task ReplaceImagesByTypeAsync(Guid showId, string imageType, List<ImportImageDTO> images)
+    {
+        var old = (await _imageRepository.FindAsync(i => i.TvShowId == showId && i.ImageType == imageType)).ToList();
+        foreach (var o in old)
+        {
+            _imageRepository.Remove(o);
+        }
+        await _imageRepository.SaveChangesAsync();
+
+        foreach (var img in images)
+        {
+            await _imageRepository.AddAsync(new TvShowImage
+            {
+                TvShowId  = showId,
+                Url       = img.Url,
+                ImageType = imageType
+            });
+        }
+        await _imageRepository.SaveChangesAsync();
+    }
+
+    private async Task ReplaceCastAsync(Guid showId, List<ImportCastDTO> cast)
+    {
+        var oldCasts     = (await _castRepository.FindAsync(c => c.TvShowId == showId)).ToList();
+        var oldPersonIds = oldCasts.Select(c => c.PersonId).Distinct().ToList();
+
+        foreach (var old in oldCasts)
+        {
+            _castRepository.Remove(old);
+        }
+        await _castRepository.SaveChangesAsync();
+
+        for (int i = 0; i < cast.Count; i++)
+        {
+            var c = cast[i];
+            var person = await UpsertPersonAsync(c.PersonId,
+                c.TmdbPersonId, c.Name, c.ProfileUrl,
+                c.Biography, c.Birthday, c.PlaceOfBirth);
+
+            if (c.ProfileImages?.Count > 0)
+                await SavePersonImagesAsync(person.Id, c.ProfileImages);
+
+            await _castRepository.AddAsync(new TvShowCast
+            {
+                TvShowId  = showId,
+                PersonId  = person.Id,
+                Character = c.Character,
+                Order     = c.Order != 0 ? c.Order : i
+            });
+        }
+        await _castRepository.SaveChangesAsync();
+
+        await CleanupOrphanPersonsAsync(oldPersonIds);
+    }
+
+    /// <summary>Thay thế đạo diễn của TV show. Director.Name rỗng/null = chỉ xóa đạo diễn hiện có.</summary>
+    private async Task ReplaceDirectorAsync(Guid showId, ImportDirectorDTO director)
+    {
+        var oldDirectors = (await _directorRepository.FindAsync(d => d.TvShowId == showId)).ToList();
+        var oldPersonIds = oldDirectors.Select(d => d.PersonId).Distinct().ToList();
+
+        foreach (var old in oldDirectors)
+        {
+            _directorRepository.Remove(old);
+        }
+        await _directorRepository.SaveChangesAsync();
+
+        if (!string.IsNullOrWhiteSpace(director.Name))
+        {
+            var person = await UpsertPersonAsync(director.PersonId,
+                director.TmdbPersonId, director.Name, director.ProfileUrl,
+                director.Biography, director.Birthday, director.PlaceOfBirth);
+
+            if (director.ProfileImages?.Count > 0)
+                await SavePersonImagesAsync(person.Id, director.ProfileImages);
+
+            await _directorRepository.AddAsync(new TvShowDirector
+            {
+                TvShowId = showId,
+                PersonId = person.Id
+            });
+            await _directorRepository.SaveChangesAsync();
+        }
+
+        await CleanupOrphanPersonsAsync(oldPersonIds);
+    }
+
+    /// <summary>Xóa các Person không còn xuất hiện trong bất kỳ TvShowCast/TvShowDirector nào — tránh rác dữ liệu.</summary>
+    private async Task CleanupOrphanPersonsAsync(IEnumerable<Guid> personIds)
+    {
+        foreach (var personId in personIds.Distinct())
+        {
+            var stillInCast = await _castRepository.FindOneAsync(c => c.PersonId == personId);
+            var stillInDir  = await _directorRepository.FindOneAsync(d => d.PersonId == personId);
+
+            if (stillInCast == null && stillInDir == null)
+            {
+                var person = await _personRepository.GetByIdAsync(personId);
+                if (person != null)
+                {
+                    _personRepository.Remove(person);
+                    await _personRepository.SaveChangesAsync();
+                }
+            }
+        }
+    }
+
+    // ─── Save helpers ─────────────────────────────────────────────────────────
+
+    private async Task SaveGenresAsync(Guid showId, List<Guid> genreIds)
+    {
+        // FIX: Distinct() + kiểm tra tồn tại trước khi insert — đồng bộ với
+        // MovieService.SaveGenresAsync. Trước đây insert thẳng theo genreIds gốc, nếu FE
+        // lỡ gửi trùng GenreId sẽ tạo 2 row TvShowGenre giống hệt nhau (hoặc vi phạm unique
+        // constraint nếu DB có ràng buộc TvShowId+GenreId).
+        foreach (var genreId in genreIds.Distinct())
+        {
+            var exists = await _tvShowGenreRepository.FindOneAsync(
+                x => x.TvShowId == showId && x.GenreId == genreId);
+
+            if (exists == null)
+            {
+                await _tvShowGenreRepository.AddAsync(new TvShowGenre
+                {
+                    TvShowId = showId,
+                    GenreId  = genreId
+                });
+            }
+        }
+        await _tvShowGenreRepository.SaveChangesAsync();
+    }
+
     private async Task SaveCastAsync(Guid showId, List<ImportCastDTO> cast)
     {
         foreach (var c in cast)
         {
-            var person = await UpsertPersonAsync(
+            // FIX: thiếu c.PersonId khiến lựa chọn diễn viên có sẵn từ dropdown (FE gửi
+            // PersonId cụ thể) bị bỏ qua — luôn tạo/khớp Person theo TmdbPersonId/Name,
+            // có thể ra Person trùng lặp. Truyền PersonId vào để đồng bộ với MovieService.
+            var person = await UpsertPersonAsync(c.PersonId,
                 c.TmdbPersonId, c.Name, c.ProfileUrl,
                 c.Biography, c.Birthday, c.PlaceOfBirth);
 
@@ -742,7 +1134,9 @@ public class TvShowService : ITvShowService
 
     private async Task SaveDirectorAsync(Guid showId, ImportDirectorDTO dir)
     {
-        var person = await UpsertPersonAsync(
+        // FIX: đồng bộ với SaveCastAsync — truyền dir.PersonId để không bỏ qua lựa chọn
+        // đạo diễn có sẵn từ dropdown.
+        var person = await UpsertPersonAsync(dir.PersonId,
             dir.TmdbPersonId, dir.Name, dir.ProfileUrl,
             dir.Biography, dir.Birthday, dir.PlaceOfBirth);
 
@@ -788,6 +1182,12 @@ public class TvShowService : ITvShowService
         await _videoRepository.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// Tạo Season kèm Episode cho TV show mới — chỉ dùng ở luồng tạo (CreateTvShowAsync),
+    /// không có bước "Replace" tương ứng vì season/episode được quản lý riêng qua
+    /// SyncNewEpisodesAsync (đồng bộ từ TMDB) hoặc các endpoint episode-video/CRUD khác.
+    /// Bỏ qua Season có SeasonNumber &lt;= 0 (Specials) — giống logic SyncNewEpisodesAsync.
+    /// </summary>
     private async Task SaveSeasonsAsync(Guid showId, List<CreateSeasonDTO> seasons)
     {
         foreach (var s in seasons.Where(s => s.SeasonNumber > 0))
@@ -830,17 +1230,30 @@ public class TvShowService : ITvShowService
 
     // ─── Person helpers ───────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Tìm hoặc tạo Person theo thứ tự ưu tiên — giống hệt MovieService.UpsertPersonAsync
+    /// để 2 luồng thêm phim / thêm TV show thủ công cho ra hành vi nhất quán:
+    ///   1) personId  — FE đã chọn thẳng 1 Person có sẵn từ dropdown autocomplete.
+    ///   2) tmdbPersonId — khớp theo ID TMDB (luồng import / khi FE giữ nguyên diễn viên gốc).
+    ///   3) name — fallback khớp theo tên (không phân biệt hoa/thường), dùng khi admin
+    ///      gõ tay tên diễn viên không có trên TMDB.
+    /// Nếu không khớp bước nào → tạo Person mới.
+    /// </summary>
     private async Task<Person> UpsertPersonAsync(
+        Guid? personId,
         int? tmdbPersonId, string name, string? profileUrl,
         string? biography, string? birthday, string? placeOfBirth)
     {
-        // Có TmdbPersonId (từ import TMDB) → khử trùng lặp theo ID như cũ.
-        // Không có (thêm thủ công) → khử trùng lặp theo Name trong nhóm người "thủ công"
-        // (TmdbPersonId == null), để không tạo Person mới mỗi lần admin gõ lại cùng 1 tên.
-        var person = tmdbPersonId.HasValue
+        Person? person = personId.HasValue
+            ? await _personRepository.GetByIdAsync(personId.Value)
+            : null;
+
+        person ??= tmdbPersonId.HasValue
             ? await _personRepository.FindOneAsync(p => p.TmdbPersonId == tmdbPersonId)
-            : await _personRepository.FindOneAsync(
-                p => p.TmdbPersonId == null && p.Name.ToLower() == name.Trim().ToLower());
+            : null;
+
+        person ??= await _personRepository.FindOneAsync(
+            p => p.Name.ToLower() == name.Trim().ToLower());
 
         if (person == null)
         {
@@ -859,6 +1272,8 @@ public class TvShowService : ITvShowService
         else
         {
             bool changed = false;
+            if (!person.TmdbPersonId.HasValue && tmdbPersonId.HasValue)
+            { person.TmdbPersonId = tmdbPersonId; changed = true; }
             if (string.IsNullOrEmpty(person.Biography)    && !string.IsNullOrEmpty(biography))
             { person.Biography    = biography;    changed = true; }
             if (string.IsNullOrEmpty(person.Birthday)     && !string.IsNullOrEmpty(birthday))

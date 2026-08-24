@@ -94,8 +94,49 @@ public class EpisodeDTO
 }
 
 /// <summary>
-/// TvShow rút gọn — dùng cho list/paged response (không kèm Season/Episode).
+/// Body cho PUT /api/tvshows/{id}/seasons/{seasonNumber} — sửa thông tin 1 season
+/// đã tồn tại (tiêu đề, mô tả, poster, ngày phát sóng). NULL = giữ nguyên giá trị cũ,
+/// "" = xóa giá trị hiện tại (VD: xóa poster). Không dùng để tạo season mới hay
+/// thêm/xóa episode — việc đó nằm ở SaveSeasonsAsync (lúc tạo TV show) hoặc
+/// SyncNewEpisodesAsync (đồng bộ từ TMDB).
 /// </summary>
+public class UpdateSeasonDTO
+{
+    /// <summary>Tên season, VD: "Season 1". NULL = không đổi.</summary>
+    public string? Name { get; set; }
+
+    /// <summary>NULL = không đổi. "" = xóa mô tả hiện tại.</summary>
+    public string? Overview { get; set; }
+
+    /// <summary>Poster của season. NULL = không đổi. "" = xóa poster hiện tại.</summary>
+    public string? PosterUrl { get; set; }
+
+    public DateTime? AirDate { get; set; }
+}
+
+/// <summary>
+/// Body cho PUT /api/tvshows/episodes/{episodeId} — sửa thông tin 1 episode đã tồn
+/// tại (tiêu đề, mô tả, ảnh still, thời lượng, rating, ngày phát sóng). NULL = giữ
+/// nguyên giá trị cũ, "" = xóa giá trị hiện tại (VD: xóa StillUrl). Không sửa
+/// VideoUrl ở đây — dùng SetEpisodeVideoAsync / RemoveEpisodeVideoAsync riêng.
+/// </summary>
+public class UpdateEpisodeDTO
+{
+    /// <summary>NULL = không đổi. Không cho phép rỗng (episode luôn cần tiêu đề).</summary>
+    public string? Title { get; set; }
+
+    /// <summary>NULL = không đổi. "" = xóa mô tả hiện tại.</summary>
+    public string? Overview { get; set; }
+
+    /// <summary>Ảnh still (thumbnail) của episode. NULL = không đổi. "" = xóa ảnh hiện tại.</summary>
+    public string? StillUrl { get; set; }
+
+    public int? Runtime { get; set; }
+    public decimal? Rating { get; set; }
+    public DateTime? AirDate { get; set; }
+}
+
+
 public class TvShowSummaryDTO
 {
     public Guid Id { get; set; }
@@ -122,8 +163,16 @@ public class TvShowSummaryDTO
 
 // ── Create / Update DTOs ──────────────────────────────────────────────────────
 
+/// <summary>
+/// Body cho POST /api/tvshows — dùng chung cho cả import TMDB và thêm thủ công
+/// (xem TvShowService.CreateTvShowAsync). Cấu trúc field cố tình song song với
+/// CreateMovieDTO để 2 luồng admin "thêm phim" / "thêm TV show" thao tác giống nhau;
+/// khác biệt là các field đặc thù chuỗi phim (FirstAirDate/LastAirDate/Status/
+/// NumberOfSeasons/NumberOfEpisodes/Seasons) thay cho ReleaseDate/Duration của Movie.
+/// </summary>
 public class CreateTvShowDTO
 {
+    /// <summary>NULL khi tạo thủ công (không qua TMDB). Có giá trị khi import từ TMDB.</summary>
     public int? TmdbId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
@@ -131,10 +180,16 @@ public class CreateTvShowDTO
     public DateTime? LastAirDate { get; set; }
     public string? PosterUrl { get; set; }
     public string? BackdropUrl { get; set; }
+
+    /// <summary>Thời lượng trung bình mỗi tập (phút).</summary>
     public int? EpisodeRuntime { get; set; }
     public decimal? ImdbRating { get; set; }
     public string? ContentRating { get; set; }
+
+    /// <summary>Mã quốc gia sản xuất — ISO 3166-1 alpha-2, VD: "US", "KR", "JP"</summary>
     public string? OriginCountry { get; set; }
+
+    /// <summary>"Returning Series" | "Ended" | "Canceled" | "In Production"</summary>
     public string? Status { get; set; }
     public int? NumberOfSeasons { get; set; }
     public int? NumberOfEpisodes { get; set; }
@@ -143,18 +198,27 @@ public class CreateTvShowDTO
     public bool IsPremium { get; set; } = false;
 
     public List<Guid> GenreIds { get; set; } = new();
+
+    /// <summary>
+    /// Diễn viên. Mỗi phần tử có thể là Person đã chọn từ dropdown (PersonId có giá trị)
+    /// hoặc nhập tay (PersonId = null, match/tạo theo Name) — giống CreateMovieDTO.Cast.
+    /// </summary>
     public List<ImportCastDTO> Cast { get; set; } = new();
+
+    /// <summary>Đạo diễn. PersonId = null + Name rỗng ("") = không có đạo diễn.</summary>
     public ImportDirectorDTO? Director { get; set; }
     public List<ImportImageDTO> Images { get; set; } = new();
     public List<ImportTrailerDTO> Trailers { get; set; } = new();
 
     /// <summary>
-    /// Key = SeasonNumber → season data kèm episodes.
-    /// Chỉ import season có SeasonNumber > 0 (bỏ Specials).
+    /// Danh sách season kèm episode. Chỉ những season có SeasonNumber > 0 được lưu
+    /// (SeasonNumber = 0 là "Specials" trên TMDB, bị bỏ qua — xem SaveSeasonsAsync).
+    /// Với luồng thêm thủ công, admin có thể gửi season/episode tự đặt số bất kỳ.
     /// </summary>
     public List<CreateSeasonDTO> Seasons { get; set; } = new();
 }
 
+/// <summary>Season gửi lên khi tạo TV show (thủ công hoặc import) — 1 season kèm danh sách episode.</summary>
 public class CreateSeasonDTO
 {
     public int SeasonNumber { get; set; }
@@ -165,6 +229,7 @@ public class CreateSeasonDTO
     public List<CreateEpisodeDTO> Episodes { get; set; } = new();
 }
 
+/// <summary>Episode gửi lên khi tạo TV show. VideoUrl KHÔNG có ở đây — video được upload riêng sau khi tạo show, qua POST /api/tvshows/{id}/videos hoặc endpoint episode-video (xem SetEpisodeVideoAsync).</summary>
 public class CreateEpisodeDTO
 {
     public int EpisodeNumber { get; set; }
@@ -185,6 +250,39 @@ public class UpdateTvShowDTO
 
     /// <summary>Cập nhật trạng thái Premium của TV show. NULL = không thay đổi.</summary>
     public bool? IsPremium { get; set; }
+
+    /// <summary>Poster mới. NULL = không thay đổi. "" = xóa poster hiện tại.</summary>
+    public string? PosterUrl { get; set; }
+
+    /// <summary>Backdrop (ảnh bìa chính) mới. NULL = không thay đổi. "" = xóa backdrop hiện tại.</summary>
+    public string? BackdropUrl { get; set; }
+
+    /// <summary>
+    /// Danh sách diễn viên mới (thay thế toàn bộ cast hiện có).
+    /// NULL = không thay đổi cast. [] (rỗng) = xóa hết diễn viên.
+    /// Mỗi phần tử có thể là Person đã chọn từ dropdown (PersonId) hoặc
+    /// diễn viên nhập tay (PersonId = null, match/tạo theo Name).
+    /// </summary>
+    public List<ImportCastDTO>? Cast { get; set; }
+
+    /// <summary>
+    /// Đạo diễn mới (thay thế đạo diễn hiện có).
+    /// NULL = không thay đổi. Gửi object rỗng (Name = "") để xóa đạo diễn.
+    /// </summary>
+    public ImportDirectorDTO? Director { get; set; }
+
+    /// <summary>
+    /// Danh sách thể loại mới (thay thế toàn bộ thể loại hiện có).
+    /// NULL = không thay đổi. [] (rỗng) = xóa hết thể loại.
+    /// </summary>
+    public List<Guid>? GenreIds { get; set; }
+
+    /// <summary>
+    /// Danh sách ảnh backdrop (gallery, tab "Hình ảnh") — thay thế toàn bộ backdrop hiện có.
+    /// NULL = không thay đổi. [] (rỗng) = xóa hết ảnh backdrop.
+    /// Không ảnh hưởng tới các ImageType khác (VD poster gallery, nếu có).
+    /// </summary>
+    public List<ImportImageDTO>? BackdropImages { get; set; }
 }
 
 // ── Filter DTO ────────────────────────────────────────────────────────────────

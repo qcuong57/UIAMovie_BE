@@ -1,5 +1,6 @@
 ﻿// UIAMovie.API/Controllers/TvShowsController.cs
 
+using System.Linq;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -218,6 +219,31 @@ public class TvShowsController : ControllerBase
         return Ok(new ApiResponseDTO<object> { Data = shows, Message = "Thành công" });
     }
 
+    /// <summary>
+    /// Danh sách thể loại có sẵn trong DB nội bộ — FE dùng cho ô chọn thể loại
+    /// khi thêm/sửa TV show thủ công. Giống MoviesController.GetGenres.
+    /// GET /api/tvshows/genres
+    /// </summary>
+    [HttpGet("genres")]
+    public async Task<IActionResult> GetGenres()
+    {
+        var genres = await _genreService.GetAllAsync();
+        return Ok(new ApiResponseDTO<object> { Data = genres, Message = "Thành công" });
+    }
+
+    /// <summary>
+    /// Tìm diễn viên/đạo diễn (Person) có sẵn trong DB theo tên — dùng cho ô autocomplete
+    /// khi thêm TV show thủ công hoặc chỉnh sửa cast của show import từ TMDB.
+    /// Yêu cầu tối thiểu 2 ký tự. Giống MoviesController.SearchPersons.
+    /// GET /api/tvshows/persons/search
+    /// </summary>
+    [HttpGet("persons/search")]
+    public async Task<IActionResult> SearchPersons([FromQuery] string query)
+    {
+        var persons = await _tvShowService.SearchPersonsAsync(query ?? string.Empty);
+        return Ok(new ApiResponseDTO<object> { Data = persons, Message = "Thành công" });
+    }
+
     [HttpGet("countries")]
     public async Task<IActionResult> GetAvailableCountries()
     {
@@ -226,7 +252,7 @@ public class TvShowsController : ControllerBase
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // SEASON / EPISODE — Load on-demand (lazy)
+    // SEASON / EPISODE — Load on-demand (lazy) & sửa metadata (Admin)
     // ═══════════════════════════════════════════════════════════════════
 
     [HttpGet("{id:guid}/seasons/{seasonNumber:int}")]
@@ -245,6 +271,77 @@ public class TvShowsController : ControllerBase
         return episode == null
             ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy episode", StatusCode = 404 })
             : Ok(new ApiResponseDTO<object> { Data = episode, Message = "Thành công" });
+    }
+
+    /// <summary>
+    /// [Admin] Sửa tiêu đề/mô tả/poster/ngày phát sóng của 1 season đã tồn tại.
+    /// Không tạo season mới và không đụng tới danh sách episode — dùng cho trang
+    /// chi tiết TV show khi admin cần chỉnh lại season đã import/nhập trước đó.
+    /// PUT /api/tvshows/{id}/seasons/{seasonNumber}
+    /// </summary>
+    [HttpPut("{id:guid}/seasons/{seasonNumber:int}")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> UpdateSeason(Guid id, int seasonNumber, [FromBody] UpdateSeasonDTO dto)
+    {
+        var success = await _tvShowService.UpdateSeasonAsync(id, seasonNumber, dto);
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = "Cập nhật season thành công" })
+            : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy season", StatusCode = 404 });
+    }
+
+    /// <summary>
+    /// [Admin] Sửa tiêu đề/mô tả/ảnh still/thời lượng/rating/ngày phát sóng của 1
+    /// episode đã tồn tại. Không sửa VideoUrl — dùng UploadEpisodeVideo/DeleteEpisodeVideo
+    /// riêng cho việc đó (xem section EPISODE VIDEO bên dưới).
+    /// PUT /api/tvshows/episodes/{episodeId}
+    /// </summary>
+    [HttpPut("episodes/{episodeId:guid}")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> UpdateEpisode(Guid episodeId, [FromBody] UpdateEpisodeDTO dto)
+    {
+        var success = await _tvShowService.UpdateEpisodeAsync(episodeId, dto);
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = "Cập nhật episode thành công" })
+            : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy episode", StatusCode = 404 });
+    }
+
+    /// <summary>
+    /// [Admin] Thêm 1 episode mới vào season đã tồn tại — dùng ở trang chi tiết TV
+    /// show (khi sửa season) để bổ sung tập sau khi show đã tạo xong, khác với
+    /// Seasons gửi kèm lúc POST /api/tvshows (chỉ áp dụng lúc tạo mới).
+    /// POST /api/tvshows/{id}/seasons/{seasonNumber}/episodes
+    /// </summary>
+    [HttpPost("{id:guid}/seasons/{seasonNumber:int}/episodes")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> AddEpisode(Guid id, int seasonNumber, [FromBody] CreateEpisodeDTO dto)
+    {
+        var episode = await _tvShowService.AddEpisodeAsync(id, seasonNumber, dto);
+        return episode == null
+            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy season", StatusCode = 404 })
+            : Ok(new ApiResponseDTO<object> { Data = episode, Message = "Đã thêm tập phim" });
+    }
+
+    /// <summary>
+    /// [Admin] Xóa 1 episode đã tồn tại — đối xứng với AddEpisode. Nếu episode đã
+    /// có video, xóa luôn file trên Cloudinary giống DeleteEpisodeVideo.
+    /// DELETE /api/tvshows/episodes/{episodeId}
+    /// </summary>
+    [HttpDelete("episodes/{episodeId:guid}")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> DeleteEpisode(Guid episodeId)
+    {
+        var (found, oldVideoUrl) = await _tvShowService.DeleteEpisodeAsync(episodeId);
+        if (!found)
+            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy episode", StatusCode = 404 });
+
+        if (!string.IsNullOrEmpty(oldVideoUrl))
+        {
+            var publicId = ExtractCloudinaryPublicId(oldVideoUrl);
+            if (publicId != null)
+                try { await _cloudinaryService.DeleteFileAsync(publicId); } catch { }
+        }
+
+        return Ok(new ApiResponseDTO<object> { Message = "Đã xóa tập phim" });
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -528,9 +625,53 @@ public class TvShowsController : ControllerBase
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // ADMIN — Thêm TV show thủ công (không qua TMDB)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Upload 1 ảnh (poster / backdrop / ảnh diễn viên-đạo diễn) lên Cloudinary và trả về URL.
+    /// Dùng cho luồng "thêm TV show thủ công" — giống MoviesController.UploadImage.
+    ///
+    /// POST /api/tvshows/upload-image
+    /// Form-data: file (bắt buộc), type ("poster" | "backdrop" | "person", mặc định "poster")
+    /// Response: { url }
+    /// </summary>
+    private static readonly string[] AllowedImageExtensions   = { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
+    private static readonly string[] AllowedImageContentTypes =
+        { "image/jpeg", "image/png", "image/webp", "image/gif" };
+
+    [HttpPost("upload-image")]
+    [Authorize(Roles = Roles.Admin)]
+    [RequestSizeLimit(10 * 1024 * 1024)] // 10MB
+    public async Task<IActionResult> UploadImage(IFormFile file, [FromForm] string type = "poster")
+    {
+        if (file == null || file.Length == 0)
+            return BadRequest(new ApiErrorResponseDTO { Message = "File không hợp lệ", StatusCode = 400 });
+
+        var ext = System.IO.Path.GetExtension(file.FileName).ToLowerInvariant();
+        var contentType = (file.ContentType ?? "").ToLowerInvariant();
+        if (!AllowedImageExtensions.Contains(ext) || !AllowedImageContentTypes.Contains(contentType))
+            return BadRequest(new ApiErrorResponseDTO
+                { Message = "Chỉ chấp nhận file ảnh (jpg, png, webp, gif)", StatusCode = 400 });
+
+        var allowedTypes = new[] { "poster", "backdrop", "person" };
+        var folder = allowedTypes.Contains(type) ? type : "poster";
+
+        var url = await _cloudinaryService.UploadImageAsync(file, $"uiamovie/tvshows/{folder}");
+
+        return Ok(new ApiResponseDTO<object> { Data = new { url }, Message = "Upload ảnh thành công" });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // ADMIN — CRUD
     // ═══════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Tạo TV show — dùng chung cho cả 2 luồng:
+    ///   - Thêm thủ công: FE tự nhập Title/Description/PosterUrl/Cast(TmdbPersonId=null)/Seasons...
+    ///   - (TMDB import đi qua action ImportFromTmdb ở trên, action đó tự build DTO rồi gọi CreateTvShowAsync)
+    /// TmdbId để null khi tạo thủ công.
+    /// </summary>
     [HttpPost]
     [Authorize(Roles = Roles.Admin)]
     public async Task<IActionResult> Create([FromBody] CreateTvShowDTO dto)
