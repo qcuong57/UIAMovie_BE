@@ -137,7 +137,7 @@ public class AdsController : ControllerBase
     /// Merge logic: override per-content có ưu tiên hơn global slots.
     /// </summary>
     [HttpGet("content/{contentType}/{contentId:guid}")]
-    [Authorize]
+    [AllowAnonymous]
     public async Task<IActionResult> GetAdsForContent(
         AdContentType contentType,
         Guid          contentId)
