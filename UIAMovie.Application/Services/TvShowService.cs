@@ -562,6 +562,24 @@ public class TvShowService : ITvShowService
         var show = await _tvShowRepository.GetByIdAsync(tvShowId);
         if (show == null) return false;
 
+        // FIX: xóa (các) video cùng VideoType đã tồn tại trước khi thêm video mới —
+        // đồng bộ với MovieService.AddVideoAsync. Trước đây chỉ Add không Remove →
+        // nhiều row cùng VideoType="main" khiến FE (`videos.find(v => v.videoType
+        // === "main")`) có thể vẫn lấy phải video CŨ thay vì video vừa upload.
+        var oldVideos = await _videoRepository.FindAsync(
+            v => v.TvShowId == tvShowId && v.VideoType == videoType);
+
+        foreach (var old in oldVideos)
+        {
+            var oldPublicId = ExtractCloudinaryPublicId(old.VideoUrl);
+            if (oldPublicId != null)
+            {
+                try { await _cloudinaryService.DeleteFileAsync(oldPublicId); }
+                catch { /* Tiếp tục dù Cloudinary lỗi */ }
+            }
+            _videoRepository.Remove(old);
+        }
+
         await _videoRepository.AddAsync(new TvShowVideo
         {
             TvShowId  = tvShowId,

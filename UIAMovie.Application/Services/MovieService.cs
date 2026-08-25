@@ -429,6 +429,32 @@ public class MovieService : IMovieService
         var movie = await _movieRepository.GetByIdAsync(movieId);
         if (movie == null) return false;
 
+        // FIX: xóa (các) video cùng VideoType đã tồn tại trước khi thêm video mới.
+        // Trước đây chỉ Add mà không Remove → nếu admin upload lại video "main",
+        // DB sẽ có 2+ row cùng VideoType="main". EF không đảm bảo thứ tự trả về,
+        // trong khi FE chọn video bằng `movie.videos.find(v => v.videoType === "main")`
+        // (lấy record ĐẦU TIÊN khớp) → rất dễ vẫn lấy phải video CŨ thay vì video
+        // vừa upload, khiến "video mới upload lên không phát được".
+        var oldVideos = await _videoRepository.FindAsync(
+            v => v.MovieId == movieId && v.VideoType == videoType);
+
+        foreach (var old in oldVideos)
+        {
+            var oldPublicId = ExtractCloudinaryPublicId(old.VideoUrl);
+            if (oldPublicId != null)
+            {
+                try
+                {
+                    await _cloudinaryService.DeleteFileAsync(oldPublicId);
+                }
+                catch
+                {
+                    /* Tiếp tục dù Cloudinary lỗi — không chặn việc thay video */
+                }
+            }
+            _videoRepository.Remove(old);
+        }
+
         await _videoRepository.AddAsync(new MovieVideo
         {
             MovieId = movieId,

@@ -322,9 +322,20 @@ public class AdService : IAdService
             var cached = await _cache.GetAsync<ContentAdsDTO>(globalCacheKey);
             if (cached != null)
             {
-                // Patch ContentId cho đúng content (cache lưu contentId = default)
-                cached.ContentId = contentId;
-                return cached;
+                // FIX: không mutate trực tiếp object lấy từ cache — nếu ICacheService
+                // là in-memory và trả về cùng 1 reference cho mọi request, việc gán
+                // cached.ContentId ở đây sẽ race giữa các user xem content khác nhau
+                // cùng lúc (request A vừa set xong, request B ghi đè trước khi A kịp
+                // return → A trả nhầm ContentId của B). Clone ra 1 object mới rồi patch.
+                var patched = new ContentAdsDTO
+                {
+                    ContentType = cached.ContentType,
+                    ContentId   = contentId,
+                    PreRoll     = cached.PreRoll,
+                    MidRoll     = cached.MidRoll,
+                    PostRoll    = cached.PostRoll
+                };
+                return patched;
             }
 
             var globalSlots = await _adRepo.GetActiveGlobalSlotsAsync(contentType);
@@ -411,14 +422,14 @@ public class AdService : IAdService
         {
             // Dùng override
             sources = overrides
-                .Where(o => o.Position == position && o.Advertisement != null)
+                .Where(o => o.Position == position && o.Advertisement != null && o.Advertisement.IsActive)
                 .Select(o => (o.Advertisement, o.Id, o.MidRollOffsetSeconds, o.DisplayOrder));
         }
         else
         {
             // Dùng global
             sources = globalSlots
-                .Where(s => s.Position == position && s.Advertisement != null)
+                .Where(s => s.Position == position && s.Advertisement != null && s.Advertisement.IsActive)
                 .Select(s => (s.Advertisement, s.Id, s.MidRollOffsetSeconds, s.DisplayOrder));
         }
 

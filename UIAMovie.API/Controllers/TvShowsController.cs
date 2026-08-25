@@ -839,4 +839,4 @@ public class TvShowsController : ControllerBase
 public class SetTvShowPremiumDTO
 {
     public bool IsPremium { get; set; }
-}
+}   
