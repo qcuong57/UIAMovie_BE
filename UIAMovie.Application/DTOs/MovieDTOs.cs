@@ -30,6 +30,13 @@ public class MovieDTO
     public List<MovieVideoDTO> Videos { get; set; } = new();
     public string? TrailerKey { get; set; }
 
+    /// <summary>
+    /// URL video trailer tự upload lên Cloudinary (VideoType="trailer_upload").
+    /// Chạy SONG SONG với TrailerKey (Youtube) — phim có thể có cả 2, hoặc chỉ 1, hoặc không có.
+    /// FE dùng field này để mở popup <video> thay vì popup iframe Youtube.
+    /// </summary>
+    public string? TrailerVideoUrl { get; set; }
+
     public List<MovieCastDTO> Cast { get; set; } = new();
     public List<MovieImageDTO> Images { get; set; } = new();
 
@@ -242,4 +249,10 @@ public class ImportTrailerDTO
 {
     public string YoutubeUrl { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+}
+
+/// <summary>Body cho PUT /api/movies/{id}/trailer/youtube — admin set/đổi link trailer Youtube thủ công.</summary>
+public class SetTrailerYoutubeDTO
+{
+    public string YoutubeUrl { get; set; } = string.Empty;
 }

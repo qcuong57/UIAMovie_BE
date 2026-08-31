@@ -42,6 +42,12 @@ public interface ITvShowService
 
     // ── Videos ────────────────────────────────────────────────────────────────
     Task<bool> AddVideoAsync(Guid tvShowId, string videoUrl, string videoType, string? quality);
+
+    /// <summary>
+    /// Set/đổi link trailer Youtube thủ công (VideoType="trailer") — không cần import lại từ TMDB.
+    /// Chạy độc lập với trailer upload (VideoType="trailer_upload"), 2 cái không đụng nhau.
+    /// </summary>
+    Task<bool> SetTrailerYoutubeAsync(Guid tvShowId, string youtubeUrl);
     Task<bool> DeleteVideoAsync(Guid videoId);
 
     // ── Episode Video ─────────────────────────────────────────────────────────
@@ -592,6 +598,14 @@ public class TvShowService : ITvShowService
         await _cacheService.RemoveAsync(string.Format(TVSHOW_CACHE_KEY, tvShowId));
         return true;
     }
+
+    /// <summary>
+    /// Set/đổi trailer Youtube thủ công. Dùng chung AddVideoAsync với VideoType="trailer"
+    /// nên tự động xóa link Youtube cũ (nếu có) trước khi lưu link mới — không tạo trùng.
+    /// Trailer upload (VideoType="trailer_upload") không bị ảnh hưởng vì khác VideoType.
+    /// </summary>
+    public async Task<bool> SetTrailerYoutubeAsync(Guid tvShowId, string youtubeUrl)
+        => await AddVideoAsync(tvShowId, youtubeUrl, "trailer", quality: null);
 
     public async Task<bool> DeleteVideoAsync(Guid videoId)
     {
@@ -1370,6 +1384,10 @@ public class TvShowService : ITvShowService
             .Where(v => v.VideoType == "trailer" && !string.IsNullOrEmpty(v.VideoUrl))
             .Select(v => ExtractYoutubeKey(v.VideoUrl))
             .FirstOrDefault(k => k != null),
+        TrailerVideoUrl  = t.TvShowVideos?
+            .Where(v => v.VideoType == "trailer_upload" && !string.IsNullOrEmpty(v.VideoUrl))
+            .Select(v => v.VideoUrl)
+            .FirstOrDefault(),
         IsPremium = t.IsPremium,
         Genres = t.TvShowGenres?
             .Select(g => g.Genre?.Name ?? "")
@@ -1413,6 +1431,12 @@ public class TvShowService : ITvShowService
             .Where(v => v.VideoType == "trailer" && !string.IsNullOrEmpty(v.VideoUrl))
             .Select(v => ExtractYoutubeKey(v.VideoUrl))
             .FirstOrDefault(k => k != null),
+
+        // Trailer tự upload — chạy song song, độc lập với TrailerKey (Youtube) ở trên.
+        TrailerVideoUrl = t.TvShowVideos?
+            .Where(v => v.VideoType == "trailer_upload" && !string.IsNullOrEmpty(v.VideoUrl))
+            .Select(v => v.VideoUrl)
+            .FirstOrDefault(),
 
         Cast = t.TvShowCasts?
             .OrderBy(c => c.Order)

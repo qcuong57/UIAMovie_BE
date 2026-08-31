@@ -21,6 +21,12 @@ public interface IMovieService
     Task<IEnumerable<MovieDTO>> GetMoviesByGenreAsync(Guid genreId);
     Task<IEnumerable<string>> GetAvailableCountriesAsync();
     Task<bool> AddVideoAsync(Guid movieId, string videoUrl, string videoType, string? quality);
+
+    /// <summary>
+    /// Set/đổi link trailer Youtube thủ công (VideoType="trailer") — không cần import lại từ TMDB.
+    /// Chạy độc lập với trailer upload (VideoType="trailer_upload"), 2 cái không đụng nhau.
+    /// </summary>
+    Task<bool> SetTrailerYoutubeAsync(Guid movieId, string youtubeUrl);
     Task<bool> DeleteVideoAsync(Guid videoId);
     Task<bool> AddFavoriteAsync(Guid userId, Guid movieId);
     Task<bool> RemoveFavoriteAsync(Guid userId, Guid movieId);
@@ -468,6 +474,14 @@ public class MovieService : IMovieService
         await _cacheService.RemoveAsync(string.Format(MOVIE_CACHE_KEY, movieId));
         return true;
     }
+
+    /// <summary>
+    /// Set/đổi trailer Youtube thủ công. Dùng chung AddVideoAsync với VideoType="trailer"
+    /// nên tự động xóa link Youtube cũ (nếu có) trước khi lưu link mới — không tạo trùng.
+    /// Trailer upload (VideoType="trailer_upload") không bị ảnh hưởng vì khác VideoType.
+    /// </summary>
+    public async Task<bool> SetTrailerYoutubeAsync(Guid movieId, string youtubeUrl)
+        => await AddVideoAsync(movieId, youtubeUrl, "trailer", quality: null);
 
     public async Task<bool> DeleteVideoAsync(Guid videoId)
     {
@@ -1048,6 +1062,12 @@ public class MovieService : IMovieService
             .Select(v => ExtractYoutubeKey(v.VideoUrl))
             .FirstOrDefault(k => k != null),
 
+        // Trailer tự upload — chạy song song, độc lập với TrailerKey (Youtube) ở trên.
+        TrailerVideoUrl = m.MovieVideos?
+            .Where(v => v.VideoType == "trailer_upload" && !string.IsNullOrEmpty(v.VideoUrl))
+            .Select(v => v.VideoUrl)
+            .FirstOrDefault(),
+
         Cast = m.MovieCasts?
             .OrderBy(c => c.Order)
             .Where(c => c.Person != null)
@@ -1115,6 +1135,7 @@ public class MovieService : IMovieService
             Genres = base_.Genres,
             Videos = base_.Videos,
             TrailerKey = base_.TrailerKey,
+            TrailerVideoUrl = base_.TrailerVideoUrl,
             Cast = base_.Cast,
             Images = base_.Images,
             Director = base_.Director,

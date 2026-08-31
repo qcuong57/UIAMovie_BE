@@ -43,6 +43,12 @@ public class TvShowDTO
     public List<TvShowVideoDTO> Videos { get; set; } = new();
     public string? TrailerKey { get; set; }
 
+    /// <summary>
+    /// URL video trailer tự upload lên Cloudinary (VideoType="trailer_upload").
+    /// Chạy SONG SONG với TrailerKey (Youtube) — show có thể có cả 2, chỉ 1, hoặc không có.
+    /// </summary>
+    public string? TrailerVideoUrl { get; set; }
+
     public List<TvShowCastDTO> Cast { get; set; } = new();
     public List<TvShowImageDTO> Images { get; set; } = new();
     public string? Director { get; set; }
@@ -151,6 +157,7 @@ public class TvShowSummaryDTO
     public int? NumberOfSeasons { get; set; }
     public int? NumberOfEpisodes { get; set; }
     public string? TrailerKey { get; set; }
+    public string? TrailerVideoUrl { get; set; }
 
     /// <summary>
     /// TRUE = TV show này chỉ dành cho user Premium.

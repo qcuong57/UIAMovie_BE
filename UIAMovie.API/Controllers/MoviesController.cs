@@ -520,6 +520,51 @@ public class MoviesController : ControllerBase
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // TRAILER — 2 nguồn chạy song song: Youtube (VideoType="trailer")
+    // và video tự upload (VideoType="trailer_upload"). Set/xóa loại này
+    // không ảnh hưởng loại kia vì khác VideoType.
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Upload file trailer video lên Cloudinary (song song với trailer Youtube).
+    /// POST /api/movies/{id}/trailer/upload  (multipart/form-data, field "trailerFile")
+    /// </summary>
+    [HttpPost("{id:guid}/trailer/upload")]
+    [Authorize(Roles = Roles.Admin)]
+    [RequestSizeLimit(200 * 1024 * 1024)] // 200MB
+    [RequestFormLimits(MultipartBodyLengthLimit = 200 * 1024 * 1024)]
+    public async Task<IActionResult> UploadTrailerVideo(Guid id, IFormFile trailerFile)
+    {
+        if (trailerFile == null || trailerFile.Length == 0)
+            return BadRequest(new ApiErrorResponseDTO { Message = "File không hợp lệ", StatusCode = 400 });
+
+        var url = await _cloudinaryService.UploadVideoAsync(trailerFile, $"uiamovie/movies/{id}/trailer");
+        var success = await _movieService.AddVideoAsync(id, url, "trailer_upload", quality: null);
+
+        return success
+            ? Ok(new ApiResponseDTO<object> { Data = new { trailerVideoUrl = url }, Message = "Upload trailer thành công" })
+            : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy phim", StatusCode = 404 });
+    }
+
+    /// <summary>
+    /// Set/đổi link trailer Youtube thủ công (không cần import lại từ TMDB).
+    /// PUT /api/movies/{id}/trailer/youtube
+    /// Body: { "youtubeUrl": "https://www.youtube.com/watch?v=..." }
+    /// </summary>
+    [HttpPut("{id:guid}/trailer/youtube")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> SetTrailerYoutube(Guid id, [FromBody] SetTrailerYoutubeDTO dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.YoutubeUrl))
+            return BadRequest(new ApiErrorResponseDTO { Message = "URL không được để trống", StatusCode = 400 });
+
+        var success = await _movieService.SetTrailerYoutubeAsync(id, dto.YoutubeUrl);
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = "Đã cập nhật trailer Youtube" })
+            : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy phim", StatusCode = 404 });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // FAVORITES — Yêu thích
     // ═══════════════════════════════════════════════════════════════════
 
