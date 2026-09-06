@@ -1389,6 +1389,7 @@ public class TvShowService : ITvShowService
             .Select(v => v.VideoUrl)
             .FirstOrDefault(),
         IsPremium = t.IsPremium,
+        IsUpcoming = t.FirstAirDate.HasValue && t.FirstAirDate.Value > DateTime.UtcNow,
         Genres = t.TvShowGenres?
             .Select(g => g.Genre?.Name ?? "")
             .Where(n => n != "")
@@ -1411,6 +1412,7 @@ public class TvShowService : ITvShowService
         NumberOfSeasons  = t.NumberOfSeasons,
         NumberOfEpisodes = t.NumberOfEpisodes,
         IsPremium        = t.IsPremium,
+        IsUpcoming       = t.FirstAirDate.HasValue && t.FirstAirDate.Value > DateTime.UtcNow,
 
         Genres = t.TvShowGenres?
             .Select(g => g.Genre?.Name ?? "")

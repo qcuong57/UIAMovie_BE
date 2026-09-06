@@ -39,6 +39,9 @@ public class TvShowDTO
     /// </summary>
     public bool IsPremium { get; set; }
 
+    /// <summary>TRUE = show chưa tới ngày lên sóng (FirstAirDate &gt; hiện tại). Computed, không lưu DB.</summary>
+    public bool IsUpcoming { get; set; }
+
     public List<string> Genres { get; set; } = new();
     public List<TvShowVideoDTO> Videos { get; set; } = new();
     public string? TrailerKey { get; set; }
@@ -164,6 +167,9 @@ public class TvShowSummaryDTO
     /// Frontend dùng để hiển thị badge "PREMIUM" trên poster.
     /// </summary>
     public bool IsPremium { get; set; }
+
+    /// <summary>TRUE = show chưa tới ngày lên sóng (FirstAirDate &gt; hiện tại). Computed, không lưu DB.</summary>
+    public bool IsUpcoming { get; set; }
 
     public List<string> Genres { get; set; } = new();
 }
@@ -307,6 +313,13 @@ public class FilterTvShowsDTO
     public DateTime? ToFirstAirDate { get; set; }
     public string? OriginCountry { get; set; }
     public string? Status { get; set; }
+
+    /// <summary>
+    /// NULL (mặc định) = chỉ trả show ĐÃ lên sóng (FirstAirDate null hoặc &lt;= hiện tại) — browse bình thường.
+    /// TRUE = chỉ trả show SẮP lên sóng (FirstAirDate &gt; hiện tại) — dùng cho trang "Sắp chiếu".
+    /// </summary>
+    public bool? IsUpcoming { get; set; }
+
     public string? SortBy { get; set; } = "rating";
     public bool SortDesc { get; set; } = true;
     public int Page { get; set; } = 1;

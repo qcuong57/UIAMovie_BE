@@ -26,6 +26,9 @@ public class MovieDTO
     /// </summary>
     public bool IsPremium { get; set; }
 
+    /// <summary>TRUE = phim chưa tới ngày phát hành (ReleaseDate &gt; hiện tại). Computed, không lưu DB.</summary>
+    public bool IsUpcoming { get; set; }
+
     public List<string> Genres { get; set; } = new();
     public List<MovieVideoDTO> Videos { get; set; } = new();
     public string? TrailerKey { get; set; }

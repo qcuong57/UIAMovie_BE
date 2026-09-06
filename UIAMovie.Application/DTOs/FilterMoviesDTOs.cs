@@ -9,8 +9,16 @@ public class FilterMoviesDTO
     public DateTime? FromReleaseDate { get; set; }
     public DateTime? ToReleaseDate { get; set; }
     public string? Search { get; set; }
+
     /// <summary>Lọc theo quốc gia sản xuất — ISO 3166-1 alpha-2, VD: "US", "KR", "JP"</summary>
     public string? OriginCountry { get; set; }
+
+    /// <summary>
+    /// NULL (mặc định) = chỉ trả phim ĐÃ phát hành (ReleaseDate null hoặc &lt;= hiện tại) — browse bình thường.
+    /// TRUE = chỉ trả phim SẮP chiếu (ReleaseDate &gt; hiện tại) — dùng cho trang "Sắp chiếu".
+    /// </summary>
+    public bool? IsUpcoming { get; set; }
+
     public int Page { get; set; } = 1;
     public int PageSize { get; set; } = 20;
     public string SortBy { get; set; } = "rating"; // rating, title, releaseDate

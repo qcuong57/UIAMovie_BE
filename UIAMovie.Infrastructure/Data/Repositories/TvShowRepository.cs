@@ -75,6 +75,7 @@ public class TvShowRepository : Repository<TvShow>, ITvShowRepository
             .AsNoTracking()
             .Include(t => t.TvShowGenres)
                 .ThenInclude(g => g.Genre)
+            .Include(t => t.TvShowVideos)
             .AsQueryable();
 
         // ── Filter theo Ids (AI mode) ────────────────────────────────────────
@@ -118,6 +119,16 @@ public class TvShowRepository : Repository<TvShow>, ITvShowRepository
             var to = DateTime.SpecifyKind(filter.ToFirstAirDate.Value, DateTimeKind.Utc);
             query = query.Where(t => t.FirstAirDate <= to);
         }
+
+        // ── Sắp lên sóng / Đã lên sóng ───────────────────────────────────────
+        // Tính runtime từ FirstAirDate so với thời điểm hiện tại — không lưu cờ
+        // trạng thái nào trong DB nên không cần cronjob quét/flip mỗi ngày.
+        // Mặc định (IsUpcoming = null): chỉ trả show ĐÃ lên sóng (browse bình thường
+        // không lẫn show sắp chiếu). IsUpcoming = true: chỉ trả show SẮP lên sóng.
+        var now = DateTime.UtcNow;
+        query = filter.IsUpcoming == true
+            ? query.Where(t => t.FirstAirDate.HasValue && t.FirstAirDate.Value > now)
+            : query.Where(t => !t.FirstAirDate.HasValue || t.FirstAirDate.Value <= now);
 
         if (!string.IsNullOrWhiteSpace(filter.OriginCountry))
             query = query.Where(t => t.OriginCountry != null &&

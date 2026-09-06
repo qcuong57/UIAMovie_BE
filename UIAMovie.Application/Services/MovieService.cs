@@ -1041,6 +1041,7 @@ public class MovieService : IMovieService
         Rating = m.ImdbRating,
         OriginCountry = m.OriginCountry,
         IsPremium = m.IsPremium,
+        IsUpcoming = m.ReleaseDate.HasValue && m.ReleaseDate.Value > DateTime.UtcNow,
 
         Genres = m.MovieGenres?
             .Select(g => g.Genre?.Name ?? "")
@@ -1132,6 +1133,7 @@ public class MovieService : IMovieService
             Rating = base_.Rating,
             OriginCountry = base_.OriginCountry,
             IsPremium = base_.IsPremium,
+            IsUpcoming = base_.IsUpcoming,
             Genres = base_.Genres,
             Videos = base_.Videos,
             TrailerKey = base_.TrailerKey,

@@ -68,6 +68,7 @@ public class MovieRepository : Repository<Movie>, IMovieRepository
             .AsNoTracking()
             .Include(m => m.MovieGenres)
                 .ThenInclude(g => g.Genre)
+            .Include(m => m.MovieVideos)
             .AsQueryable();
 
         // ── Filter theo Ids (AI mode) ────────────────────────────────────────
@@ -114,6 +115,16 @@ public class MovieRepository : Repository<Movie>, IMovieRepository
             var to = DateTime.SpecifyKind(filter.ToReleaseDate.Value, DateTimeKind.Utc);
             query = query.Where(m => m.ReleaseDate <= to);
         }
+
+        // ── Sắp chiếu / Đã phát hành ─────────────────────────────────────────
+        // Tính runtime từ ReleaseDate so với thời điểm hiện tại — không lưu cờ
+        // trạng thái nào trong DB nên không cần cronjob quét/flip mỗi ngày.
+        // Mặc định (IsUpcoming = null): chỉ trả phim ĐÃ phát hành (browse bình thường
+        // không lẫn phim sắp chiếu). IsUpcoming = true: chỉ trả phim SẮP chiếu.
+        var now = DateTime.UtcNow;
+        query = filter.IsUpcoming == true
+            ? query.Where(m => m.ReleaseDate.HasValue && m.ReleaseDate.Value > now)
+            : query.Where(m => !m.ReleaseDate.HasValue || m.ReleaseDate.Value <= now);
 
         if (!string.IsNullOrWhiteSpace(filter.OriginCountry))
             query = query.Where(m => m.OriginCountry != null &&
