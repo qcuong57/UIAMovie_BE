@@ -1069,9 +1069,13 @@ public class MovieService : IMovieService
             .Select(v => v.VideoUrl)
             .FirstOrDefault(),
 
+        // Giới hạn 6 diễn viên đầu (giống TvShowService.MapToDTO) — tránh trả
+        // toàn bộ cast (kèm Biography/Birthday/ProfileImages từng người) cho
+        // các danh sách chỉ cần hiển thị sơ lược (banner, top rated, v.v.)
         Cast = m.MovieCasts?
             .OrderBy(c => c.Order)
             .Where(c => c.Person != null)
+            .Take(6)
             .Select(c => new MovieCastDTO
             {
                 Name = c.Person!.Name,
