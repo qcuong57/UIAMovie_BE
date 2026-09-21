@@ -80,8 +80,14 @@ public class MovieDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.TmdbId).IsUnique().HasFilter("\"TmdbId\" IS NOT NULL");
             entity.Property(e => e.ImdbRating).HasPrecision(4, 1);
-        });
 
+            // BỔ SUNG: Indexes cho AI filters & Browse nhanh
+            entity.HasIndex(e => e.ImdbRating);
+            entity.HasIndex(e => e.ReleaseDate);
+            entity.HasIndex(e => e.OriginCountry);
+            entity.HasIndex(e => new { e.IsPremium, e.IsPublished });
+            entity.HasIndex(e => new { e.ReleaseDate, e.ImdbRating });
+        });
         modelBuilder.Entity<MovieVideo>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -122,6 +128,13 @@ public class MovieDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.TmdbId).IsUnique().HasFilter("\"TmdbId\" IS NOT NULL");
             entity.Property(e => e.ImdbRating).HasPrecision(4, 1);
+
+            // BỔ SUNG: Indexes cho AI filters & Browse nhanh
+            entity.HasIndex(e => e.ImdbRating);
+            entity.HasIndex(e => e.FirstAirDate);
+            entity.HasIndex(e => e.OriginCountry);
+            entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => new { e.IsPremium, e.Status });
         });
 
 // ── Season ────────────────────────────────────────────────────────────────

@@ -4,11 +4,17 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using StackExchange.Redis;
 using UIAMovie.API.Filters;
+using UIAMovie.Application.AI.Intent;
+using UIAMovie.Application.AI.Orchestration;
+using UIAMovie.Application.AI.Retrieval;
+using UIAMovie.Application.AI.Tools;
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Application.Services;
 using UIAMovie.Application.Services.Payment;
 using UIAMovie.Application.Validators;
 using UIAMovie.Domain.Entities;
+using UIAMovie.Infrastructure.AI.Providers;
+using UIAMovie.Infrastructure.AI.Resilience;
 using UIAMovie.Infrastructure.Caching;
 using UIAMovie.Infrastructure.Configuration;
 using UIAMovie.Infrastructure.Data;
@@ -81,6 +87,24 @@ builder.Services.AddScoped<IRepository<Person>, Repository<Person>>();
 builder.Services.AddScoped<IRepository<MovieCast>, Repository<MovieCast>>();
 builder.Services.AddScoped<IRepository<MovieDirector>, Repository<MovieDirector>>();
 builder.Services.AddScoped<IRepository<MovieImage>, Repository<MovieImage>>();
+// Đăng ký cấu hình Options & Provider
+builder.Services.Configure<GroqOptions>(builder.Configuration.GetSection("Groq"));
+builder.Services.AddSingleton<IAiRateLimiter, SlidingWindowAiRateLimiter>();
+builder.Services.AddHttpClient<IAiProvider, GroqProvider>();
+
+// Đăng ký tầng Retrieval
+builder.Services.AddScoped<IMovieRetriever, MovieRetriever>();
+builder.Services.AddScoped<ITvShowRetriever, TvShowRetriever>();
+builder.Services.AddScoped<ISiteKnowledgeRetriever, SiteKnowledgeRetriever>();
+builder.Services.AddScoped<IUserContextRetriever, UserContextRetriever>();
+
+// Đăng ký Intent Router & Tools
+builder.Services.AddScoped<IAiRouter, AiRouter>();
+builder.Services.AddScoped<MovieCompareTool>();
+builder.Services.AddScoped<ReviewSummaryTool>();
+
+// Đăng ký Orchestrator
+builder.Services.AddScoped<IAiAssistantService, AiAssistantService>();
 builder.Services.AddHttpClient<IGroqService, GroqService>();
 builder.Services.AddScoped<ITvShowService, TvShowService>();
 builder.Services.AddScoped<IRepository<TvShowVideo>, Repository<TvShowVideo>>();

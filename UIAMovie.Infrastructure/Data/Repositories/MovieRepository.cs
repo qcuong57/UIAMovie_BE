@@ -42,26 +42,6 @@ public class MovieRepository : Repository<Movie>, IMovieRepository
             .ToListAsync();
     }
 
-    /// <summary>
-    /// FIX CHÍNH: Filter + Sort + Paginate trên DB — không load toàn bộ về RAM.
-    ///
-    /// Vấn đề cũ (MovieService.GetMoviesAsync):
-    ///   1. GetAllWithGenresAsync() → kéo toàn bộ bảng Movies về C#
-    ///   2. .Where() filter trong LINQ to Objects (chạy trong RAM)
-    ///   3. .Skip().Take() paginate trong RAM
-    ///   → Với 1000 phim: mỗi request tốn ~50-200MB RAM + rất chậm
-    ///
-    /// Giải pháp mới:
-    ///   1. Build IQueryable → EF dịch sang SQL
-    ///   2. Chạy Count() và ToListAsync() trực tiếp trên DB
-    ///   3. Chỉ kéo đúng số lượng cần (PageSize rows)
-    ///   → Với 1000 phim: chỉ trả về 20 rows + 1 COUNT query
-    ///
-    /// Lưu ý về Ids filter:
-    ///   - Khi có Ids (AI recommend/search): dùng WHERE IN → lấy các phim cụ thể
-    ///   - Thứ tự AI được giữ bằng cách sort trong C# sau khi query (chỉ với tập nhỏ)
-    ///   - Không dùng ORDER BY CASE trong SQL vì EF Core không support tốt với Guid
-    /// </summary>
     public async Task<(IEnumerable<Movie> Items, int TotalCount)> GetPagedAsync(FilterMoviesDTO filter)
     {
         var query = _context.Movies
@@ -71,15 +51,12 @@ public class MovieRepository : Repository<Movie>, IMovieRepository
             .Include(m => m.MovieVideos)
             .AsQueryable();
 
-        // ── Filter theo Ids (AI mode) ────────────────────────────────────────
+        // ── 1. Filter theo Ids (AI mode) ────────────────────────────────────────
         if (filter.Ids is { Count: > 0 })
         {
             query = query.Where(m => filter.Ids.Contains(m.Id));
-
-            // Với Ids filter, không cần các filter khác — trả về ngay
             var idItems = await query.ToListAsync();
 
-            // Giữ thứ tự AI (IndexOf chạy trên tập nhỏ — chấp nhận được)
             var ordered = idItems
                 .OrderBy(m => filter.Ids.IndexOf(m.Id))
                 .ToList();
@@ -87,9 +64,9 @@ public class MovieRepository : Repository<Movie>, IMovieRepository
             return (ordered, ordered.Count);
         }
 
-        // ── Các filter thông thường ──────────────────────────────────────────
-
-        if (!string.IsNullOrWhiteSpace(filter.Search))
+        // ── 2. Tìm kiếm tên phim ──────────────────────────────────────────────
+        var hasSearch = !string.IsNullOrWhiteSpace(filter.Search);
+        if (hasSearch)
         {
             var searchPattern = $"%{filter.Search.Trim()}%";
             query = query.Where(m => EF.Functions.ILike(m.Title, searchPattern));
@@ -116,21 +93,21 @@ public class MovieRepository : Repository<Movie>, IMovieRepository
             query = query.Where(m => m.ReleaseDate <= to);
         }
 
-        // ── Sắp chiếu / Đã phát hành ─────────────────────────────────────────
-        // Tính runtime từ ReleaseDate so với thời điểm hiện tại — không lưu cờ
-        // trạng thái nào trong DB nên không cần cronjob quét/flip mỗi ngày.
-        // Mặc định (IsUpcoming = null): chỉ trả phim ĐÃ phát hành (browse bình thường
-        // không lẫn phim sắp chiếu). IsUpcoming = true: chỉ trả phim SẮP chiếu.
+        // ── 3. FIX: Xử lý phim sắp chiếu vs đã phát hành ──────────────────────
+        // NẾU người dùng đang tìm kiếm đích danh từ khóa tên phim -> KHÔNG ĐƯỢC CHẶN PHIM SẮP CHIẾU
         var now = DateTime.UtcNow;
-        query = filter.IsUpcoming == true
-            ? query.Where(m => m.ReleaseDate.HasValue && m.ReleaseDate.Value > now)
-            : query.Where(m => !m.ReleaseDate.HasValue || m.ReleaseDate.Value <= now);
+        if (!hasSearch)
+        {
+            query = filter.IsUpcoming == true
+                ? query.Where(m => m.ReleaseDate.HasValue && m.ReleaseDate.Value > now)
+                : query.Where(m => !m.ReleaseDate.HasValue || m.ReleaseDate.Value <= now);
+        }
 
         if (!string.IsNullOrWhiteSpace(filter.OriginCountry))
             query = query.Where(m => m.OriginCountry != null &&
                                      m.OriginCountry.ToLower() == filter.OriginCountry.Trim().ToLower());
 
-        // ── Sort ─────────────────────────────────────────────────────────────
+        // ── 4. Sort ───────────────────────────────────────────────────────────
         query = filter.SortBy?.ToLower() switch
         {
             "title"       => filter.SortDesc
@@ -144,7 +121,6 @@ public class MovieRepository : Repository<Movie>, IMovieRepository
                                  : query.OrderBy(m => m.ImdbRating)
         };
 
-        // ── Count + Paginate — 2 queries thay vì load toàn bộ ───────────────
         var totalCount = await query.CountAsync();
 
         var items = await query
@@ -216,13 +192,11 @@ public class MovieRepository : Repository<Movie>, IMovieRepository
             .ToListAsync();
     }
 
-    /// <inheritdoc />
     public async Task<IEnumerable<TrendingMovieProjection>> GetTrendingAsync(
         DateTime cutoff7,
         DateTime cutoff30,
         int take = 20)
     {
-        // ── Bước 1: Tính views_7d và views_30d TRÊN DB ──────────────────────
         var viewStats = await _context.WatchHistories
             .AsNoTracking()
             .Where(wh => wh.WatchedAt >= cutoff30)
@@ -235,7 +209,6 @@ public class MovieRepository : Repository<Movie>, IMovieRepository
             })
             .ToDictionaryAsync(x => x.MovieId, x => x);
 
-        // ── Bước 2: Lấy phim published kèm Genres ──────────────────────────
         var movies = await _context.Movies
             .AsNoTracking()
             .Where(m => m.IsPublished)
@@ -243,7 +216,6 @@ public class MovieRepository : Repository<Movie>, IMovieRepository
                 .ThenInclude(g => g.Genre)
             .ToListAsync();
 
-        // ── Bước 3: Tính score trong C# ─────────────────────────────────────
         var now = DateTime.UtcNow;
         var result = movies
             .Select(m =>

@@ -78,7 +78,7 @@ public class TvShowRepository : Repository<TvShow>, ITvShowRepository
             .Include(t => t.TvShowVideos)
             .AsQueryable();
 
-        // ── Filter theo Ids (AI mode) ────────────────────────────────────────
+        // ── 1. Filter theo Ids (AI mode) ────────────────────────────────────────
         if (filter.Ids is { Count: > 0 })
         {
             query = query.Where(t => filter.Ids.Contains(t.Id));
@@ -91,9 +91,9 @@ public class TvShowRepository : Repository<TvShow>, ITvShowRepository
             return (ordered, ordered.Count);
         }
 
-        // ── Các filter thông thường ──────────────────────────────────────────
-
-        if (!string.IsNullOrWhiteSpace(filter.Search))
+        // ── 2. Tìm kiếm tên series ────────────────────────────────────────────
+        var hasSearch = !string.IsNullOrWhiteSpace(filter.Search);
+        if (hasSearch)
         {
             var searchPattern = $"%{filter.Search.Trim()}%";
             query = query.Where(t => EF.Functions.ILike(t.Title, searchPattern));
@@ -120,15 +120,15 @@ public class TvShowRepository : Repository<TvShow>, ITvShowRepository
             query = query.Where(t => t.FirstAirDate <= to);
         }
 
-        // ── Sắp lên sóng / Đã lên sóng ───────────────────────────────────────
-        // Tính runtime từ FirstAirDate so với thời điểm hiện tại — không lưu cờ
-        // trạng thái nào trong DB nên không cần cronjob quét/flip mỗi ngày.
-        // Mặc định (IsUpcoming = null): chỉ trả show ĐÃ lên sóng (browse bình thường
-        // không lẫn show sắp chiếu). IsUpcoming = true: chỉ trả show SẮP lên sóng.
+        // ── 3. FIX: Sắp lên sóng / Đã lên sóng ───────────────────────────────
+        // NẾU người dùng đang tìm kiếm theo từ khóa tên -> KHÔNG ĐƯỢC CHẶN SHOW SẮP LÊN SÓNG
         var now = DateTime.UtcNow;
-        query = filter.IsUpcoming == true
-            ? query.Where(t => t.FirstAirDate.HasValue && t.FirstAirDate.Value > now)
-            : query.Where(t => !t.FirstAirDate.HasValue || t.FirstAirDate.Value <= now);
+        if (!hasSearch)
+        {
+            query = filter.IsUpcoming == true
+                ? query.Where(t => t.FirstAirDate.HasValue && t.FirstAirDate.Value > now)
+                : query.Where(t => !t.FirstAirDate.HasValue || t.FirstAirDate.Value <= now);
+        }
 
         if (!string.IsNullOrWhiteSpace(filter.OriginCountry))
             query = query.Where(t => t.OriginCountry != null &&
@@ -138,7 +138,7 @@ public class TvShowRepository : Repository<TvShow>, ITvShowRepository
             query = query.Where(t => t.Status != null &&
                                      t.Status.ToLower() == filter.Status.Trim().ToLower());
 
-        // ── Sort ─────────────────────────────────────────────────────────────
+        // ── 4. Sort ─────────────────────────────────────────────────────────────
         query = filter.SortBy?.ToLower() switch
         {
             "title"        => filter.SortDesc

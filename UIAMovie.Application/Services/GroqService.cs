@@ -1,530 +1,209 @@
-﻿using System.Net.Http.Headers;
+﻿// UIAMovie.Infrastructure/Services/GroqService.cs
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
-using System.Threading.RateLimiting;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using UIAMovie.Application.AI;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Infrastructure.AI.Parsing;
+using UIAMovie.Infrastructure.AI.Providers;
 
 namespace UIAMovie.Infrastructure.Services;
 
-/// <summary>
-/// GroqService — llama-3.1-8b-instant via Groq API (OpenAI-compatible format).
-///
-/// Free tier: 14,400 RPD / 30 RPM / 6,000 TPM.
-///
-/// Fixes so với phiên bản cũ:
-///   [1] ChatAsync: nhận thêm List&lt;ChatMessageDTO&gt; history — truyền đa lượt vào messages[]
-///   [2] BuildCacheKey: dùng SHA256 thay GetHashCode() — ổn định qua process restart
-///   [3] SmartSearch cache key: normalize kỹ hơn (trim, collapse whitespace)
-///   [4] CallGroqAsync: hỗ trợ messages[] nhiều turn thay vì chỉ system + 1 user message
-///   [v2][5] MoodRecommendAsync: gợi ý phim theo tâm trạng
-///
-/// Fixes [v3]:
-///   [FIX-2] BuildMovieCsv đã xóa — dùng AiMovieCsvBuilder.Build() chung với Controller
-///   [FIX-6] SlidingWindowRateLimiter thay SemaphoreSlim — enforce đúng 30 RPM Groq free tier
-///
-/// Fixes [v4]:
-///   [FIX-7] Bỏ IDisposable — _rateLimiter là static field có lifetime bằng process,
-///           không được dispose theo instance. Dispose() cũ gây ObjectDisposedException
-///           khi DI tạo nhiều instance (scoped/transient) rồi dispose từng cái.
-///           Đăng ký Singleton trong DI để tránh tạo nhiều instance.
-///
-/// [v5] TV Show support:
-///   - RecommendTvShowsAsync: gợi ý series dựa trên lịch sử xem
-///   - SmartSearchTvShowsAsync: tìm kiếm series bằng ngôn ngữ tự nhiên
-///   - SelectTvShowsForRecommend / SelectTvShowsForSearch: helper riêng cho TvShowContext
-/// </summary>
 public sealed class GroqService : IGroqService
 {
-    // ── Dependencies ──────────────────────────────────────────────────────────
-    private readonly HttpClient           _http;
-    private readonly ICacheService        _cache;
+    private readonly IAiProvider _provider;
+    private readonly ICacheService _cache;
     private readonly ILogger<GroqService> _logger;
-    private readonly string               _baseUrl;
-    private readonly string               _model;
 
-    // ── Constants ─────────────────────────────────────────────────────────────
-    private const int MaxRetries          = 3;
     private const int RecommendMovieLimit = 20;
-    private const int SearchMovieLimit    = 25;
-    private const int MaxOutputTokens     = 256;
+    private const int SearchMovieLimit = 25;
+    private const int MaxOutputTokens = 500;
 
-    /// <summary>
-    /// [FIX-6] SlidingWindowRateLimiter: enforce đúng 30 RPM Groq free tier.
-    ///
-    /// SemaphoreSlim(5,5) cũ chỉ giới hạn concurrency — không ngăn được 30 request
-    /// cùng bắn trong 1 giây. SlidingWindowRateLimiter đếm request trong cửa sổ 60s
-    /// trượt liên tục → đúng với định nghĩa RPM.
-    ///
-    /// [FIX-7] static readonly — lifetime bằng process, KHÔNG dispose theo instance.
-    /// Nếu dispose, các request sau sẽ throw ObjectDisposedException.
-    /// </summary>
-    private static readonly RateLimiter _rateLimiter = new SlidingWindowRateLimiter(
-        new SlidingWindowRateLimiterOptions
-        {
-            PermitLimit          = 28,          // 28/30 — buffer 2 để tránh edge case
-            Window               = TimeSpan.FromMinutes(1),
-            SegmentsPerWindow    = 6,            // cửa sổ trượt 10s mỗi segment
-            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-            QueueLimit           = 10,           // tối đa 10 request xếp hàng chờ
-        });
-
-    // ── Constructor ───────────────────────────────────────────────────────────
     public GroqService(
-        HttpClient           http,
-        ICacheService        cache,
-        ILogger<GroqService> logger,
-        IConfiguration       config)
+        IAiProvider provider,
+        ICacheService cache,
+        ILogger<GroqService> logger)
     {
-        _http   = http;
-        _cache  = cache;
+        _provider = provider;
+        _cache = cache;
         _logger = logger;
-
-        var apiKey = config["Groq:ApiKey"]
-                     ?? throw new InvalidOperationException("Groq:ApiKey chưa được cấu hình.");
-
-        _baseUrl = config["Groq:BaseUrl"]
-                   ?? "https://api.groq.com/openai/v1/chat/completions";
-        _model   = config["Groq:Model"]
-                   ?? "llama-3.1-8b-instant";
-
-        _http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", apiKey);
     }
 
-    // ─── Chat ─────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Nhận history để AI nhớ ngữ cảnh hội thoại đa lượt.
-    ///
-    /// messages[] gửi lên Groq:
-    ///   [system]    → system prompt + movie context
-    ///   [user]      → turn 1 của người dùng
-    ///   [assistant] → reply turn 1
-    ///   [user]      → turn 2 ...
-    ///   [user]      → message hiện tại (mới nhất)
-    ///
-    /// Token estimate: 20 turns × ~80 tokens ≈ 1600 tokens history
-    ///   + system (~200) + movie context (~800) + reply (300) ≈ ~2900 tokens/request
-    ///   → an toàn với Groq 6000 TPM free tier.
-    /// </summary>
     public async Task<string> ChatAsync(
-        string                userMessage,
-        string?               systemContext = null,
-        List<ChatMessageDTO>? history       = null)
+        string userMessage,
+        string? systemContext = null,
+        List<ChatMessageDTO>? history = null)
     {
         var system = systemContext ?? MoviePrompts.ChatSystem;
-
-        var messages = new List<object>
+        var messages = new List<AiProviderMessage>
         {
-            new { role = "system", content = system }
+            new() { Role = "system", Content = system }
         };
 
         if (history is { Count: > 0 })
         {
-            foreach (var turn in history)
-            {
-                if (turn.Role is "user" or "assistant")
-                    messages.Add(new { role = turn.Role, content = turn.Content });
-            }
+            var trimmed = history
+                .Where(h => h.Role is "user" or "assistant" && !string.IsNullOrWhiteSpace(h.Content))
+                .TakeLast(8);
+
+            foreach (var h in trimmed)
+                messages.Add(new AiProviderMessage { Role = h.Role, Content = h.Content });
         }
 
-        messages.Add(new { role = "user", content = userMessage });
+        messages.Add(new AiProviderMessage { Role = "user", Content = userMessage });
 
-        var result = await CallGroqWithMessagesAsync(messages, maxTokens: 300);
+        var reply = await _provider.GenerateChatResponseAsync(
+            messages, new AiProviderOptions { MaxTokens = MaxOutputTokens });
 
-        return string.IsNullOrWhiteSpace(result)
-            ? "Xin lỗi, tôi đang bận. Vui lòng thử lại sau ít phút."
-            : result;
+        return string.IsNullOrWhiteSpace(reply)
+            ? "Xin lỗi, hệ thống AI đang quá tải. Bạn vui lòng thử lại sau ít phút nhé!"
+            : reply;
     }
 
-    // ─── Movie Recommend ──────────────────────────────────────────────────────
-
     public async Task<List<Guid>> RecommendMoviesAsync(
-        List<string>       watchedTitles,
-        List<string>       favoriteGenres,
+        List<string> watchedTitles,
+        List<string> favoriteGenres,
         List<MovieContext> availableMovies)
     {
         var cacheKey = BuildCacheKeyHash("rec", watchedTitles, favoriteGenres);
-        var cached   = await _cache.GetAsync<List<Guid>>(cacheKey);
+        var cached = await _cache.GetAsync<List<Guid>>(cacheKey);
         if (cached != null) return cached;
 
-        var subset      = SelectMoviesForRecommend(availableMovies, favoriteGenres, RecommendMovieLimit);
-        var movieCsv    = AiMovieCsvBuilder.Build(subset);
+        var subset = SelectMoviesForRecommend(availableMovies, favoriteGenres, RecommendMovieLimit);
+        var movieCsv = AiMovieCsvBuilder.Build(subset);
         var userMessage = MoviePrompts.BuildRecommendUser(
-            watched:  TruncateJoin(watchedTitles, 15),
-            genres:   string.Join(", ", favoriteGenres),
+            watched: string.Join(", ", watchedTitles.Take(15)),
+            genres: string.Join(", ", favoriteGenres),
             movieCsv: movieCsv);
 
         var result = await ParseJsonGuidArrayAsync(MoviePrompts.RecommendSystem, userMessage);
-
         if (result.Count > 0)
             await _cache.SetAsync(cacheKey, result, TimeSpan.FromMinutes(30));
 
         return result;
     }
 
-    // ─── Mood Recommend ───────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Gợi ý phim theo tâm trạng.
-    /// Token estimate: ~20 movies × 80 chars ≈ 500 tokens. Output: 8 GUIDs ≈ 35 tokens.
-    /// </summary>
-    public async Task<List<Guid>> MoodRecommendAsync(
-        string mood,
-        string targetGenres,
-        string movieCsv)
+    public async Task<List<Guid>> MoodRecommendAsync(string mood, string targetGenres, string movieCsv)
     {
         var userMessage = MoviePrompts.BuildMoodUser(mood, targetGenres, movieCsv);
         return await ParseJsonGuidArrayAsync(MoviePrompts.MoodSystem, userMessage);
     }
 
-    // ─── Movie Smart Search ───────────────────────────────────────────────────
-
     public async Task<List<Guid>> SmartSearchAsync(string query, List<MovieContext> availableMovies)
     {
-        var normalizedQuery = NormalizeSearchQuery(query);
-        var cacheKey        = $"ai:search:{normalizedQuery}";
-
+        var cacheKey = $"ai:search:{query.ToLowerInvariant().Trim()}";
         var cached = await _cache.GetAsync<List<Guid>>(cacheKey);
         if (cached != null) return cached;
 
-        var subset      = SelectMoviesForSearch(availableMovies, query, SearchMovieLimit);
-        var movieCsv    = AiMovieCsvBuilder.Build(subset);
+        var subset = SelectMoviesForSearch(availableMovies, query, SearchMovieLimit);
+        var movieCsv = AiMovieCsvBuilder.Build(subset);
         var userMessage = MoviePrompts.BuildSearchUser(query, movieCsv);
 
         var result = await ParseJsonGuidArrayAsync(MoviePrompts.SearchSystem, userMessage);
-
         if (result.Count > 0)
             await _cache.SetAsync(cacheKey, result, TimeSpan.FromMinutes(15));
 
         return result;
     }
 
-    // ─── TV Show Recommend ────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Gợi ý TV show dựa trên lịch sử xem.
-    /// Cache key: SHA256(watchedTitles + favoriteGenres) — TTL 30 phút.
-    /// Token estimate: ~20 shows × 130 chars ≈ 750 tokens input. Output: 9 GUIDs ≈ 36 tokens.
-    /// </summary>
     public async Task<List<Guid>> RecommendTvShowsAsync(
-        List<string>        watchedTitles,
-        List<string>        favoriteGenres,
+        List<string> watchedTitles,
+        List<string> favoriteGenres,
         List<TvShowContext> availableShows)
     {
         var cacheKey = BuildCacheKeyHash("tv:rec", watchedTitles, favoriteGenres);
-        var cached   = await _cache.GetAsync<List<Guid>>(cacheKey);
+        var cached = await _cache.GetAsync<List<Guid>>(cacheKey);
         if (cached != null) return cached;
 
-        var subset      = SelectTvShowsForRecommend(availableShows, favoriteGenres, RecommendMovieLimit);
-        var showCsv     = AiTvShowCsvBuilder.Build(subset);
+        var subset = SelectTvShowsForRecommend(availableShows, favoriteGenres, RecommendMovieLimit);
+        var showCsv = AiTvShowCsvBuilder.Build(subset);
         var userMessage = MoviePrompts.BuildTvShowRecommendUser(
-            watched: TruncateJoin(watchedTitles, 15),
-            genres:  string.Join(", ", favoriteGenres),
+            watched: string.Join(", ", watchedTitles.Take(15)),
+            genres: string.Join(", ", favoriteGenres),
             showCsv: showCsv);
 
         var result = await ParseJsonGuidArrayAsync(MoviePrompts.TvShowRecommendSystem, userMessage);
-
         if (result.Count > 0)
             await _cache.SetAsync(cacheKey, result, TimeSpan.FromMinutes(30));
 
         return result;
     }
 
-    // ─── TV Show Smart Search ─────────────────────────────────────────────────
-
-    /// <summary>
-    /// Tìm kiếm TV show bằng ngôn ngữ tự nhiên.
-    /// Cache key: "ai:tv:search:{normalizedQuery}" — TTL 15 phút.
-    /// Token estimate: ~25 shows × 130 chars ≈ 900 tokens. Output: 15 GUIDs ≈ 60 tokens.
-    /// </summary>
-    public async Task<List<Guid>> SmartSearchTvShowsAsync(
-        string             query,
-        List<TvShowContext> availableShows)
+    public async Task<List<Guid>> SmartSearchTvShowsAsync(string query, List<TvShowContext> availableShows)
     {
-        var normalizedQuery = NormalizeSearchQuery(query);
-        var cacheKey        = $"ai:tv:search:{normalizedQuery}";
-
+        var cacheKey = $"ai:tv:search:{query.ToLowerInvariant().Trim()}";
         var cached = await _cache.GetAsync<List<Guid>>(cacheKey);
         if (cached != null) return cached;
 
-        var subset      = SelectTvShowsForSearch(availableShows, query, SearchMovieLimit);
-        var showCsv     = AiTvShowCsvBuilder.Build(subset);
+        var subset = SelectTvShowsForSearch(availableShows, query, SearchMovieLimit);
+        var showCsv = AiTvShowCsvBuilder.Build(subset);
         var userMessage = MoviePrompts.BuildTvShowSearchUser(query, showCsv);
 
         var result = await ParseJsonGuidArrayAsync(MoviePrompts.TvShowSearchSystem, userMessage);
-
         if (result.Count > 0)
             await _cache.SetAsync(cacheKey, result, TimeSpan.FromMinutes(15));
 
         return result;
     }
 
-    // ─── Private Helpers ──────────────────────────────────────────────────────
-
-    // ── Movie selectors ───────────────────────────────────────────────────────
-
-    private static List<MovieContext> SelectMoviesForRecommend(
-        List<MovieContext> all, List<string> genres, int limit)
-    {
-        var genreSet = genres.Select(g => g.ToLowerInvariant()).ToHashSet();
-
-        return all
-            .Where(m => !string.IsNullOrWhiteSpace(m.Description))
-            .OrderByDescending(m =>
-                m.Genres.Split(',').Any(g => genreSet.Contains(g.Trim().ToLowerInvariant())) ? 1 : 0)
-            .ThenByDescending(m => m.Rating)
-            .Take(limit)
-            .Concat(all
-                .Where(m => string.IsNullOrWhiteSpace(m.Description))
-                .OrderByDescending(m => m.Rating))
-            .Take(limit)
-            .ToList();
-    }
-
-    private static List<MovieContext> SelectMoviesForSearch(
-        List<MovieContext> all, string query, int limit)
-    {
-        var queryTokens = query
-            .ToLowerInvariant()
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Where(t => t.Length > 2)
-            .ToHashSet();
-
-        return all
-            .OrderByDescending(m =>
-            {
-                var hasDesc  = string.IsNullOrWhiteSpace(m.Description) ? 0 : 2;
-                var titleHit = queryTokens.Any(t => m.Title.ToLowerInvariant().Contains(t)) ? 3 : 0;
-                var genreHit = queryTokens.Any(t => m.Genres.ToLowerInvariant().Contains(t)) ? 1 : 0;
-                var descHit  = !string.IsNullOrWhiteSpace(m.Description) &&
-                               queryTokens.Any(t => m.Description.ToLowerInvariant().Contains(t)) ? 2 : 0;
-                return hasDesc + titleHit + genreHit + descHit + m.Rating * 0.1;
-            })
-            .Take(limit)
-            .ToList();
-    }
-
-    // ── TV Show selectors ─────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Chọn top N shows phù hợp nhất để đưa vào prompt recommend.
-    /// Ưu tiên: có description → genre match → rating cao.
-    /// </summary>
-    private static List<TvShowContext> SelectTvShowsForRecommend(
-        List<TvShowContext> all, List<string> genres, int limit)
-    {
-        var genreSet = genres.Select(g => g.ToLowerInvariant()).ToHashSet();
-
-        return all
-            .Where(s => !string.IsNullOrWhiteSpace(s.Description))
-            .OrderByDescending(s =>
-                s.Genres.Split(',').Any(g => genreSet.Contains(g.Trim().ToLowerInvariant())) ? 1 : 0)
-            .ThenByDescending(s => s.Rating)
-            .Take(limit)
-            .Concat(all
-                .Where(s => string.IsNullOrWhiteSpace(s.Description))
-                .OrderByDescending(s => s.Rating))
-            .Take(limit)
-            .ToList();
-    }
-
-    /// <summary>
-    /// Chọn top N shows phù hợp nhất cho search.
-    /// Score: title match (3) > desc match (2) > has desc (2) > genre match (1) > rating (0.1).
-    /// </summary>
-    private static List<TvShowContext> SelectTvShowsForSearch(
-        List<TvShowContext> all, string query, int limit)
-    {
-        var queryTokens = query
-            .ToLowerInvariant()
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Where(t => t.Length > 2)
-            .ToHashSet();
-
-        return all
-            .OrderByDescending(s =>
-            {
-                var hasDesc  = string.IsNullOrWhiteSpace(s.Description) ? 0 : 2;
-                var titleHit = queryTokens.Any(t => s.Title.ToLowerInvariant().Contains(t)) ? 3 : 0;
-                var genreHit = queryTokens.Any(t => s.Genres.ToLowerInvariant().Contains(t)) ? 1 : 0;
-                var descHit  = !string.IsNullOrWhiteSpace(s.Description) &&
-                               queryTokens.Any(t => s.Description.ToLowerInvariant().Contains(t)) ? 2 : 0;
-                return hasDesc + titleHit + genreHit + descHit + s.Rating * 0.1;
-            })
-            .Take(limit)
-            .ToList();
-    }
-
-    // ── Shared helpers ────────────────────────────────────────────────────────
-
-    private static string TruncateJoin(IEnumerable<string> items, int max)
-        => string.Join(", ", items.Take(max));
-
-    /// <summary>
-    /// SHA256 hash ổn định — không phụ thuộc vào .NET runtime version.
-    /// </summary>
-    private static string BuildCacheKeyHash(string prefix, List<string> a, List<string> b)
-    {
-        var raw   = string.Join(",", a.Take(10).OrderBy(x => x))
-                  + "|"
-                  + string.Join(",", b.OrderBy(x => x));
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
-        var hash  = Convert.ToHexString(bytes)[..16];
-        return $"ai:{prefix}:{hash}";
-    }
-
-    /// <summary>
-    /// Normalize search query để tăng cache hit rate.
-    /// </summary>
-    private static string NormalizeSearchQuery(string query)
-        => System.Text.RegularExpressions.Regex
-            .Replace(query.ToLowerInvariant().Trim(), @"\s+", " ");
-
-    private static string ExtractJsonArray(string raw)
-    {
-        var start = raw.IndexOf('[');
-        var end   = raw.LastIndexOf(']');
-        return start != -1 && end != -1 && end >= start
-            ? raw.Substring(start, end - start + 1)
-            : raw;
-    }
-
     private async Task<List<Guid>> ParseJsonGuidArrayAsync(string systemPrompt, string userMessage)
     {
-        try
-        {
-            var messages = new List<object>
+        var raw = await _provider.GenerateChatResponseAsync(
+            new List<AiProviderMessage>
             {
-                new { role = "system", content = systemPrompt },
-                new { role = "user",   content = userMessage  }
-            };
+                new() { Role = "system", Content = systemPrompt },
+                new() { Role = "user", Content = userMessage }
+            },
+            new AiProviderOptions { MaxTokens = MaxOutputTokens, EnforceJsonObject = false });
 
-            var raw = await CallGroqWithMessagesAsync(messages, MaxOutputTokens);
-            if (string.IsNullOrWhiteSpace(raw)) return [];
-
-            var json = ExtractJsonArray(raw);
-
-            using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.EnumerateArray()
-                      .Select(e => e.GetString())
-                      .Where(s => Guid.TryParse(s, out _))
-                      .Select(s => Guid.Parse(s!))
-                      .Distinct()
-                      .ToList();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[Groq] ParseJsonGuidArray failed — response không phải JSON hợp lệ");
-            return [];
-        }
+        return AiJsonParser.ParseGuidArray(raw, _logger);
     }
 
-    // ─── Core HTTP call với rate limiting + exponential backoff ───────────────
-
-    /// <summary>
-    /// [FIX-6] SlidingWindowRateLimiter — đảm bảo không vượt 30 RPM Groq free tier.
-    /// Nếu hàng chờ đầy (QueueLimit = 10) → RateLimitLease.IsAcquired = false → trả empty.
-    /// </summary>
-    private async Task<string> CallGroqWithMessagesAsync(
-        List<object> messages,
-        int          maxTokens = MaxOutputTokens)
+    private static List<MovieContext> SelectMoviesForRecommend(List<MovieContext> all, List<string> genres, int limit)
     {
-        using var lease = await _rateLimiter.AcquireAsync(permitCount: 1);
-
-        if (!lease.IsAcquired)
-        {
-            _logger.LogWarning("[Groq] Rate limit queue đầy — bỏ qua request.");
-            return string.Empty;
-        }
-
-        return await CallGroqInternalAsync(messages, maxTokens);
+        var genreSet = genres.Select(g => g.ToLowerInvariant()).ToHashSet();
+        return all
+            .Where(m => !string.IsNullOrWhiteSpace(m.Description))
+            .OrderByDescending(m => m.Genres.Split(',').Any(g => genreSet.Contains(g.Trim().ToLowerInvariant())) ? 1 : 0)
+            .ThenByDescending(m => m.Rating)
+            .Take(limit)
+            .ToList();
     }
 
-    private async Task<string> CallGroqInternalAsync(List<object> messages, int maxTokens)
+    private static List<MovieContext> SelectMoviesForSearch(List<MovieContext> all, string query, int limit)
     {
-        for (var attempt = 1; attempt <= MaxRetries; attempt++)
-        {
-            try
-            {
-                var payload = new
-                {
-                    model       = _model,
-                    messages    = messages,
-                    max_tokens  = maxTokens,
-                    temperature = 0.2
-                };
-
-                var content  = new StringContent(
-                    JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-
-                var response = await _http.PostAsync(_baseUrl, content);
-                var body     = await response.Content.ReadAsStringAsync();
-
-                if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
-                   (int)response.StatusCode >= 500)
-                {
-                    var delay = attempt * 2_000;
-                    _logger.LogWarning(
-                        "[Groq] HTTP {Code} — attempt {Attempt}/{Max}, waiting {Delay}ms",
-                        (int)response.StatusCode, attempt, MaxRetries, delay);
-
-                    if (attempt < MaxRetries)
-                    {
-                        await Task.Delay(delay);
-                        continue;
-                    }
-
-                    _logger.LogError("[Groq] Quota exhausted hoặc Server down sau {Max} attempts.", MaxRetries);
-                    return string.Empty;
-                }
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    _logger.LogError("[Groq] HTTP {Code}: {Body}", response.StatusCode, body);
-                    throw new InvalidOperationException($"Groq API error {response.StatusCode}: {body}");
-                }
-
-                using var doc = JsonDocument.Parse(body);
-                var text = doc.RootElement
-                              .GetProperty("choices")[0]
-                              .GetProperty("message")
-                              .GetProperty("content")
-                              .GetString();
-
-                if (string.IsNullOrWhiteSpace(text))
-                    _logger.LogWarning("[Groq] HTTP 200 nhưng content rỗng — có thể bị safety filter.");
-
-                return text ?? string.Empty;
-            }
-            catch (HttpRequestException ex)
-            {
-                var delay = 1_000 * attempt;
-                _logger.LogWarning(ex,
-                    "[Groq] Network error attempt {Attempt}/{Max}, retry in {Delay}ms",
-                    attempt, MaxRetries, delay);
-
-                if (attempt == MaxRetries)
-                {
-                    _logger.LogError("[Groq] Không thể kết nối sau {Max} attempts.", MaxRetries);
-                    return string.Empty;
-                }
-
-                await Task.Delay(delay);
-            }
-        }
-
-        return string.Empty;
+        var tokens = query.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+        return all
+            .OrderByDescending(m => (tokens.Any(t => m.Title.ToLowerInvariant().Contains(t)) ? 3 : 0) + m.Rating * 0.1)
+            .Take(limit)
+            .ToList();
     }
 
-    // [FIX-7] KHÔNG implement IDisposable và KHÔNG dispose _rateLimiter.
-    // _rateLimiter là static field — lifetime bằng process.
-    // Dispose theo instance sẽ gây ObjectDisposedException cho toàn bộ request sau đó.
-    // Đăng ký service này là Singleton trong DI (Program.cs):
-    //   builder.Services.AddSingleton<IGroqService, GroqService>();
+    private static List<TvShowContext> SelectTvShowsForRecommend(List<TvShowContext> all, List<string> genres, int limit)
+    {
+        var genreSet = genres.Select(g => g.ToLowerInvariant()).ToHashSet();
+        return all
+            .Where(s => !string.IsNullOrWhiteSpace(s.Description))
+            .OrderByDescending(s => s.Genres.Split(',').Any(g => genreSet.Contains(g.Trim().ToLowerInvariant())) ? 1 : 0)
+            .ThenByDescending(s => s.Rating)
+            .Take(limit)
+            .ToList();
+    }
+
+    private static List<TvShowContext> SelectTvShowsForSearch(List<TvShowContext> all, string query, int limit)
+    {
+        var tokens = query.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+        return all
+            .OrderByDescending(s => (tokens.Any(t => s.Title.ToLowerInvariant().Contains(t)) ? 3 : 0) + s.Rating * 0.1)
+            .Take(limit)
+            .ToList();
+    }
+
+    private static string BuildCacheKeyHash(string prefix, List<string> a, List<string> b)
+    {
+        var raw = string.Join(",", a.Take(10).OrderBy(x => x)) + "|" + string.Join(",", b.OrderBy(x => x));
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)))[..16];
+        return $"ai:{prefix}:{hash}";
+    }
 }
