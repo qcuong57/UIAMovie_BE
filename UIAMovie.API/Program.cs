@@ -30,10 +30,7 @@ using UIAMovie.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.WebHost.ConfigureKestrel(options =>
-{
-    options.Limits.MaxRequestBodySize = 500 * 1024 * 1024;
-});
+builder.WebHost.ConfigureKestrel(options => { options.Limits.MaxRequestBodySize = 500 * 1024 * 1024; });
 
 // Database
 builder.Services.AddDbContext<MovieDbContext>(options =>
@@ -159,6 +156,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 {
                     context.Token = accessToken;
                 }
+
                 return Task.CompletedTask;
             }
         };
@@ -166,7 +164,13 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 // CORS: Whitelist domain
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
-    ?? new[] { "http://localhost:3000", "http://localhost:5173" };
+                     ?? new[]
+                     {
+                         "http://localhost:3000",
+                         "http://localhost:5173",
+                         "https://uiamovie-fe.vercel.app", // ← Thêm domain Vercel của bạn
+                         "https://*.vercel.app" // ← Hoặc cho phép tất cả Vercel domain
+                     };
 
 builder.Services.AddCors(options =>
 {
@@ -198,10 +202,7 @@ builder.Services.AddControllers()
     {
         options.InvalidModelStateResponseFactory = ValidationErrorFilter.Handler;
     })
-    .AddJsonOptions(options =>
-    {
-        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
-    });
+    .AddJsonOptions(options => { options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()); });
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
