@@ -3,7 +3,6 @@ using UIAMovie.Application.Interfaces;
 
 namespace UIAMovie.Infrastructure.Security;
 
-
 public class TwoFactorAuthProvider : ITwoFactorAuthProvider
 {
     public string GenerateSecret()
@@ -17,9 +16,8 @@ public class TwoFactorAuthProvider : ITwoFactorAuthProvider
         try
         {
             var bytes = Base32Encoding.ToBytes(secret);
-            var totp = new Totp(bytes);
-            var result = totp.VerifyTotp(code, out long _);
-            return result;
+            var totp  = new Totp(bytes);
+            return totp.VerifyTotp(code, out long _);
         }
         catch
         {
@@ -29,6 +27,6 @@ public class TwoFactorAuthProvider : ITwoFactorAuthProvider
 
     public string GenerateQrCodeUri(string email, string secret)
     {
-        return $"otpauth://totp/NetflixClone:{email}?secret={secret}&issuer=NetflixClone";
+        return $"otpauth://totp/UIAMovie:{email}?secret={secret}&issuer=UIAMovie";
     }
 }

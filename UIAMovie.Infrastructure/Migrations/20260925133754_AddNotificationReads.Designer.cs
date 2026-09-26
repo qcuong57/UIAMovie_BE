@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using UIAMovie.Infrastructure.Data;
@@ -11,9 +12,11 @@ using UIAMovie.Infrastructure.Data;
 namespace UIAMovie.Infrastructure.Migrations
 {
     [DbContext(typeof(MovieDbContext))]
-    partial class MovieDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260925133754_AddNotificationReads")]
+    partial class AddNotificationReads
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -604,9 +607,6 @@ namespace UIAMovie.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("ThumbnailUrl")
-                        .HasColumnType("text");
-
                     b.Property<string>("Title")
                         .IsRequired()
                         .HasColumnType("text");
@@ -633,9 +633,6 @@ namespace UIAMovie.Infrastructure.Migrations
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
-
-                    b.Property<bool>("IsDismissed")
-                        .HasColumnType("boolean");
 
                     b.Property<DateTime>("ReadAt")
                         .HasColumnType("timestamp with time zone");
@@ -1194,7 +1191,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$yycfrwYliG1a.4zlnwVGHetlOF/J42jZmsJY8uhfDC0jyL3DjgCLi",
+                            PasswordHash = "$2a$11$1hHDf6S0c0co0r5zUFfvpuPddkPqI2QIbXyeopK2qhXgkMTCfKwmK",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),

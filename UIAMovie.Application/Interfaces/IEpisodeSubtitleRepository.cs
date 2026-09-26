@@ -27,5 +27,5 @@ public interface IEpisodeSubtitleRepository : IRepository<EpisodeSubtitle>
     void Remove(EpisodeSubtitle entity);
 
     /// <summary>Flush toàn bộ thay đổi pending xuống DB.</summary>
-    Task SaveChangesAsync();
+    Task SaveChangesAsync(CancellationToken ct = default);
 }

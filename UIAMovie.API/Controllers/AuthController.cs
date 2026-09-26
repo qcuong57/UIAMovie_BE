@@ -1,7 +1,7 @@
-﻿// UIAMovie.API/Controllers/AuthController.cs
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Services;
 
@@ -20,12 +20,8 @@ public class AuthController : ControllerBase
 
     // ─── Register ────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Bước 1: Gửi thông tin đăng ký.
-    /// Hệ thống gửi OTP về email, chưa lưu vào DB.
-    /// Gọi /register/verify-otp để hoàn tất.
-    /// </summary>
     [HttpPost("register")]
+    [EnableRateLimiting("auth-strict")]
     public async Task<IActionResult> Register([FromBody] RegisterDTO dto)
     {
         if (!ModelState.IsValid)
@@ -50,11 +46,8 @@ public class AuthController : ControllerBase
             : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 
-    /// <summary>
-    /// Bước 2: Xác nhận OTP đăng ký.
-    /// Đúng OTP → tạo User trong DB và trả về thành công.
-    /// </summary>
     [HttpPost("register/verify-otp")]
+    [EnableRateLimiting("auth-strict")]
     public async Task<IActionResult> VerifyRegisterOtp([FromBody] VerifyRegisterOtpDTO dto)
     {
         if (!ModelState.IsValid)
@@ -76,22 +69,22 @@ public class AuthController : ControllerBase
 
     // ─── Login ───────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Đăng nhập.
-    /// Nếu 2FA bật → OTP tự động gửi về email, response trả về userId để dùng cho /otp/verify.
-    /// </summary>
     [HttpPost("login")]
+    [EnableRateLimiting("auth-strict")]
     public async Task<IActionResult> Login([FromBody] LoginDTO dto)
     {
         var (result, pendingUserId, errorMessage, banReason) =
             await _authService.LoginAsync(dto.Email, dto.Password);
 
         if (result != null)
+        {
+            SetRefreshTokenCookie(result.RefreshToken);
             return Ok(new ApiResponseDTO<LoginResponseDTO>
             {
                 Data    = result,
                 Message = "Đăng nhập thành công"
             });
+        }
 
         if (pendingUserId.HasValue)
             return Ok(new ApiResponseDTO<object>
@@ -117,8 +110,8 @@ public class AuthController : ControllerBase
 
     // ─── OTP ─────────────────────────────────────────────────────────────────
 
-    /// <summary>Gửi lại OTP (dùng khi OTP hết hạn hoặc không nhận được email)</summary>
     [HttpPost("otp/send")]
+    [EnableRateLimiting("auth-strict")]
     public async Task<IActionResult> SendOtp([FromBody] SendOtpDTO dto)
     {
         var success = await _authService.SendOtpAsync(dto.UserId);
@@ -127,34 +120,31 @@ public class AuthController : ControllerBase
             : BadRequest(new ApiErrorResponseDTO { Message = "Không tìm thấy user", StatusCode = 400 });
     }
 
-    /// <summary>
-    /// Xác thực OTP sau khi login (2FA) hoặc sau khi bật 2FA.
-    /// Trả về accessToken + refreshToken nếu đúng.
-    /// </summary>
     [HttpPost("otp/verify")]
+    [EnableRateLimiting("auth-strict")]
     public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpDTO dto)
     {
         var result = await _authService.VerifyOtpAsync(dto.UserId, dto.Code);
 
-        return result != null
-            ? Ok(new ApiResponseDTO<LoginResponseDTO>
+        if (result != null)
+        {
+            SetRefreshTokenCookie(result.RefreshToken);
+            return Ok(new ApiResponseDTO<LoginResponseDTO>
             {
                 Data    = result,
                 Message = "Xác thực OTP thành công"
-            })
-            : BadRequest(new ApiErrorResponseDTO
-            {
-                Message    = "Mã OTP không đúng hoặc đã hết hạn",
-                StatusCode = 400
             });
+        }
+
+        return BadRequest(new ApiErrorResponseDTO
+        {
+            Message    = "Mã OTP không đúng hoặc đã hết hạn",
+            StatusCode = 400
+        });
     }
 
     // ─── 2FA ─────────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Bật 2FA — gửi OTP về email để xác nhận.
-    /// Sau đó gọi /otp/verify để hoàn tất.
-    /// </summary>
     [HttpPost("2fa/enable")]
     [Authorize]
     public async Task<IActionResult> Enable2FA()
@@ -165,7 +155,7 @@ public class AuthController : ControllerBase
         return success
             ? Ok(new ApiResponseDTO<object>
             {
-                Message = "OTP đã gửi đến email, gọi /otp/verify để bật 2FA"
+                Message = "OTP đã gửi đến email, gọi /api/auth/2fa/confirm để hoàn tất bật 2FA"
             })
             : BadRequest(new ApiErrorResponseDTO
             {
@@ -174,15 +164,23 @@ public class AuthController : ControllerBase
             });
     }
 
-    /// <summary>
-    /// Tắt 2FA — xác thực OTP rồi set Is2FaEnabled = false.
-    /// Body: { userId, code }
-    /// </summary>
+    [HttpPost("2fa/confirm")]
+    [Authorize]
+    public async Task<IActionResult> ConfirmEnable2FA([FromBody] VerifyOtpDTO dto)
+    {
+        var userId = GetUserId();
+        var (success, message) = await _authService.ConfirmEnable2FAAsync(userId, dto.Code);
+
+        return success
+            ? Ok(new ApiResponseDTO<object> { Message = message })
+            : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
+    }
+
     [HttpPost("2fa/disable")]
     [Authorize]
     public async Task<IActionResult> Disable2FA([FromBody] VerifyOtpDTO dto)
     {
-        var userId          = GetUserId();
+        var userId             = GetUserId();
         var (success, message) = await _authService.Disable2FAAsync(userId, dto.Code);
 
         return success
@@ -192,59 +190,83 @@ public class AuthController : ControllerBase
 
     // ─── Forgot / Reset Password ─────────────────────────────────────────────
 
-    /// <summary>Quên mật khẩu — gửi OTP về email</summary>
     [HttpPost("forgot-password")]
+    [EnableRateLimiting("auth-strict")]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordDTO dto)
     {
         await _authService.ForgotPasswordAsync(dto.Email);
-        // Luôn trả OK để không tiết lộ email có tồn tại hay không
         return Ok(new ApiResponseDTO<object>
         {
             Message = "Nếu email tồn tại, mã OTP đã được gửi"
         });
     }
 
-    /// <summary>Đặt lại mật khẩu bằng OTP nhận từ email</summary>
     [HttpPost("reset-password")]
+    [EnableRateLimiting("auth-strict")]
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDTO dto)
     {
-        if (dto.NewPassword != dto.ConfirmPassword)
+        if (!ModelState.IsValid)
             return BadRequest(new ApiErrorResponseDTO
             {
-                Message    = "Mật khẩu xác nhận không khớp",
+                Message = ModelState.Values
+                    .SelectMany(v => v.Errors)
+                    .Select(e => e.ErrorMessage)
+                    .FirstOrDefault() ?? "Dữ liệu không hợp lệ",
                 StatusCode = 400
             });
 
         var success = await _authService.ResetPasswordAsync(
             dto.Email, dto.Code, dto.NewPassword);
 
-        return success
-            ? Ok(new ApiResponseDTO<object> { Message = "Đặt lại mật khẩu thành công" })
-            : BadRequest(new ApiErrorResponseDTO
-            {
-                Message    = "Mã OTP không đúng hoặc đã hết hạn",
-                StatusCode = 400
-            });
+        if (success)
+        {
+            DeleteRefreshTokenCookie();
+            return Ok(new ApiResponseDTO<object> { Message = "Đặt lại mật khẩu thành công" });
+        }
+
+        return BadRequest(new ApiErrorResponseDTO
+        {
+            Message    = "Mã OTP không đúng hoặc đã hết hạn",
+            StatusCode = 400
+        });
     }
 
-    // ─── Refresh Token ───────────────────────────────────────────────────────
+    // ─── Refresh Token (HttpOnly Cookie) ──────────────────────────────────────
 
     [HttpPost("refresh-token")]
-    public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenDTO dto)
+    public async Task<IActionResult> RefreshToken()
     {
-        var result = await _authService.RefreshTokenAsync(dto.RefreshToken);
+        // Tự động đọc Refresh Token từ HttpOnly Cookie an toàn
+        var refreshToken = Request.Cookies["refreshToken"];
 
-        return result != null
-            ? Ok(new ApiResponseDTO<LoginResponseDTO>
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            return Unauthorized(new ApiErrorResponseDTO
             {
-                Data    = result,
-                Message = "Refresh token thành công"
-            })
-            : Unauthorized(new ApiErrorResponseDTO
+                Message    = "Không tìm thấy refresh token trong cookie",
+                StatusCode = 401
+            });
+        }
+
+        var result = await _authService.RefreshTokenAsync(refreshToken);
+
+        if (result == null)
+        {
+            DeleteRefreshTokenCookie();
+            return Unauthorized(new ApiErrorResponseDTO
             {
                 Message    = "Refresh token không hợp lệ hoặc đã hết hạn",
                 StatusCode = 401
             });
+        }
+
+        SetRefreshTokenCookie(result.RefreshToken);
+
+        return Ok(new ApiResponseDTO<LoginResponseDTO>
+        {
+            Data    = result,
+            Message = "Refresh token thành công"
+        });
     }
 
     // ─── Logout ──────────────────────────────────────────────────────────────
@@ -254,12 +276,43 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> Logout()
     {
         await _authService.LogoutAsync(GetUserId());
+        DeleteRefreshTokenCookie();
         return Ok(new ApiResponseDTO<object> { Message = "Đăng xuất thành công" });
     }
 
-    // ─── Helper ──────────────────────────────────────────────────────────────
+    // ─── Helper Cookies & Claims ─────────────────────────────────────────────
 
-    private Guid GetUserId() =>
-        Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-            ?? Guid.Empty.ToString());
+    private void SetRefreshTokenCookie(string token)
+    {
+        var cookieOptions = new CookieOptions
+        {
+            HttpOnly = true,                                     // Chống đọc trộm bằng JS / XSS
+            Secure = true,                                       // Luôn đi qua HTTPS
+            SameSite = SameSiteMode.None,                        // Hỗ trợ gọi chéo domain/port giữa FE và BE
+            Expires = DateTimeOffset.UtcNow.AddDays(7),
+            Path = "/"
+        };
+
+        Response.Cookies.Append("refreshToken", token, cookieOptions);
+    }
+
+    private void DeleteRefreshTokenCookie()
+    {
+        Response.Cookies.Delete("refreshToken", new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = true,
+            SameSite = SameSiteMode.None,
+            Path = "/"
+        });
+    }
+
+    private Guid GetUserId()
+    {
+        var claim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (!Guid.TryParse(claim, out var userId))
+            throw new UnauthorizedAccessException("Không xác định được người dùng từ token");
+
+        return userId;
+    }
 }

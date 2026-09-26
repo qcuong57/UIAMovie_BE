@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using UIAMovie.Infrastructure.Data;
@@ -11,9 +12,11 @@ using UIAMovie.Infrastructure.Data;
 namespace UIAMovie.Infrastructure.Migrations
 {
     [DbContext(typeof(MovieDbContext))]
-    partial class MovieDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260924144322_AddNotificationsTable")]
+    partial class AddNotificationsTable
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -598,53 +601,38 @@ namespace UIAMovie.Infrastructure.Migrations
                         .HasColumnType("boolean");
 
                     b.Property<string>("LinkUrl")
-                        .HasColumnType("text");
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<string>("Message")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("ThumbnailUrl")
-                        .HasColumnType("text");
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
 
                     b.Property<string>("Title")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<string>("Type")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid?>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId", "CreatedAt")
-                        .IsDescending(false, true);
-
-                    b.ToTable("Notifications");
-                });
-
-            modelBuilder.Entity("UIAMovie.Domain.Entities.NotificationRead", b =>
-                {
-                    b.Property<Guid>("NotificationId")
-                        .HasColumnType("uuid");
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasDefaultValue("general");
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
-                    b.Property<bool>("IsDismissed")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("ReadAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("NotificationId", "UserId");
+                    b.HasKey("Id");
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("NotificationReads");
+                    b.HasIndex("UserId", "CreatedAt");
+
+                    b.HasIndex("UserId", "IsRead");
+
+                    b.ToTable("Notifications");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.PaymentOrder", b =>
@@ -1194,7 +1182,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$yycfrwYliG1a.4zlnwVGHetlOF/J42jZmsJY8uhfDC0jyL3DjgCLi",
+                            PasswordHash = "$2a$11$XCXC4xGsDJXbrGtoL87qyeE/cuIwZFZTYq0y3tZk9yHCNY0oHps5y",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
@@ -1457,9 +1445,13 @@ namespace UIAMovie.Infrastructure.Migrations
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.Notification", b =>
                 {
-                    b.HasOne("UIAMovie.Domain.Entities.User", null)
+                    b.HasOne("UIAMovie.Domain.Entities.User", "User")
                         .WithMany("Notifications")
-                        .HasForeignKey("UserId");
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.PaymentOrder", b =>

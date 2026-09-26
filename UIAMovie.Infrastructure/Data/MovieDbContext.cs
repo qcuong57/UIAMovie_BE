@@ -13,7 +13,8 @@ public class MovieDbContext : DbContext
     // ── DbSets ───────────────────────────────────────────────────────────────
     public DbSet<User> Users { get; set; }
     public DbSet<UserSession> UserSessions { get; set; }
-
+    public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<NotificationRead> NotificationReads => Set<NotificationRead>();
     public DbSet<Movie> Movies { get; set; }
     public DbSet<MovieVideo> MovieVideos { get; set; }
     public DbSet<MovieImage> MovieImages { get; set; }
@@ -22,7 +23,7 @@ public class MovieDbContext : DbContext
     public DbSet<MovieGenre> MovieGenres { get; set; }
 
     public DbSet<Person> Persons { get; set; }
-    public DbSet<PersonImage> PersonImages { get; set; } // ← mới
+    public DbSet<PersonImage> PersonImages { get; set; }
     public DbSet<MovieCast> MovieCasts { get; set; }
     public DbSet<MovieDirector> MovieDirectors { get; set; }
 
@@ -50,7 +51,6 @@ public class MovieDbContext : DbContext
     public DbSet<GlobalAdSlot> GlobalAdSlots { get; set; }
     public DbSet<AdContentOverride> AdContentOverrides { get; set; }
 
-
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -74,6 +74,19 @@ public class MovieDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        // ── Notification (MỚI) ────────────────────────────────────────────────
+        modelBuilder.Entity<Notification>(b =>
+        {
+            b.HasKey(n => n.Id);
+            b.HasIndex(n => new { n.UserId, n.CreatedAt }).IsDescending(false, true);
+        });
+
+        modelBuilder.Entity<NotificationRead>(b =>
+        {
+            b.HasKey(nr => new { nr.NotificationId, nr.UserId });
+            b.HasIndex(nr => nr.UserId);
+        });
+
         // ── Movie ─────────────────────────────────────────────────────────────
         modelBuilder.Entity<Movie>(entity =>
         {
@@ -81,13 +94,13 @@ public class MovieDbContext : DbContext
             entity.HasIndex(e => e.TmdbId).IsUnique().HasFilter("\"TmdbId\" IS NOT NULL");
             entity.Property(e => e.ImdbRating).HasPrecision(4, 1);
 
-            // BỔ SUNG: Indexes cho AI filters & Browse nhanh
             entity.HasIndex(e => e.ImdbRating);
             entity.HasIndex(e => e.ReleaseDate);
             entity.HasIndex(e => e.OriginCountry);
             entity.HasIndex(e => new { e.IsPremium, e.IsPublished });
             entity.HasIndex(e => new { e.ReleaseDate, e.ImdbRating });
         });
+
         modelBuilder.Entity<MovieVideo>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -129,7 +142,6 @@ public class MovieDbContext : DbContext
             entity.HasIndex(e => e.TmdbId).IsUnique().HasFilter("\"TmdbId\" IS NOT NULL");
             entity.Property(e => e.ImdbRating).HasPrecision(4, 1);
 
-            // BỔ SUNG: Indexes cho AI filters & Browse nhanh
             entity.HasIndex(e => e.ImdbRating);
             entity.HasIndex(e => e.FirstAirDate);
             entity.HasIndex(e => e.OriginCountry);
@@ -137,11 +149,10 @@ public class MovieDbContext : DbContext
             entity.HasIndex(e => new { e.IsPremium, e.Status });
         });
 
-// ── Season ────────────────────────────────────────────────────────────────
+        // ── Season ────────────────────────────────────────────────────────────────
         modelBuilder.Entity<Season>(entity =>
         {
             entity.HasKey(e => e.Id);
-            // Mỗi TvShow chỉ có 1 season với cùng SeasonNumber
             entity.HasIndex(e => new { e.TvShowId, e.SeasonNumber }).IsUnique();
 
             entity.HasOne(e => e.TvShow)
@@ -150,11 +161,10 @@ public class MovieDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-// ── Episode ───────────────────────────────────────────────────────────────
+        // ── Episode ───────────────────────────────────────────────────────────────
         modelBuilder.Entity<Episode>(entity =>
         {
             entity.HasKey(e => e.Id);
-            // Mỗi Season chỉ có 1 episode với cùng EpisodeNumber
             entity.HasIndex(e => new { e.SeasonId, e.EpisodeNumber }).IsUnique();
             entity.Property(e => e.Rating).HasPrecision(4, 1);
 
@@ -164,7 +174,7 @@ public class MovieDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-// ── TvShowGenre ───────────────────────────────────────────────────────────
+        // ── TvShowGenre ───────────────────────────────────────────────────────────
         modelBuilder.Entity<TvShowGenre>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -176,12 +186,12 @@ public class MovieDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasOne(e => e.Genre)
-                .WithMany() // Genre không cần nav TvShowGenres
+                .WithMany()
                 .HasForeignKey(e => e.GenreId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-// ── TvShowCast ────────────────────────────────────────────────────────────
+        // ── TvShowCast ────────────────────────────────────────────────────────────
         modelBuilder.Entity<TvShowCast>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -193,12 +203,12 @@ public class MovieDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasOne(e => e.Person)
-                .WithMany() // Person không cần nav TvShowCasts
+                .WithMany()
                 .HasForeignKey(e => e.PersonId)
-                .OnDelete(DeleteBehavior.Restrict); // Xóa TvShow không xóa Person
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
-// ── TvShowDirector ────────────────────────────────────────────────────────
+        // ── TvShowDirector ────────────────────────────────────────────────────────
         modelBuilder.Entity<TvShowDirector>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -215,39 +225,36 @@ public class MovieDbContext : DbContext
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
-// ── TvShowImage ───────────────────────────────────────────────────────────
+        // ── TvShowImage ───────────────────────────────────────────────────────────
         modelBuilder.Entity<TvShowImage>(entity =>
         {
             entity.HasKey(e => e.Id);
-
             entity.HasOne(e => e.TvShow)
                 .WithMany(t => t.TvShowImages)
                 .HasForeignKey(e => e.TvShowId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-// ── TvShowVideo ───────────────────────────────────────────────────────────
+        // ── TvShowVideo ───────────────────────────────────────────────────────────
         modelBuilder.Entity<TvShowVideo>(entity =>
         {
             entity.HasKey(e => e.Id);
-
             entity.HasOne(e => e.TvShow)
                 .WithMany(t => t.TvShowVideos)
                 .HasForeignKey(e => e.TvShowId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-// ── EpisodeSubtitle ───────────────────────────────────────────────────────────
+        // ── EpisodeSubtitle ───────────────────────────────────────────────────────
         modelBuilder.Entity<EpisodeSubtitle>(entity =>
         {
             entity.HasKey(e => e.Id);
-            // Một tập phim chỉ có 1 subtitle cho mỗi ngôn ngữ
             entity.HasIndex(e => new { e.EpisodeId, e.LanguageCode }).IsUnique();
 
             entity.HasOne(e => e.Episode)
-                .WithMany() // Episode không cần nav EpisodeSubtitles
+                .WithMany()
                 .HasForeignKey(e => e.EpisodeId)
-                .OnDelete(DeleteBehavior.Cascade); // Xóa episode → xóa subtitle theo
+                .OnDelete(DeleteBehavior.Cascade);
 
             entity.Property(e => e.LanguageCode).HasMaxLength(10).IsRequired();
             entity.Property(e => e.LanguageName).HasMaxLength(100).IsRequired();
@@ -285,14 +292,13 @@ public class MovieDbContext : DbContext
             entity.HasIndex(e => e.TmdbPersonId).IsUnique().HasFilter("\"TmdbPersonId\" IS NOT NULL");
         });
 
-        // ── PersonImage ───────────────────────────────────────────────────────
         modelBuilder.Entity<PersonImage>(entity =>
         {
             entity.HasKey(e => e.Id);
             entity.HasOne(e => e.Person)
                 .WithMany(p => p.Images)
                 .HasForeignKey(e => e.PersonId)
-                .OnDelete(DeleteBehavior.Cascade); // xóa người → xóa ảnh theo
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<MovieCast>(entity =>
@@ -382,7 +388,7 @@ public class MovieDbContext : DbContext
         modelBuilder.Entity<UserSubscription>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.HasIndex(e => e.UserId); // query nhanh theo user
+            entity.HasIndex(e => e.UserId);
 
             entity.HasOne(e => e.User)
                 .WithMany()
@@ -450,7 +456,6 @@ public class MovieDbContext : DbContext
                 .HasConversion<string>()
                 .HasMaxLength(20);
 
-            // Index để query nhanh theo scope
             entity.HasIndex(e => e.AppliesTo);
             entity.HasIndex(e => new { e.AppliesTo, e.IsActive });
 
@@ -472,7 +477,6 @@ public class MovieDbContext : DbContext
                 .HasConversion<string>()
                 .HasMaxLength(20);
 
-            // Index tra cứu nhanh per-content
             entity.HasIndex(e => new { e.ContentType, e.ContentId });
             entity.HasIndex(e => new { e.ContentType, e.ContentId, e.IsActive });
 

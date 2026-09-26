@@ -13,24 +13,23 @@ public class GenericRepository<T> : IRepository<T> where T : class
         _dbContext = dbContext;
     }
 
-    public async Task<T?> GetByIdAsync(Guid id) =>
-        await _dbContext.Set<T>().FindAsync(id);
+    public async Task<T?> GetByIdAsync(Guid id, CancellationToken ct = default) =>
+        await _dbContext.Set<T>().FindAsync(new object?[] { id }, ct);
 
-    public async Task<IEnumerable<T>> GetAllAsync() =>
-        await _dbContext.Set<T>().ToListAsync();
+    public async Task<IEnumerable<T>> GetAllAsync(CancellationToken ct = default) =>
+        await _dbContext.Set<T>().ToListAsync(ct);
 
-    // ✅ Expression → SQL WHERE, không load hết lên memory
-    public async Task<IEnumerable<T>> FindAsync(Expression<Func<T, bool>> predicate) =>
-        await _dbContext.Set<T>().Where(predicate).ToListAsync();
+    public async Task<IEnumerable<T>> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default) =>
+        await _dbContext.Set<T>().Where(predicate).ToListAsync(ct);
 
-    public async Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate) =>
-        await _dbContext.Set<T>().FirstOrDefaultAsync(predicate);
+    public async Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default) =>
+        await _dbContext.Set<T>().FirstOrDefaultAsync(predicate, ct);
 
-    public async Task AddAsync(T entity) =>
-        await _dbContext.Set<T>().AddAsync(entity);
+    public async Task AddAsync(T entity, CancellationToken ct = default) =>
+        await _dbContext.Set<T>().AddAsync(entity, ct);
 
-    public async Task AddRangeAsync(IEnumerable<T> entities) =>
-        await _dbContext.Set<T>().AddRangeAsync(entities);
+    public async Task AddRangeAsync(IEnumerable<T> entities, CancellationToken ct = default) =>
+        await _dbContext.Set<T>().AddRangeAsync(entities, ct);
 
     public void Update(T entity) =>
         _dbContext.Set<T>().Update(entity);
@@ -41,6 +40,6 @@ public class GenericRepository<T> : IRepository<T> where T : class
     public void RemoveRange(IEnumerable<T> entities) =>
         _dbContext.Set<T>().RemoveRange(entities);
 
-    public async Task SaveChangesAsync() =>
-        await _dbContext.SaveChangesAsync();
+    public async Task SaveChangesAsync(CancellationToken ct = default) =>
+        await _dbContext.SaveChangesAsync(ct);
 }

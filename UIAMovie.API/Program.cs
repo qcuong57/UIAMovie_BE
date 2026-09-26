@@ -1,9 +1,13 @@
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using FluentValidation;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using StackExchange.Redis;
 using UIAMovie.API.Filters;
+using UIAMovie.API.Hubs;
+using UIAMovie.API.Services;
 using UIAMovie.Application.AI.Intent;
 using UIAMovie.Application.AI.Orchestration;
 using UIAMovie.Application.AI.Retrieval;
@@ -24,7 +28,6 @@ using UIAMovie.Infrastructure.Security;
 using UIAMovie.Infrastructure.Services;
 using UIAMovie.Middleware;
 
-
 var builder = WebApplication.CreateBuilder(args);
 
 builder.WebHost.ConfigureKestrel(options =>
@@ -38,7 +41,6 @@ builder.Services.AddDbContext<MovieDbContext>(options =>
 
 // Redis
 var redisUrl = builder.Configuration["Redis:ConnectionString"];
-
 builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
 {
     var uri = new Uri(redisUrl!);
@@ -67,11 +69,21 @@ builder.Services.AddScoped<ICacheService, RedisCacheService>();
 builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 builder.Services.AddScoped<IMovieRepository, MovieRepository>();
 builder.Services.AddScoped<ITvShowRepository, TvShowRepository>();
+builder.Services.AddScoped<INotificationRepository, NotificationRepository>();
+builder.Services.AddScoped<IRepository<Person>, Repository<Person>>();
+builder.Services.AddScoped<IRepository<MovieCast>, Repository<MovieCast>>();
+builder.Services.AddScoped<IRepository<MovieDirector>, Repository<MovieDirector>>();
+builder.Services.AddScoped<IRepository<MovieImage>, Repository<MovieImage>>();
 
 // Authentication
 builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
 builder.Services.AddScoped<ITwoFactorAuthProvider, TwoFactorAuthProvider>();
 builder.Services.AddScoped<IEmailService, EmailService>();
+
+// ── SignalR & Realtime Notification (Đăng ký tại đây) ────────────────────────
+builder.Services.AddSignalR();
+builder.Services.AddScoped<IRealtimeNotificationSender, RealtimeNotificationSender>();
+builder.Services.AddScoped<INotificationService, NotificationService>();
 
 // Services
 builder.Services.AddScoped<IAuthService, AuthService>();
@@ -83,27 +95,19 @@ builder.Services.AddHttpClient();
 builder.Services.AddScoped<ITmdbService, TmdbService>();
 builder.Services.AddScoped<IRatingReviewService, RatingReviewService>();
 builder.Services.AddScoped<IGenreService, GenreService>();
-builder.Services.AddScoped<IRepository<Person>, Repository<Person>>();
-builder.Services.AddScoped<IRepository<MovieCast>, Repository<MovieCast>>();
-builder.Services.AddScoped<IRepository<MovieDirector>, Repository<MovieDirector>>();
-builder.Services.AddScoped<IRepository<MovieImage>, Repository<MovieImage>>();
-// Đăng ký cấu hình Options & Provider
+
+
+// AI
 builder.Services.Configure<GroqOptions>(builder.Configuration.GetSection("Groq"));
 builder.Services.AddSingleton<IAiRateLimiter, SlidingWindowAiRateLimiter>();
 builder.Services.AddHttpClient<IAiProvider, GroqProvider>();
-
-// Đăng ký tầng Retrieval
 builder.Services.AddScoped<IMovieRetriever, MovieRetriever>();
 builder.Services.AddScoped<ITvShowRetriever, TvShowRetriever>();
 builder.Services.AddScoped<ISiteKnowledgeRetriever, SiteKnowledgeRetriever>();
 builder.Services.AddScoped<IUserContextRetriever, UserContextRetriever>();
-
-// Đăng ký Intent Router & Tools
 builder.Services.AddScoped<IAiRouter, AiRouter>();
 builder.Services.AddScoped<MovieCompareTool>();
 builder.Services.AddScoped<ReviewSummaryTool>();
-
-// Đăng ký Orchestrator
 builder.Services.AddScoped<IAiAssistantService, AiAssistantService>();
 builder.Services.AddHttpClient<IGroqService, GroqService>();
 builder.Services.AddScoped<ITvShowService, TvShowService>();
@@ -125,10 +129,9 @@ builder.Services.AddScoped<IAdRepository, AdRepository>();
 builder.Services.AddScoped<IAdService, AdService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IVnpayPaymentService, VnpayPaymentService>();
-builder.Services.Configure<VnpayOptions>(
-    builder.Configuration.GetSection("VNPay"));
+builder.Services.Configure<VnpayOptions>(builder.Configuration.GetSection("VNPay"));
 
-// JWT Configuration
+// JWT Configuration & SignalR Token Extraction
 var jwtSettings = builder.Configuration.GetSection("Jwt");
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -142,17 +145,52 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidIssuer = jwtSettings["Issuer"],
             ValidAudience = jwtSettings["Audience"],
             IssuerSigningKey = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(
-                System.Text.Encoding.ASCII.GetBytes(jwtSettings["SecretKey"]))
+                System.Text.Encoding.UTF8.GetBytes(jwtSettings["SecretKey"]!)),
+            ClockSkew = TimeSpan.Zero
+        };
+
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                var path = context.HttpContext.Request.Path;
+                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
+                {
+                    context.Token = accessToken;
+                }
+                return Task.CompletedTask;
+            }
         };
     });
 
-// CORS
+// CORS: Whitelist domain
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? new[] { "http://localhost:3000", "http://localhost:5173" };
+
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
-        policy.AllowAnyOrigin()
+    options.AddPolicy("Default", policy =>
+        policy.WithOrigins(allowedOrigins)
             .AllowAnyHeader()
-            .AllowAnyMethod());
+            .AllowAnyMethod()
+            .AllowCredentials());
+});
+
+// Built-in Rate Limiter
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("auth-strict", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
 });
 
 builder.Services.AddControllers()
@@ -164,22 +202,44 @@ builder.Services.AddControllers()
     {
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     });
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// Swagger luôn bật (cả Production)
-app.UseSwagger();
-app.UseSwaggerUI();
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
-// Middleware
+app.UseHttpsRedirection();
+
+// Security Headers
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+    context.Response.Headers.Append("X-Frame-Options", "DENY");
+    context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
+    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+
+    if (!app.Environment.IsDevelopment())
+    {
+        context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    }
+
+    await next();
+});
+
 app.UseMiddleware<ExceptionHandlingMiddleware>();
-app.UseMiddleware<JwtMiddleware>();
-app.UseCors("AllowAll");
+app.UseCors("Default");
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+
 app.MapControllers();
+app.MapHub<NotificationHub>("/hubs/notifications"); // Map SignalR Route
 app.MapGet("/", () => "UIAMovie API running");
 
 app.Run();

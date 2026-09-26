@@ -15,24 +15,24 @@ public class Repository<T> : IRepository<T> where T : class
         _dbSet   = context.Set<T>();
     }
 
-    public async Task<IEnumerable<T>> GetAllAsync() =>
-        await _dbSet.ToListAsync();
+    public async Task<IEnumerable<T>> GetAllAsync(CancellationToken ct = default) =>
+        await _dbSet.ToListAsync(ct);
 
-    public async Task<T?> GetByIdAsync(Guid id) =>
-        await _dbSet.FindAsync(id);
+    public async Task<T?> GetByIdAsync(Guid id, CancellationToken ct = default) =>
+        await _dbSet.FindAsync(new object?[] { id }, ct);
 
     // ✅ Expression → EF Core dịch thành SQL WHERE
-    public async Task<IEnumerable<T>> FindAsync(Expression<Func<T, bool>> predicate) =>
-        await _dbSet.Where(predicate).ToListAsync();
+    public async Task<IEnumerable<T>> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default) =>
+        await _dbSet.Where(predicate).ToListAsync(ct);
 
-    public async Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate) =>
-        await _dbSet.FirstOrDefaultAsync(predicate);
+    public async Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default) =>
+        await _dbSet.FirstOrDefaultAsync(predicate, ct);
 
-    public async Task AddAsync(T entity) =>
-        await _dbSet.AddAsync(entity);
+    public async Task AddAsync(T entity, CancellationToken ct = default) =>
+        await _dbSet.AddAsync(entity, ct);
 
-    public async Task AddRangeAsync(IEnumerable<T> entities) =>
-        await _dbSet.AddRangeAsync(entities);
+    public async Task AddRangeAsync(IEnumerable<T> entities, CancellationToken ct = default) =>
+        await _dbSet.AddRangeAsync(entities, ct);
 
     public void Update(T entity) =>
         _dbSet.Update(entity);
@@ -43,6 +43,6 @@ public class Repository<T> : IRepository<T> where T : class
     public void RemoveRange(IEnumerable<T> entities) =>
         _dbSet.RemoveRange(entities);
 
-    public async Task SaveChangesAsync() =>
-        await _context.SaveChangesAsync();
+    public async Task SaveChangesAsync(CancellationToken ct = default) =>
+        await _context.SaveChangesAsync(ct);
 }

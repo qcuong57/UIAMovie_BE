@@ -23,6 +23,7 @@ public class User
     public ICollection<Favorite> Favorites { get; set; } = new List<Favorite>();
     public ICollection<WatchHistory> WatchHistory { get; set; } = new List<WatchHistory>();
     public ICollection<RatingReview> RatingReviews { get; set; } = new List<RatingReview>();
+    public ICollection<Notification> Notifications { get; set; } = new List<Notification>(); // ← MỚI
 }
 
 public class UserSession

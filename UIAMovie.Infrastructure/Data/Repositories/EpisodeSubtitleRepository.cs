@@ -20,7 +20,6 @@ public class EpisodeSubtitleRepository : Repository<EpisodeSubtitle>, IEpisodeSu
             .AsNoTracking()
             .Where(s => s.EpisodeId == episodeId)
             .OrderBy(s => s.LanguageName)
-            // Chỉ lấy meta, không lấy Content để response nhẹ
             .Select(s => new EpisodeSubtitle
             {
                 Id             = s.Id,
@@ -34,7 +33,6 @@ public class EpisodeSubtitleRepository : Repository<EpisodeSubtitle>, IEpisodeSu
                 ErrorMessage   = s.ErrorMessage,
                 CreatedAt      = s.CreatedAt,
                 UpdatedAt      = s.UpdatedAt,
-                // Content bỏ ra — chỉ load khi GetByIdAsync
             })
             .ToListAsync();
     }
@@ -62,4 +60,7 @@ public class EpisodeSubtitleRepository : Repository<EpisodeSubtitle>, IEpisodeSu
             .ExecuteUpdateAsync(setters =>
                 setters.SetProperty(s => s.IsDefault, false));
     }
+
+    // Đảm bảo tương thích nếu IEpisodeSubtitleRepository chưa sửa kịp signature
+    public Task SaveChangesAsync() => base.SaveChangesAsync(default);
 }
