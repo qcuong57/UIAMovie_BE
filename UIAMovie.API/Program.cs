@@ -168,8 +168,7 @@ var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get
                      {
                          "http://localhost:3000",
                          "http://localhost:5173",
-                         "https://uiamovie-fe.vercel.app", // ← Thêm domain Vercel của bạn
-                         "https://*.vercel.app" // ← Hoặc cho phép tất cả Vercel domain
+                         "https://uiamovie.vercel.app/"
                      };
 
 builder.Services.AddCors(options =>
