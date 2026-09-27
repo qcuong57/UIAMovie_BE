@@ -168,7 +168,7 @@ var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get
                      {
                          "http://localhost:3000",
                          "http://localhost:5173",
-                         "https://uiamovie.vercel.app/"
+                         "https://uiamovie.vercel.app"
                      };
 
 builder.Services.AddCors(options =>
