@@ -16,23 +16,23 @@ public interface IRatingReviewService
     Task<bool> DeleteRatingReviewAsync(Guid reviewId, Guid userId);
 
     // ── Get lists ─────────────────────────────────────────────────────────────
-    Task<AllReviewsResponseDTO>  GetAllReviewsAsync(int pageNumber = 1, int pageSize = 50);
+    Task<AllReviewsResponseDTO> GetAllReviewsAsync(int pageNumber = 1, int pageSize = 50);
     Task<IEnumerable<ReviewDTO>> GetMovieReviewsAsync(Guid movieId, int pageNumber = 1, int pageSize = 20);
     Task<IEnumerable<ReviewDTO>> GetTvShowReviewsAsync(Guid tvShowId, int pageNumber = 1, int pageSize = 20);
     Task<IEnumerable<ReviewDTO>> GetEpisodeReviewsAsync(Guid episodeId, int pageNumber = 1, int pageSize = 20);
     Task<IEnumerable<ReviewDTO>> GetUserReviewsAsync(Guid userId);
-    Task<ReviewDTO?>             GetReviewByIdAsync(Guid reviewId);
+    Task<ReviewDTO?> GetReviewByIdAsync(Guid reviewId);
 
     // ── Stats ─────────────────────────────────────────────────────────────────
-    Task<MovieRatingStatsDTO?>   GetMovieRatingStatsAsync(Guid movieId);
-    Task<TvShowRatingStatsDTO?>  GetTvShowRatingStatsAsync(Guid tvShowId);
+    Task<MovieRatingStatsDTO?> GetMovieRatingStatsAsync(Guid movieId);
+    Task<TvShowRatingStatsDTO?> GetTvShowRatingStatsAsync(Guid tvShowId);
     Task<EpisodeRatingStatsDTO?> GetEpisodeRatingStatsAsync(Guid episodeId);
-    Task<int>                    GetMovieAverageRatingAsync(Guid movieId);
+    Task<int> GetMovieAverageRatingAsync(Guid movieId);
 
     // ── Check ─────────────────────────────────────────────────────────────────
-    Task<bool>       CheckUserHasReviewAsync(Guid userId, Guid movieId);
-    Task<bool>       CheckUserHasReviewForTvShowAsync(Guid userId, Guid tvShowId);
-    Task<bool>       CheckUserHasReviewForEpisodeAsync(Guid userId, Guid episodeId);
+    Task<bool> CheckUserHasReviewAsync(Guid userId, Guid movieId);
+    Task<bool> CheckUserHasReviewForTvShowAsync(Guid userId, Guid tvShowId);
+    Task<bool> CheckUserHasReviewForEpisodeAsync(Guid userId, Guid episodeId);
     Task<ReviewDTO?> GetUserReviewForMovieAsync(Guid userId, Guid movieId);
     Task<ReviewDTO?> GetUserReviewForTvShowAsync(Guid userId, Guid tvShowId);
     Task<ReviewDTO?> GetUserReviewForEpisodeAsync(Guid userId, Guid episodeId);
@@ -41,38 +41,38 @@ public interface IRatingReviewService
 public class RatingReviewService : IRatingReviewService
 {
     private readonly IRepository<RatingReview> _reviewRepository;
-    private readonly IRepository<Movie>        _movieRepository;
-    private readonly IRepository<TvShow>       _tvShowRepository;
-    private readonly IRepository<Season>       _seasonRepository;
-    private readonly IRepository<Episode>      _episodeRepository;
-    private readonly IRepository<User>         _userRepository;
-    private readonly ICacheService             _cacheService;
+    private readonly IRepository<Movie> _movieRepository;
+    private readonly IRepository<TvShow> _tvShowRepository;
+    private readonly IRepository<Season> _seasonRepository;
+    private readonly IRepository<Episode> _episodeRepository;
+    private readonly IRepository<User> _userRepository;
+    private readonly ICacheService _cacheService;
 
-    private const string ALL_REVIEWS_CACHE_KEY     = "reviews:all";
-    private const string MOVIE_REVIEWS_CACHE_KEY   = "reviews:movie:{0}";
-    private const string TVSHOW_REVIEWS_CACHE_KEY  = "reviews:tvshow:{0}";
+    private const string ALL_REVIEWS_CACHE_KEY = "reviews:all";
+    private const string MOVIE_REVIEWS_CACHE_KEY = "reviews:movie:{0}";
+    private const string TVSHOW_REVIEWS_CACHE_KEY = "reviews:tvshow:{0}";
     private const string EPISODE_REVIEWS_CACHE_KEY = "reviews:episode:{0}";
-    private const string MOVIE_STATS_CACHE_KEY     = "stats:movie:{0}";
-    private const string TVSHOW_STATS_CACHE_KEY    = "stats:tvshow:{0}";
-    private const string EPISODE_STATS_CACHE_KEY   = "stats:episode:{0}";
-    private const string USER_REVIEWS_CACHE_KEY    = "reviews:user:{0}";
+    private const string MOVIE_STATS_CACHE_KEY = "stats:movie:{0}";
+    private const string TVSHOW_STATS_CACHE_KEY = "stats:tvshow:{0}";
+    private const string EPISODE_STATS_CACHE_KEY = "stats:episode:{0}";
+    private const string USER_REVIEWS_CACHE_KEY = "reviews:user:{0}";
 
     public RatingReviewService(
         IRepository<RatingReview> reviewRepository,
-        IRepository<Movie>        movieRepository,
-        IRepository<TvShow>       tvShowRepository,
-        IRepository<Season>       seasonRepository,
-        IRepository<Episode>      episodeRepository,
-        IRepository<User>         userRepository,
-        ICacheService             cacheService)
+        IRepository<Movie> movieRepository,
+        IRepository<TvShow> tvShowRepository,
+        IRepository<Season> seasonRepository,
+        IRepository<Episode> episodeRepository,
+        IRepository<User> userRepository,
+        ICacheService cacheService)
     {
-        _reviewRepository  = reviewRepository;
-        _movieRepository   = movieRepository;
-        _tvShowRepository  = tvShowRepository;
-        _seasonRepository  = seasonRepository;
+        _reviewRepository = reviewRepository;
+        _movieRepository = movieRepository;
+        _tvShowRepository = tvShowRepository;
+        _seasonRepository = seasonRepository;
         _episodeRepository = episodeRepository;
-        _userRepository    = userRepository;
-        _cacheService      = cacheService;
+        _userRepository = userRepository;
+        _cacheService = cacheService;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -120,15 +120,15 @@ public class RatingReviewService : IRatingReviewService
 
         var review = new RatingReview
         {
-            UserId      = userId,
-            MovieId     = dto.MovieId,
-            TvShowId    = resolvedTvShowId,
-            EpisodeId   = dto.EpisodeId,
-            Rating      = dto.Rating,
-            ReviewText  = dto.ReviewText,
-            IsSpoiler   = dto.IsSpoiler,
+            UserId = userId,
+            MovieId = dto.MovieId,
+            TvShowId = resolvedTvShowId,
+            EpisodeId = dto.EpisodeId,
+            Rating = dto.Rating,
+            ReviewText = dto.ReviewText,
+            IsSpoiler = dto.IsSpoiler,
             IsPublished = true,
-            CreatedAt   = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow
         };
 
         await _reviewRepository.AddAsync(review);
@@ -140,20 +140,21 @@ public class RatingReviewService : IRatingReviewService
         catch (DbUpdateException)
         {
             // Unique constraint → chuyển sang UPDATE
-            var all      = await _reviewRepository.GetAllAsync();
+            var all = await _reviewRepository.GetAllAsync();
             var existing = FindExisting(all, userId, dto);
 
             if (existing != null)
             {
-                existing.Rating     = dto.Rating;
+                existing.Rating = dto.Rating;
                 existing.ReviewText = dto.ReviewText;
-                existing.IsSpoiler  = dto.IsSpoiler;
-                existing.UpdatedAt  = DateTime.UtcNow;
+                existing.IsSpoiler = dto.IsSpoiler;
+                existing.UpdatedAt = DateTime.UtcNow;
                 _reviewRepository.Update(existing);
                 await _reviewRepository.SaveChangesAsync();
                 await InvalidateCachesAsync(dto.MovieId, resolvedTvShowId, dto.EpisodeId, userId);
                 return existing.Id;
             }
+
             throw;
         }
 
@@ -172,10 +173,10 @@ public class RatingReviewService : IRatingReviewService
         if (dto.Rating < 1 || dto.Rating > 10)
             throw new ArgumentException("Đánh giá phải từ 1 đến 10");
 
-        review.Rating     = dto.Rating;
+        review.Rating = dto.Rating;
         review.ReviewText = dto.ReviewText;
-        review.IsSpoiler  = dto.IsSpoiler;
-        review.UpdatedAt  = DateTime.UtcNow;
+        review.IsSpoiler = dto.IsSpoiler;
+        review.UpdatedAt = DateTime.UtcNow;
 
         _reviewRepository.Update(review);
         await _reviewRepository.SaveChangesAsync();
@@ -208,24 +209,28 @@ public class RatingReviewService : IRatingReviewService
         {
             // GetAllAsync() trả về in-memory, filter trên LINQ
             var reviews = (await _reviewRepository.GetAllAsync())
-                          .Where(r => r.IsPublished)
-                          .OrderByDescending(r => r.CreatedAt)
-                          .ToList();
+                .Where(r => r.IsPublished)
+                .OrderByDescending(r => r.CreatedAt)
+                .ToList();
 
             var userMap = (await _userRepository.GetAllAsync()).ToDictionary(u => u.Id);
 
             return reviews
-                .Select(r => { userMap.TryGetValue(r.UserId, out var u); return MapToDTO(r, u); })
+                .Select(r =>
+                {
+                    userMap.TryGetValue(r.UserId, out var u);
+                    return MapToDTO(r, u);
+                })
                 .ToList();
         }, TimeSpan.FromMinutes(10));
 
         var list = all ?? new List<ReviewDTO>();
         return new AllReviewsResponseDTO
         {
-            Items      = list.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList(),
+            Items = list.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList(),
             TotalCount = list.Count,
             PageNumber = pageNumber,
-            PageSize   = pageSize,
+            PageSize = pageSize,
         };
     }
 
@@ -235,36 +240,38 @@ public class RatingReviewService : IRatingReviewService
         return await GetPagedAsync(cacheKey, pageNumber, pageSize, async () =>
         {
             var reviews = (await _reviewRepository.GetAllAsync())
-                          .Where(r => r.MovieId == movieId && r.IsPublished)
-                          .OrderByDescending(r => r.CreatedAt)
-                          .ToList();
+                .Where(r => r.MovieId == movieId && r.IsPublished)
+                .OrderByDescending(r => r.CreatedAt)
+                .ToList();
             return await MapWithUsersAsync(reviews);
         });
     }
 
-    public async Task<IEnumerable<ReviewDTO>> GetTvShowReviewsAsync(Guid tvShowId, int pageNumber = 1, int pageSize = 20)
+    public async Task<IEnumerable<ReviewDTO>> GetTvShowReviewsAsync(Guid tvShowId, int pageNumber = 1,
+        int pageSize = 20)
     {
         var cacheKey = string.Format(TVSHOW_REVIEWS_CACHE_KEY, tvShowId);
         return await GetPagedAsync(cacheKey, pageNumber, pageSize, async () =>
         {
             // Chỉ lấy review cấp show — KHÔNG kèm episode reviews
             var reviews = (await _reviewRepository.GetAllAsync())
-                          .Where(r => r.TvShowId == tvShowId && r.EpisodeId == null && r.IsPublished)
-                          .OrderByDescending(r => r.CreatedAt)
-                          .ToList();
+                .Where(r => r.TvShowId == tvShowId && r.EpisodeId == null && r.IsPublished)
+                .OrderByDescending(r => r.CreatedAt)
+                .ToList();
             return await MapWithUsersAsync(reviews);
         });
     }
 
-    public async Task<IEnumerable<ReviewDTO>> GetEpisodeReviewsAsync(Guid episodeId, int pageNumber = 1, int pageSize = 20)
+    public async Task<IEnumerable<ReviewDTO>> GetEpisodeReviewsAsync(Guid episodeId, int pageNumber = 1,
+        int pageSize = 20)
     {
         var cacheKey = string.Format(EPISODE_REVIEWS_CACHE_KEY, episodeId);
         return await GetPagedAsync(cacheKey, pageNumber, pageSize, async () =>
         {
             var reviews = (await _reviewRepository.GetAllAsync())
-                          .Where(r => r.EpisodeId == episodeId && r.IsPublished)
-                          .OrderByDescending(r => r.CreatedAt)
-                          .ToList();
+                .Where(r => r.EpisodeId == episodeId && r.IsPublished)
+                .OrderByDescending(r => r.CreatedAt)
+                .ToList();
             return await MapWithUsersAsync(reviews);
         });
     }
@@ -272,12 +279,12 @@ public class RatingReviewService : IRatingReviewService
     public async Task<IEnumerable<ReviewDTO>> GetUserReviewsAsync(Guid userId)
     {
         var cacheKey = string.Format(USER_REVIEWS_CACHE_KEY, userId);
-        var result   = await _cacheService.GetOrSetAsync(cacheKey, async () =>
+        var result = await _cacheService.GetOrSetAsync(cacheKey, async () =>
         {
             var reviews = (await _reviewRepository.GetAllAsync())
-                          .Where(r => r.UserId == userId)
-                          .OrderByDescending(r => r.CreatedAt)
-                          .ToList();
+                .Where(r => r.UserId == userId)
+                .OrderByDescending(r => r.CreatedAt)
+                .ToList();
             var user = await _userRepository.GetByIdAsync(userId);
             return reviews.Select(r => MapToDTO(r, user)).ToList();
         }, TimeSpan.FromHours(1));
@@ -300,14 +307,14 @@ public class RatingReviewService : IRatingReviewService
     public async Task<MovieRatingStatsDTO?> GetMovieRatingStatsAsync(Guid movieId)
     {
         var cacheKey = string.Format(MOVIE_STATS_CACHE_KEY, movieId);
-        var cached   = await _cacheService.GetAsync<MovieRatingStatsDTO>(cacheKey);
+        var cached = await _cacheService.GetAsync<MovieRatingStatsDTO>(cacheKey);
         if (cached != null) return cached;
 
         if (await _movieRepository.GetByIdAsync(movieId) == null) return null;
 
         var target = (await _reviewRepository.GetAllAsync())
-                     .Where(r => r.MovieId == movieId && r.IsPublished)
-                     .ToList();
+            .Where(r => r.MovieId == movieId && r.IsPublished)
+            .ToList();
 
         var stats = BuildMovieStats(movieId, target);
         await _cacheService.SetAsync(cacheKey, stats, TimeSpan.FromMinutes(30));
@@ -317,15 +324,15 @@ public class RatingReviewService : IRatingReviewService
     public async Task<TvShowRatingStatsDTO?> GetTvShowRatingStatsAsync(Guid tvShowId)
     {
         var cacheKey = string.Format(TVSHOW_STATS_CACHE_KEY, tvShowId);
-        var cached   = await _cacheService.GetAsync<TvShowRatingStatsDTO>(cacheKey);
+        var cached = await _cacheService.GetAsync<TvShowRatingStatsDTO>(cacheKey);
         if (cached != null) return cached;
 
         if (await _tvShowRepository.GetByIdAsync(tvShowId) == null) return null;
 
         // Thống kê cấp show — KHÔNG tính episode reviews
         var target = (await _reviewRepository.GetAllAsync())
-                     .Where(r => r.TvShowId == tvShowId && r.EpisodeId == null && r.IsPublished)
-                     .ToList();
+            .Where(r => r.TvShowId == tvShowId && r.EpisodeId == null && r.IsPublished)
+            .ToList();
 
         var stats = BuildTvShowStats(tvShowId, target);
         await _cacheService.SetAsync(cacheKey, stats, TimeSpan.FromMinutes(30));
@@ -335,7 +342,7 @@ public class RatingReviewService : IRatingReviewService
     public async Task<EpisodeRatingStatsDTO?> GetEpisodeRatingStatsAsync(Guid episodeId)
     {
         var cacheKey = string.Format(EPISODE_STATS_CACHE_KEY, episodeId);
-        var cached   = await _cacheService.GetAsync<EpisodeRatingStatsDTO>(cacheKey);
+        var cached = await _cacheService.GetAsync<EpisodeRatingStatsDTO>(cacheKey);
         if (cached != null) return cached;
 
         // Episode không có TvShowId trực tiếp → join qua Season
@@ -348,8 +355,8 @@ public class RatingReviewService : IRatingReviewService
         var tvShowId = season.TvShowId;
 
         var target = (await _reviewRepository.GetAllAsync())
-                     .Where(r => r.EpisodeId == episodeId && r.IsPublished)
-                     .ToList();
+            .Where(r => r.EpisodeId == episodeId && r.IsPublished)
+            .ToList();
 
         var stats = BuildEpisodeStats(episodeId, tvShowId, target);
         await _cacheService.SetAsync(cacheKey, stats, TimeSpan.FromMinutes(30));
@@ -387,21 +394,21 @@ public class RatingReviewService : IRatingReviewService
     public async Task<ReviewDTO?> GetUserReviewForMovieAsync(Guid userId, Guid movieId)
     {
         var all = await _reviewRepository.GetAllAsync();
-        var r   = all.FirstOrDefault(r => r.UserId == userId && r.MovieId == movieId);
+        var r = all.FirstOrDefault(r => r.UserId == userId && r.MovieId == movieId);
         return r == null ? null : await GetReviewByIdAsync(r.Id);
     }
 
     public async Task<ReviewDTO?> GetUserReviewForTvShowAsync(Guid userId, Guid tvShowId)
     {
         var all = await _reviewRepository.GetAllAsync();
-        var r   = all.FirstOrDefault(r => r.UserId == userId && r.TvShowId == tvShowId && r.EpisodeId == null);
+        var r = all.FirstOrDefault(r => r.UserId == userId && r.TvShowId == tvShowId && r.EpisodeId == null);
         return r == null ? null : await GetReviewByIdAsync(r.Id);
     }
 
     public async Task<ReviewDTO?> GetUserReviewForEpisodeAsync(Guid userId, Guid episodeId)
     {
         var all = await _reviewRepository.GetAllAsync();
-        var r   = all.FirstOrDefault(r => r.UserId == userId && r.EpisodeId == episodeId);
+        var r = all.FirstOrDefault(r => r.UserId == userId && r.EpisodeId == episodeId);
         return r == null ? null : await GetReviewByIdAsync(r.Id);
     }
 
@@ -411,8 +418,8 @@ public class RatingReviewService : IRatingReviewService
 
     private static void ValidateTarget(RatingReviewDTO dto)
     {
-        bool hasMovie   = dto.MovieId   != null;
-        bool hasTvShow  = dto.TvShowId  != null;
+        bool hasMovie = dto.MovieId != null;
+        bool hasTvShow = dto.TvShowId != null;
         bool hasEpisode = dto.EpisodeId != null;
 
         if (!hasMovie && !hasTvShow && !hasEpisode)
@@ -464,19 +471,19 @@ public class RatingReviewService : IRatingReviewService
 
     private static ReviewDTO MapToDTO(RatingReview r, User? u) => new()
     {
-        Id           = r.Id,
-        MovieId      = r.MovieId,
-        TvShowId     = r.TvShowId,
-        EpisodeId    = r.EpisodeId,
-        EpisodeLabel = null,   // caller tự format nếu cần ("S1E3")
-        UserId       = r.UserId,
-        UserName     = u?.Username ?? "Ẩn danh",
-        UserAvatar   = u?.AvatarUrl,
-        Rating       = r.Rating,
-        ReviewText   = r.ReviewText,
-        IsSpoiler    = r.IsSpoiler,
-        CreatedAt    = r.CreatedAt,
-        UpdatedAt    = r.UpdatedAt,
+        Id = r.Id,
+        MovieId = r.MovieId,
+        TvShowId = r.TvShowId,
+        EpisodeId = r.EpisodeId,
+        EpisodeLabel = null, // caller tự format nếu cần ("S1E3")
+        UserId = r.UserId,
+        UserName = u?.Username ?? "Ẩn danh",
+        UserAvatar = u?.AvatarUrl,
+        Rating = r.Rating,
+        ReviewText = r.ReviewText,
+        IsSpoiler = r.IsSpoiler,
+        CreatedAt = r.CreatedAt,
+        UpdatedAt = r.UpdatedAt,
     };
 
     private static MovieRatingStatsDTO BuildMovieStats(Guid movieId, List<RatingReview> list)
@@ -486,9 +493,9 @@ public class RatingReviewService : IRatingReviewService
 
         return new()
         {
-            MovieId            = movieId,
-            AverageRating      = Math.Round((decimal)list.Sum(r => r.Rating) / list.Count, 2),
-            TotalReviews       = list.Count,
+            MovieId = movieId,
+            AverageRating = Math.Round((decimal)list.Sum(r => r.Rating) / list.Count, 2),
+            TotalReviews = list.Count,
             RatingDistribution = Enumerable.Range(1, 10).ToDictionary(i => i, i => list.Count(r => r.Rating == i))
         };
     }
@@ -500,9 +507,9 @@ public class RatingReviewService : IRatingReviewService
 
         return new()
         {
-            TvShowId           = tvShowId,
-            AverageRating      = Math.Round((decimal)list.Sum(r => r.Rating) / list.Count, 2),
-            TotalReviews       = list.Count,
+            TvShowId = tvShowId,
+            AverageRating = Math.Round((decimal)list.Sum(r => r.Rating) / list.Count, 2),
+            TotalReviews = list.Count,
             RatingDistribution = Enumerable.Range(1, 10).ToDictionary(i => i, i => list.Count(r => r.Rating == i))
         };
     }
@@ -514,10 +521,10 @@ public class RatingReviewService : IRatingReviewService
 
         return new()
         {
-            EpisodeId          = episodeId,
-            TvShowId           = tvShowId,
-            AverageRating      = Math.Round((decimal)list.Sum(r => r.Rating) / list.Count, 2),
-            TotalReviews       = list.Count,
+            EpisodeId = episodeId,
+            TvShowId = tvShowId,
+            AverageRating = Math.Round((decimal)list.Sum(r => r.Rating) / list.Count, 2),
+            TotalReviews = list.Count,
             RatingDistribution = Enumerable.Range(1, 10).ToDictionary(i => i, i => list.Count(r => r.Rating == i))
         };
     }

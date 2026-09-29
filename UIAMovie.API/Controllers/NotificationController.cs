@@ -39,7 +39,7 @@ public class NotificationController : ControllerBase
     public async Task<IActionResult> GetPublicAnnouncements(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 10,
-        [FromQuery] string? type = null,
+        [FromQuery] string? type = "admin_announcement", // Trang tin tức chỉ lấy thông báo/bảo trì, không lấy phim mới
         CancellationToken ct = default)
     {
         var result = await _notificationService.GetPublicAnnouncementsAsync(page, pageSize, type, ct);
@@ -54,11 +54,11 @@ public class NotificationController : ControllerBase
     public async Task<IActionResult> GetUserNotifications(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20,
-        [FromQuery] string? excludeType = "admin_announcement",
+        [FromQuery] string? excludeType = null,
         CancellationToken ct = default)
     {
         var userId = GetCurrentUserId();
-        // Mặc định loại bỏ admin_announcement để chuông chỉ nhận phim mới hoặc tin nhắn riêng
+        // Chuông hiển thị tất cả: phim mới, thông báo chung (admin_announcement) và tin nhắn riêng
         var result = await _notificationService.GetUserNotificationsAsync(userId, page, pageSize, excludeType, ct);
         return Ok(result);
     }
@@ -66,7 +66,7 @@ public class NotificationController : ControllerBase
     [HttpGet("unread-count")]
     [Authorize]
     public async Task<IActionResult> GetUnreadCount(
-        [FromQuery] string? excludeType = "admin_announcement",
+        [FromQuery] string? excludeType = null,
         CancellationToken ct = default)
     {
         var userId = GetCurrentUserId();

@@ -23,18 +23,18 @@ public interface INotificationService
         string type = "movie_release",
         CancellationToken ct = default);
 
-    // Lấy thông báo cho chuông người dùng (mặc định loại bỏ admin_announcement)
+    // Lấy thông báo cho chuông người dùng (mặc định lấy tất cả loại)
     Task<PaginatedDTO<NotificationDTO>> GetUserNotificationsAsync(
         Guid userId,
         int page = 1,
         int pageSize = 20,
-        string? excludeType = "admin_announcement",
+        string? excludeType = null,
         CancellationToken ct = default);
 
-    // Đếm số chưa đọc (loại bỏ admin_announcement cho chuông)
+    // Đếm số chưa đọc (mặc định tính tất cả loại)
     Task<int> GetUnreadCountAsync(
         Guid userId,
-        string? excludeType = "admin_announcement",
+        string? excludeType = null,
         CancellationToken ct = default);
 
     // Lấy danh sách tin tức/thông báo hệ thống công khai (cho trang Tin tức trên Navbar)

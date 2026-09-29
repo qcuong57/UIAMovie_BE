@@ -19,23 +19,23 @@ namespace UIAMovie.Application.Services;
 
 public class AdService : IAdService
 {
-    private readonly IAdRepository     _adRepo;
+    private readonly IAdRepository _adRepo;
     private readonly ICloudinaryService _cloudinary;
-    private readonly ICacheService     _cache;
+    private readonly ICacheService _cache;
     private readonly ILogger<AdService> _logger;
 
     private static readonly TimeSpan AdCacheTtl = TimeSpan.FromMinutes(5);
 
     public AdService(
-        IAdRepository      adRepo,
+        IAdRepository adRepo,
         ICloudinaryService cloudinary,
-        ICacheService      cache,
+        ICacheService cache,
         ILogger<AdService> logger)
     {
-        _adRepo     = adRepo;
+        _adRepo = adRepo;
         _cloudinary = cloudinary;
-        _cache      = cache;
-        _logger     = logger;
+        _cache = cache;
+        _logger = logger;
     }
 
     // ── Ad CRUD ───────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ public class AdService : IAdService
         if (dto.BrandImageFile == null && string.IsNullOrWhiteSpace(dto.BrandImageUrl))
             throw new ArgumentException("Phải cung cấp BrandImageFile hoặc BrandImageUrl (ảnh nhãn hiệu).");
 
-        string? videoUrl           = dto.VideoUrl;
+        string? videoUrl = dto.VideoUrl;
         string? cloudinaryPublicId = null;
 
         if (dto.VideoFile != null)
@@ -70,7 +70,7 @@ public class AdService : IAdService
                 new Uri(videoUrl).AbsolutePath.Split('/').Last());
         }
 
-        string? brandImageUrl               = dto.BrandImageUrl;
+        string? brandImageUrl = dto.BrandImageUrl;
         string? brandImageCloudinaryPublicId = null;
 
         if (dto.BrandImageFile != null)
@@ -82,14 +82,14 @@ public class AdService : IAdService
 
         var ad = new Advertisement
         {
-            Title                        = dto.Title.Trim(),
-            VideoUrl                     = videoUrl,
-            CloudinaryPublicId           = cloudinaryPublicId,
-            BrandImageUrl                = brandImageUrl,
+            Title = dto.Title.Trim(),
+            VideoUrl = videoUrl,
+            CloudinaryPublicId = cloudinaryPublicId,
+            BrandImageUrl = brandImageUrl,
             BrandImageCloudinaryPublicId = brandImageCloudinaryPublicId,
-            DurationSeconds              = dto.DurationSeconds,
-            SkipAfterSeconds             = dto.SkipAfterSeconds,
-            ClickThroughUrl              = dto.ClickThroughUrl?.Trim()
+            DurationSeconds = dto.DurationSeconds,
+            SkipAfterSeconds = dto.SkipAfterSeconds,
+            ClickThroughUrl = dto.ClickThroughUrl?.Trim()
         };
 
         return await _adRepo.AddAsync(ad);
@@ -100,33 +100,37 @@ public class AdService : IAdService
         var ad = await _adRepo.GetByIdAsync(id);
         if (ad == null) return false;
 
-        if (dto.Title    != null) ad.Title    = dto.Title.Trim();
+        if (dto.Title != null) ad.Title = dto.Title.Trim();
         if (dto.IsActive != null) ad.IsActive = dto.IsActive.Value;
         if (dto.ClickThroughUrl != null)
             ad.ClickThroughUrl = string.IsNullOrWhiteSpace(dto.ClickThroughUrl)
                 ? null
                 : dto.ClickThroughUrl.Trim();
 
-        if (dto.DurationSeconds  != null) ad.DurationSeconds  = dto.DurationSeconds.Value;
+        if (dto.DurationSeconds != null) ad.DurationSeconds = dto.DurationSeconds.Value;
         if (dto.SkipAfterSeconds != null) ad.SkipAfterSeconds = dto.SkipAfterSeconds;
 
         if (dto.VideoFile != null)
         {
             if (!string.IsNullOrEmpty(ad.CloudinaryPublicId))
             {
-                try { await _cloudinary.DeleteFileAsync(ad.CloudinaryPublicId); }
+                try
+                {
+                    await _cloudinary.DeleteFileAsync(ad.CloudinaryPublicId);
+                }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "[AdService] Không xóa được Cloudinary file {Id}", ad.CloudinaryPublicId);
                 }
             }
-            ad.VideoUrl           = await _cloudinary.UploadVideoAsync(dto.VideoFile, "uiamovie/ads");
+
+            ad.VideoUrl = await _cloudinary.UploadVideoAsync(dto.VideoFile, "uiamovie/ads");
             ad.CloudinaryPublicId = Path.GetFileNameWithoutExtension(
-                                        new Uri(ad.VideoUrl).AbsolutePath.Split('/').Last());
+                new Uri(ad.VideoUrl).AbsolutePath.Split('/').Last());
         }
         else if (!string.IsNullOrWhiteSpace(dto.VideoUrl))
         {
-            ad.VideoUrl           = dto.VideoUrl.Trim();
+            ad.VideoUrl = dto.VideoUrl.Trim();
             ad.CloudinaryPublicId = null;
         }
 
@@ -134,19 +138,24 @@ public class AdService : IAdService
         {
             if (!string.IsNullOrEmpty(ad.BrandImageCloudinaryPublicId))
             {
-                try { await _cloudinary.DeleteFileAsync(ad.BrandImageCloudinaryPublicId, "image"); }
+                try
+                {
+                    await _cloudinary.DeleteFileAsync(ad.BrandImageCloudinaryPublicId, "image");
+                }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "[AdService] Không xóa được ảnh nhãn hiệu cũ trên Cloudinary {Id}", ad.BrandImageCloudinaryPublicId);
+                    _logger.LogWarning(ex, "[AdService] Không xóa được ảnh nhãn hiệu cũ trên Cloudinary {Id}",
+                        ad.BrandImageCloudinaryPublicId);
                 }
             }
+
             ad.BrandImageUrl = await _cloudinary.UploadImageAsync(dto.BrandImageFile, "uiamovie/ads/brand");
             ad.BrandImageCloudinaryPublicId = Path.GetFileNameWithoutExtension(
                 new Uri(ad.BrandImageUrl).AbsolutePath.Split('/').Last());
         }
         else if (!string.IsNullOrWhiteSpace(dto.BrandImageUrl))
         {
-            ad.BrandImageUrl                = dto.BrandImageUrl.Trim();
+            ad.BrandImageUrl = dto.BrandImageUrl.Trim();
             ad.BrandImageCloudinaryPublicId = null;
         }
 
@@ -168,7 +177,10 @@ public class AdService : IAdService
 
         if (!string.IsNullOrEmpty(ad.CloudinaryPublicId))
         {
-            try { await _cloudinary.DeleteFileAsync(ad.CloudinaryPublicId); }
+            try
+            {
+                await _cloudinary.DeleteFileAsync(ad.CloudinaryPublicId);
+            }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[AdService] Không xóa được Cloudinary file {Id}", ad.CloudinaryPublicId);
@@ -177,10 +189,14 @@ public class AdService : IAdService
 
         if (!string.IsNullOrEmpty(ad.BrandImageCloudinaryPublicId))
         {
-            try { await _cloudinary.DeleteFileAsync(ad.BrandImageCloudinaryPublicId, "image"); }
+            try
+            {
+                await _cloudinary.DeleteFileAsync(ad.BrandImageCloudinaryPublicId, "image");
+            }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[AdService] Không xóa được ảnh nhãn hiệu Cloudinary {Id}", ad.BrandImageCloudinaryPublicId);
+                _logger.LogWarning(ex, "[AdService] Không xóa được ảnh nhãn hiệu Cloudinary {Id}",
+                    ad.BrandImageCloudinaryPublicId);
             }
         }
 
@@ -201,13 +217,13 @@ public class AdService : IAdService
 
         var slot = new GlobalAdSlot
         {
-            AdvertisementId      = adId,
-            AppliesTo            = dto.AppliesTo,
-            Position             = dto.Position,
+            AdvertisementId = adId,
+            AppliesTo = dto.AppliesTo,
+            Position = dto.Position,
             MidRollOffsetSeconds = dto.Position == AdPosition.MidRoll
-                                       ? dto.MidRollOffsetSeconds
-                                       : null,
-            DisplayOrder         = dto.DisplayOrder
+                ? dto.MidRollOffsetSeconds
+                : null,
+            DisplayOrder = dto.DisplayOrder
         };
 
         var slotId = await _adRepo.AddSlotAsync(slot);
@@ -225,8 +241,8 @@ public class AdService : IAdService
 
         var oldAppliesTo = slot.AppliesTo;
 
-        if (dto.AppliesTo  != null) slot.AppliesTo  = dto.AppliesTo;
-        if (dto.IsActive   != null) slot.IsActive    = dto.IsActive.Value;
+        if (dto.AppliesTo != null) slot.AppliesTo = dto.AppliesTo;
+        if (dto.IsActive != null) slot.IsActive = dto.IsActive.Value;
         if (dto.DisplayOrder != null) slot.DisplayOrder = dto.DisplayOrder.Value;
 
         if (dto.Position.HasValue)
@@ -273,14 +289,14 @@ public class AdService : IAdService
 
         var ov = new AdContentOverride
         {
-            AdvertisementId      = adId,
-            ContentType          = dto.ContentType,
-            ContentId            = dto.ContentId,
-            Position             = dto.Position,
+            AdvertisementId = adId,
+            ContentType = dto.ContentType,
+            ContentId = dto.ContentId,
+            Position = dto.Position,
             MidRollOffsetSeconds = dto.Position == AdPosition.MidRoll
-                                       ? dto.MidRollOffsetSeconds
-                                       : null,
-            DisplayOrder         = dto.DisplayOrder
+                ? dto.MidRollOffsetSeconds
+                : null,
+            DisplayOrder = dto.DisplayOrder
         };
 
         var ovId = await _adRepo.AddOverrideAsync(ov);
@@ -306,7 +322,7 @@ public class AdService : IAdService
 
     public async Task<ContentAdsDTO> GetAdsForContentAsync(
         AdContentType contentType,
-        Guid          contentId)
+        Guid contentId)
     {
         // 1. Kiểm tra content-specific override trước
         //    Nếu content có override ở bất kỳ position nào → cache per (type, id)
@@ -330,19 +346,21 @@ public class AdService : IAdService
                 var patched = new ContentAdsDTO
                 {
                     ContentType = cached.ContentType,
-                    ContentId   = contentId,
-                    PreRoll     = cached.PreRoll,
-                    MidRoll     = cached.MidRoll,
-                    PostRoll    = cached.PostRoll
+                    ContentId = contentId,
+                    PreRoll = cached.PreRoll,
+                    MidRoll = cached.MidRoll,
+                    PostRoll = cached.PostRoll
                 };
                 return patched;
             }
 
             var globalSlots = await _adRepo.GetActiveGlobalSlotsAsync(contentType);
-            var result = BuildContentAdsDTO(contentType, contentId, globalSlots.ToList(), new List<AdContentOverride>());
+            var result = BuildContentAdsDTO(contentType, contentId, globalSlots.ToList(),
+                new List<AdContentOverride>());
 
             // Cache với contentId = Guid.Empty (placeholder) để dùng chung
-            var cacheResult = BuildContentAdsDTO(contentType, Guid.Empty, globalSlots.ToList(), new List<AdContentOverride>());
+            var cacheResult = BuildContentAdsDTO(contentType, Guid.Empty, globalSlots.ToList(),
+                new List<AdContentOverride>());
             await _cache.SetAsync(globalCacheKey, cacheResult, AdCacheTtl);
 
             return result;
@@ -372,10 +390,10 @@ public class AdService : IAdService
     ///   - Nếu không có override ở position đó → dùng global slots.
     /// </summary>
     private static ContentAdsDTO BuildContentAdsDTO(
-        AdContentType            contentType,
-        Guid                     contentId,
-        List<GlobalAdSlot>       globalSlots,
-        List<AdContentOverride>  overrides)
+        AdContentType contentType,
+        Guid contentId,
+        List<GlobalAdSlot> globalSlots,
+        List<AdContentOverride> overrides)
     {
         // Positions có override
         var overriddenPositions = overrides
@@ -402,19 +420,19 @@ public class AdService : IAdService
         return new ContentAdsDTO
         {
             ContentType = contentType,
-            ContentId   = contentId,
-            PreRoll     = preRoll,
-            MidRoll     = midRoll,
-            PostRoll    = postRoll
+            ContentId = contentId,
+            PreRoll = preRoll,
+            MidRoll = midRoll,
+            PostRoll = postRoll
         };
     }
 
     private static List<AdPlaybackDTO> BuildPositionList(
-        AdPosition               position,
-        List<GlobalAdSlot>       globalSlots,
-        List<AdContentOverride>  overrides,
-        HashSet<AdPosition>      overriddenPositions,
-        bool                     sortByOffset = false)
+        AdPosition position,
+        List<GlobalAdSlot> globalSlots,
+        List<AdContentOverride> overrides,
+        HashSet<AdPosition> overriddenPositions,
+        bool sortByOffset = false)
     {
         IEnumerable<(Advertisement Ad, Guid SlotId, int? Offset, int Order)> sources;
 
@@ -439,39 +457,39 @@ public class AdService : IAdService
 
         return ordered.Select(x => new AdPlaybackDTO
         {
-            AdId                 = x.Ad.Id,
-            VideoUrl             = x.Ad.VideoUrl ?? string.Empty,
-            BrandImageUrl        = x.Ad.BrandImageUrl,
-            DurationSeconds      = x.Ad.DurationSeconds,
-            SkipAfterSeconds     = x.Ad.SkipAfterSeconds,
-            ClickThroughUrl      = x.Ad.ClickThroughUrl,
-            SlotId               = x.SlotId,
-            Position             = position,
+            AdId = x.Ad.Id,
+            VideoUrl = x.Ad.VideoUrl ?? string.Empty,
+            BrandImageUrl = x.Ad.BrandImageUrl,
+            DurationSeconds = x.Ad.DurationSeconds,
+            SkipAfterSeconds = x.Ad.SkipAfterSeconds,
+            ClickThroughUrl = x.Ad.ClickThroughUrl,
+            SlotId = x.SlotId,
+            Position = position,
             MidRollOffsetSeconds = x.Offset,
-            DisplayOrder         = x.Order
+            DisplayOrder = x.Order
         }).ToList();
     }
 
     private static AdDTO MapToAdDTO(Advertisement ad) => new()
     {
-        Id               = ad.Id,
-        Title            = ad.Title,
-        VideoUrl         = ad.VideoUrl,
-        BrandImageUrl    = ad.BrandImageUrl,
-        DurationSeconds  = ad.DurationSeconds,
+        Id = ad.Id,
+        Title = ad.Title,
+        VideoUrl = ad.VideoUrl,
+        BrandImageUrl = ad.BrandImageUrl,
+        DurationSeconds = ad.DurationSeconds,
         SkipAfterSeconds = ad.SkipAfterSeconds,
-        ClickThroughUrl  = ad.ClickThroughUrl,
-        IsActive         = ad.IsActive,
-        CreatedAt        = ad.CreatedAt,
-        UpdatedAt        = ad.UpdatedAt,
-        GlobalSlots      = ad.GlobalSlots.Select(s => new GlobalSlotDTO
+        ClickThroughUrl = ad.ClickThroughUrl,
+        IsActive = ad.IsActive,
+        CreatedAt = ad.CreatedAt,
+        UpdatedAt = ad.UpdatedAt,
+        GlobalSlots = ad.GlobalSlots.Select(s => new GlobalSlotDTO
         {
-            SlotId               = s.Id,
-            AppliesTo            = s.AppliesTo,
-            Position             = s.Position,
+            SlotId = s.Id,
+            AppliesTo = s.AppliesTo,
+            Position = s.Position,
             MidRollOffsetSeconds = s.MidRollOffsetSeconds,
-            DisplayOrder         = s.DisplayOrder,
-            IsActive             = s.IsActive
+            DisplayOrder = s.DisplayOrder,
+            IsActive = s.IsActive
         }).ToList()
     };
 

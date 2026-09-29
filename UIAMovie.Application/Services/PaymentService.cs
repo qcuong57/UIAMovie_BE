@@ -45,7 +45,7 @@ public interface IPaymentService
     Task<RevenueSummaryDTO> GetRevenueSummaryAsync();
     Task<RevenueChartDTO> GetRevenueChartAsync(string groupBy, int year, int? month = null);
     Task<List<RevenueByPlanDTO>> GetRevenueByPlanAsync(DateTime? from = null, DateTime? to = null);
-    Task<PagedResultDTO<AdminOrderDTO>> GetAdminOrdersAsync(AdminOrderFilterDTO filter);
+    Task<PaginatedDTO<AdminOrderDTO>> GetAdminOrdersAsync(AdminOrderFilterDTO filter);
 }
 
 
@@ -663,7 +663,7 @@ public class PaymentService : IPaymentService
     /// Code dưới đây minh hoạ với FindAsync + in-memory join (phù hợp dataset nhỏ).
     /// Production nên dùng IQueryable để push filter xuống DB.
     /// </summary>
-    public async Task<PagedResultDTO<AdminOrderDTO>> GetAdminOrdersAsync(AdminOrderFilterDTO filter)
+    public async Task<PaginatedDTO<AdminOrderDTO>> GetAdminOrdersAsync(AdminOrderFilterDTO filter)
     {
         var allOrders = await _orderRepo.FindAsync(_ => true);
         var allUsers  = await _userRepo.FindAsync(_ => true);
@@ -724,11 +724,11 @@ public class PaymentService : IPaymentService
             })
             .ToList();
  
-        return new PagedResultDTO<AdminOrderDTO>
+        return new PaginatedDTO<AdminOrderDTO>
         {
             Items      = items,
             TotalCount = totalCount,
-            Page       = page,
+            PageNumber = page,
             PageSize   = pageSize
         };
     }

@@ -30,6 +30,7 @@ public class AuthService : IAuthService
     private readonly IJwtTokenGenerator _jwtTokenGenerator;
     private readonly IEmailService _emailService;
     private readonly ICacheService _cacheService;
+    private readonly IEmailQueue _emailQueue;
 
     private const string OTP_PREFIX              = "otp:";
     private const string RESET_PREFIX            = "reset:";
@@ -53,13 +54,15 @@ public class AuthService : IAuthService
         IRepository<UserSession> sessionRepository,
         IJwtTokenGenerator jwtTokenGenerator,
         IEmailService emailService,
-        ICacheService cacheService)
+        ICacheService cacheService,
+        IEmailQueue emailQueue)
     {
         _userRepository    = userRepository;
         _sessionRepository = sessionRepository;
         _jwtTokenGenerator = jwtTokenGenerator;
         _emailService      = emailService;
         _cacheService      = cacheService;
+        _emailQueue        = emailQueue;
     }
 
     // ─── Register ────────────────────────────────────────────────────────────
@@ -90,7 +93,8 @@ public class AuthService : IAuthService
         await _cacheService.SetAsync(
             $"{REGISTER_OTP_PREFIX}{email.ToLower()}", otp, RegisterOtpLifetime);
 
-        await _emailService.SendRegisterOtpEmailAsync(email, otp);
+        // Gửi email ở nền để request trả về ngay, tránh timeout
+        _emailQueue.Enqueue(svc => svc.SendRegisterOtpEmailAsync(email, otp));
 
         return (true, "Mã xác nhận đã được gửi đến email của bạn. Vui lòng nhập OTP để hoàn tất đăng ký.");
     }
@@ -158,7 +162,8 @@ public class AuthService : IAuthService
 
         if (user.Is2FaEnabled)
         {
-            await SendOtpAsync(user.Id);
+            // Dùng luôn user đã có (không query lại DB) và gửi email ở nền
+            await IssueOtpAsync(user);
             return (null, user.Id, null, null);
         }
 
@@ -172,11 +177,21 @@ public class AuthService : IAuthService
         var user = await _userRepository.GetByIdAsync(userId);
         if (user == null) return false;
 
-        var otp = GenerateOtp();
-        await _cacheService.SetAsync($"{OTP_PREFIX}{userId}", otp, TimeSpan.FromMinutes(5));
-        await _emailService.SendOtpEmailAsync(user.Email, otp);
-
+        await IssueOtpAsync(user);
         return true;
+    }
+
+    /// <summary>
+    /// Lưu OTP vào cache rồi đẩy việc gửi email vào hàng đợi nền.
+    /// Trả về ngay, không chờ SMTP.
+    /// </summary>
+    private async Task IssueOtpAsync(User user)
+    {
+        var otp   = GenerateOtp();
+        var email = user.Email;
+
+        await _cacheService.SetAsync($"{OTP_PREFIX}{user.Id}", otp, TimeSpan.FromMinutes(5));
+        _emailQueue.Enqueue(svc => svc.SendOtpEmailAsync(email, otp));
     }
 
     public async Task<LoginResponseDTO?> VerifyOtpAsync(Guid userId, string code)
@@ -260,7 +275,7 @@ public class AuthService : IAuthService
 
         var otp = GenerateOtp();
         await _cacheService.SetAsync($"{RESET_PREFIX}{email.ToLower()}", otp, TimeSpan.FromMinutes(10));
-        await _emailService.SendResetPasswordEmailAsync(email, otp);
+        _emailQueue.Enqueue(svc => svc.SendResetPasswordEmailAsync(email, otp));
 
         return true;
     }

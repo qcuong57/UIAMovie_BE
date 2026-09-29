@@ -78,6 +78,15 @@ public class NotificationService : INotificationService
         await _notificationRepository.AddAsync(notif);
         await _notificationRepository.SaveChangesAsync();
 
+        // Thông báo riêng (bản tin admin): nếu chưa có link cụ thể thì trỏ về trang chi tiết của chính nó
+        if (type == "admin_announcement"
+            && (string.IsNullOrWhiteSpace(linkUrl) || linkUrl.TrimEnd('/') == "/announcements"))
+        {
+            linkUrl = $"/announcements?id={notif.Id}";
+            notif.LinkUrl = linkUrl;
+            await _notificationRepository.SaveChangesAsync();
+        }
+
         // Gửi realtime qua SignalR Hub
         await _realtimeSender.BroadcastAsync(new NotificationDTO
         {
@@ -93,7 +102,8 @@ public class NotificationService : INotificationService
     }
 
     public async Task<PaginatedDTO<NotificationDTO>> GetUserNotificationsAsync(
-        Guid userId, int page = 1, int pageSize = 20, string? excludeType = "admin_announcement", CancellationToken ct = default)
+        Guid userId, int page = 1, int pageSize = 20, string? excludeType = null,
+        CancellationToken ct = default)
     {
         var (items, totalCount) =
             await _notificationRepository.GetUserNotificationsPagedAsync(userId, page, pageSize, excludeType, ct);
@@ -119,7 +129,8 @@ public class NotificationService : INotificationService
         };
     }
 
-    public Task<int> GetUnreadCountAsync(Guid userId, string? excludeType = "admin_announcement", CancellationToken ct = default)
+    public Task<int> GetUnreadCountAsync(Guid userId, string? excludeType = null,
+        CancellationToken ct = default)
         => _notificationRepository.CountUnreadAsync(userId, excludeType, ct);
 
     public async Task<PaginatedDTO<NotificationDTO>> GetPublicAnnouncementsAsync(
@@ -159,7 +170,8 @@ public class NotificationService : INotificationService
         => _notificationRepository.DeleteAsync(userId, notificationId, ct);
 
     public Task<bool> AdminUpdateNotificationAsync(Guid id, CreateAdminBroadcastDTO dto, CancellationToken ct = default)
-        => _notificationRepository.AdminUpdateAsync(id, dto.Title, dto.Message, dto.LinkUrl, dto.ThumbnailUrl, dto.Type, ct);
+        => _notificationRepository.AdminUpdateAsync(id, dto.Title, dto.Message, dto.LinkUrl, dto.ThumbnailUrl, dto.Type,
+            ct);
 
     public Task<bool> AdminDeleteNotificationAsync(Guid id, CancellationToken ct = default)
         => _notificationRepository.AdminHardDeleteAsync(id, ct);

@@ -23,13 +23,13 @@ namespace UIAMovie.Application.Services;
 public class EpisodeSubtitleService : IEpisodeSubtitleService
 {
     private readonly IEpisodeSubtitleRepository _repo;
-    private readonly IConfiguration             _config;
-    private readonly HttpClient                 _httpClient;
-    private readonly IServiceScopeFactory       _scopeFactory;   // [FIX 1]
+    private readonly IConfiguration _config;
+    private readonly HttpClient _httpClient;
+    private readonly IServiceScopeFactory _scopeFactory; // [FIX 1]
 
-    private string GroqApiKey  => _config["Groq:ApiKey"]  ?? "";
+    private string GroqApiKey => _config["Groq:ApiKey"] ?? "";
     private string GroqBaseUrl => _config["Groq:BaseUrl"] ?? "https://api.groq.com/openai/v1/chat/completions";
-    private string GroqModel   => _config["Groq:Model"]   ?? "llama-3.1-8b-instant";
+    private string GroqModel => _config["Groq:Model"] ?? "llama-3.1-8b-instant";
 
     private static readonly Dictionary<string, string> _languageNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -51,13 +51,13 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
 
     public EpisodeSubtitleService(
         IEpisodeSubtitleRepository repo,
-        IConfiguration             config,
-        IHttpClientFactory         httpClientFactory,
-        IServiceScopeFactory       scopeFactory)       // [FIX 1] inject thêm
+        IConfiguration config,
+        IHttpClientFactory httpClientFactory,
+        IServiceScopeFactory scopeFactory) // [FIX 1] inject thêm
     {
-        _repo         = repo;
-        _config       = config;
-        _httpClient   = httpClientFactory.CreateClient("groq");
+        _repo = repo;
+        _config = config;
+        _httpClient = httpClientFactory.CreateClient("groq");
         _scopeFactory = scopeFactory;
     }
 
@@ -86,11 +86,11 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
 
         return new EpisodeSubtitleContentDTO
         {
-            Id           = entity.Id,
-            EpisodeId    = entity.EpisodeId,
+            Id = entity.Id,
+            EpisodeId = entity.EpisodeId,
             LanguageCode = entity.LanguageCode,
             LanguageName = entity.LanguageName,
-            Content      = entity.Content
+            Content = entity.Content
         };
     }
 
@@ -101,19 +101,19 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
     {
         ValidateFile(dto.File);
 
-        var rawText    = await ReadFileTextAsync(dto.File);
-        var ext        = Path.GetExtension(dto.File.FileName).ToLowerInvariant();
+        var rawText = await ReadFileTextAsync(dto.File);
+        var ext = Path.GetExtension(dto.File.FileName).ToLowerInvariant();
         var vttContent = ext == ".srt" ? ConvertSrtToVtt(rawText) : NormalizeVtt(rawText);
-        var langName   = ResolveLanguageName(dto.LanguageCode, dto.LanguageName);
+        var langName = ResolveLanguageName(dto.LanguageCode, dto.LanguageName);
 
         var existing = await _repo.GetByEpisodeAndLanguageAsync(episodeId, dto.LanguageCode);
         if (existing != null)
         {
-            existing.Content      = vttContent;
+            existing.Content = vttContent;
             existing.LanguageName = langName;
-            existing.Source       = SubtitleSource.Manual;
-            existing.Status       = SubtitleStatus.Ready;
-            existing.UpdatedAt    = DateTime.UtcNow;
+            existing.Source = SubtitleSource.Manual;
+            existing.Status = SubtitleStatus.Ready;
+            existing.UpdatedAt = DateTime.UtcNow;
 
             if (dto.IsDefault && !existing.IsDefault)
             {
@@ -131,14 +131,14 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
 
         var entity = new EpisodeSubtitle
         {
-            EpisodeId    = episodeId,
+            EpisodeId = episodeId,
             LanguageCode = dto.LanguageCode,
             LanguageName = langName,
-            Content      = vttContent,
-            Source       = SubtitleSource.Manual,
-            Status       = SubtitleStatus.Ready,
-            IsDefault    = dto.IsDefault,
-            UploadedBy   = uploadedBy
+            Content = vttContent,
+            Source = SubtitleSource.Manual,
+            Status = SubtitleStatus.Ready,
+            IsDefault = dto.IsDefault,
+            UploadedBy = uploadedBy
         };
 
         await _repo.AddAsync(entity);
@@ -152,27 +152,27 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
         Guid episodeId, TranslateSubtitleDTO dto, Guid requestedBy)
     {
         var source = await _repo.GetByIdAsync(dto.SourceSubtitleId)
-            ?? throw new KeyNotFoundException("Không tìm thấy subtitle nguồn.");
+                     ?? throw new KeyNotFoundException("Không tìm thấy subtitle nguồn.");
 
         if (source.Status == SubtitleStatus.Processing)
             throw new InvalidOperationException("Subtitle nguồn đang được xử lý, vui lòng đợi.");
 
-        var langName     = ResolveLanguageName(dto.TargetLanguageCode, dto.TargetLanguageName);
+        var langName = ResolveLanguageName(dto.TargetLanguageCode, dto.TargetLanguageName);
         // Capture giá trị cần dùng trong background — không capture entity hay repo
-        var sourceContent    = source.Content;
-        var sourceLangCode   = source.LanguageCode;
-        var targetLangCode   = dto.TargetLanguageCode;
+        var sourceContent = source.Content;
+        var sourceLangCode = source.LanguageCode;
+        var targetLangCode = dto.TargetLanguageCode;
 
         var existing = await _repo.GetByEpisodeAndLanguageAsync(episodeId, targetLangCode);
         EpisodeSubtitle entity;
 
         if (existing != null)
         {
-            existing.Status         = SubtitleStatus.Processing;
-            existing.Content        = string.Empty;
+            existing.Status = SubtitleStatus.Processing;
+            existing.Content = string.Empty;
             existing.TranslatedFrom = sourceLangCode;
-            existing.Source         = SubtitleSource.AiTranslated;
-            existing.UpdatedAt      = DateTime.UtcNow;
+            existing.Source = SubtitleSource.AiTranslated;
+            existing.UpdatedAt = DateTime.UtcNow;
             _repo.Update(existing);
             await _repo.SaveChangesAsync();
             entity = existing;
@@ -181,14 +181,14 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
         {
             entity = new EpisodeSubtitle
             {
-                EpisodeId      = episodeId,
-                LanguageCode   = targetLangCode,
-                LanguageName   = langName,
-                Content        = string.Empty,
-                Source         = SubtitleSource.AiTranslated,
+                EpisodeId = episodeId,
+                LanguageCode = targetLangCode,
+                LanguageName = langName,
+                Content = string.Empty,
+                Source = SubtitleSource.AiTranslated,
                 TranslatedFrom = sourceLangCode,
-                Status         = SubtitleStatus.Processing,
-                UploadedBy     = requestedBy
+                Status = SubtitleStatus.Processing,
+                UploadedBy = requestedBy
             };
             await _repo.AddAsync(entity);
             await _repo.SaveChangesAsync();
@@ -209,15 +209,15 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
                 var translated = await TranslateVttWithGroqAsync(
                     sourceContent, sourceLangCode, targetLangCode);
 
-                bgEntity.Content   = translated;
-                bgEntity.Status    = SubtitleStatus.Ready;
+                bgEntity.Content = translated;
+                bgEntity.Status = SubtitleStatus.Ready;
                 bgEntity.UpdatedAt = DateTime.UtcNow;
             }
             catch (Exception ex)
             {
-                bgEntity.Status       = SubtitleStatus.Failed;
+                bgEntity.Status = SubtitleStatus.Failed;
                 bgEntity.ErrorMessage = ex.Message;
-                bgEntity.UpdatedAt    = DateTime.UtcNow;
+                bgEntity.UpdatedAt = DateTime.UtcNow;
             }
 
             repo.Update(bgEntity);
@@ -232,8 +232,8 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
     public async Task<EpisodeSubtitleDTO> AiGenerateSubtitleAsync(
         AiGenerateEpisodeSubtitleDTO dto, Guid requestedBy)
     {
-        var langName  = ResolveLanguageName(dto.TargetLanguageCode, dto.TargetLanguageName);
-        var fmt       = DetectFormat(dto.SourceContent);
+        var langName = ResolveLanguageName(dto.TargetLanguageCode, dto.TargetLanguageName);
+        var fmt = DetectFormat(dto.SourceContent);
         var vttSource = fmt == "srt"
             ? ConvertSrtToVtt(dto.SourceContent)
             : NormalizeVtt(dto.SourceContent);
@@ -246,11 +246,11 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
 
         if (existing != null)
         {
-            existing.Status         = SubtitleStatus.Processing;
-            existing.Content        = string.Empty;
+            existing.Status = SubtitleStatus.Processing;
+            existing.Content = string.Empty;
             existing.TranslatedFrom = sourceLangCode;
-            existing.Source         = SubtitleSource.AiTranslated;
-            existing.UpdatedAt      = DateTime.UtcNow;
+            existing.Source = SubtitleSource.AiTranslated;
+            existing.UpdatedAt = DateTime.UtcNow;
             _repo.Update(existing);
             await _repo.SaveChangesAsync();
             entity = existing;
@@ -259,14 +259,14 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
         {
             entity = new EpisodeSubtitle
             {
-                EpisodeId      = dto.EpisodeId,
-                LanguageCode   = targetLangCode,
-                LanguageName   = langName,
-                Content        = string.Empty,
-                Source         = SubtitleSource.AiTranslated,
+                EpisodeId = dto.EpisodeId,
+                LanguageCode = targetLangCode,
+                LanguageName = langName,
+                Content = string.Empty,
+                Source = SubtitleSource.AiTranslated,
                 TranslatedFrom = sourceLangCode,
-                Status         = SubtitleStatus.Processing,
-                UploadedBy     = requestedBy
+                Status = SubtitleStatus.Processing,
+                UploadedBy = requestedBy
             };
             await _repo.AddAsync(entity);
             await _repo.SaveChangesAsync();
@@ -287,15 +287,15 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
                 var translated = await TranslateVttWithGroqAsync(
                     vttSource, sourceLangCode, targetLangCode);
 
-                bgEntity.Content   = translated;
-                bgEntity.Status    = SubtitleStatus.Ready;
+                bgEntity.Content = translated;
+                bgEntity.Status = SubtitleStatus.Ready;
                 bgEntity.UpdatedAt = DateTime.UtcNow;
             }
             catch (Exception ex)
             {
-                bgEntity.Status       = SubtitleStatus.Failed;
+                bgEntity.Status = SubtitleStatus.Failed;
                 bgEntity.ErrorMessage = ex.Message;
-                bgEntity.UpdatedAt    = DateTime.UtcNow;
+                bgEntity.UpdatedAt = DateTime.UtcNow;
             }
 
             repo.Update(bgEntity);
@@ -345,14 +345,14 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
         if (cues.Count == 0)
             throw new InvalidOperationException("Không đọc được cue nào từ subtitle.");
 
-        const int batchSize      = 30;
-        var       translatedTexts = new List<string>(cues.Count);
+        const int batchSize = 30;
+        var translatedTexts = new List<string>(cues.Count);
 
         for (int i = 0; i < cues.Count; i += batchSize)
         {
-            var batch      = cues.Skip(i).Take(batchSize).ToList();
+            var batch = cues.Skip(i).Take(batchSize).ToList();
             var batchTexts = batch.Select(c => c.Text).ToList();
-            var result     = await TranslateBatchAsync(batchTexts, sourceLang, targetLang);
+            var result = await TranslateBatchAsync(batchTexts, sourceLang, targetLang);
             translatedTexts.AddRange(result);
 
             if (i + batchSize < cues.Count)
@@ -371,27 +371,27 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
         var numberedTexts = texts.Select((t, idx) => $"{idx + 1}. {t}").ToList();
 
         var prompt = $"""
-            Translate the following subtitle lines from {sourceLangName} to {targetLangName}.
-            Rules:
-            - Keep the same line count: output exactly {texts.Count} lines.
-            - Preserve line breaks within each subtitle block (use \\n).
-            - Keep proper names, technical terms, and sound effects (like [Music], [Laughter]) as-is.
-            - Output ONLY a JSON array of translated strings, no explanation.
-            - Example output: ["Line 1 translated", "Line 2 translated"]
+                      Translate the following subtitle lines from {sourceLangName} to {targetLangName}.
+                      Rules:
+                      - Keep the same line count: output exactly {texts.Count} lines.
+                      - Preserve line breaks within each subtitle block (use \\n).
+                      - Keep proper names, technical terms, and sound effects (like [Music], [Laughter]) as-is.
+                      - Output ONLY a JSON array of translated strings, no explanation.
+                      - Example output: ["Line 1 translated", "Line 2 translated"]
 
-            Lines to translate:
-            {string.Join("\n", numberedTexts)}
-            """;
+                      Lines to translate:
+                      {string.Join("\n", numberedTexts)}
+                      """;
 
         var requestBody = new
         {
-            model       = GroqModel,
-            max_tokens  = 2000,
+            model = GroqModel,
+            max_tokens = 2000,
             temperature = 0.1,
-            messages    = new[] { new { role = "user", content = prompt } }
+            messages = new[] { new { role = "user", content = prompt } }
         };
 
-        var json    = JsonSerializer.Serialize(requestBody);
+        var json = JsonSerializer.Serialize(requestBody);
         var request = new HttpRequestMessage(HttpMethod.Post, GroqBaseUrl)
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
@@ -399,7 +399,7 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
         request.Headers.Add("Authorization", $"Bearer {GroqApiKey}");
 
         var response = await _httpClient.SendAsync(request);
-        var body     = await response.Content.ReadAsStringAsync();
+        var body = await response.Content.ReadAsStringAsync();
 
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException($"Groq API lỗi {response.StatusCode}: {body}");
@@ -412,7 +412,7 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
         try
         {
             using var doc = JsonDocument.Parse(responseBody);
-            var content   = doc.RootElement
+            var content = doc.RootElement
                 .GetProperty("choices")[0]
                 .GetProperty("message")
                 .GetProperty("content")
@@ -441,7 +441,7 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
     private static string ConvertSrtToVtt(string srtContent)
     {
         var text = srtContent.Replace("\r\n", "\n").Replace("\r", "\n").Trim();
-        var vtt  = Regex.Replace(text, @"(\d{2}:\d{2}:\d{2}),(\d{3})", "$1.$2");
+        var vtt = Regex.Replace(text, @"(\d{2}:\d{2}:\d{2}),(\d{3})", "$1.$2");
         return "WEBVTT\n\n" + vtt;
     }
 
@@ -467,7 +467,7 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
 
     private static List<VttCue> ParseVttCues(string vttContent)
     {
-        var cues  = new List<VttCue>();
+        var cues = new List<VttCue>();
         var lines = vttContent
             .Replace("\r\n", "\n")
             .Replace("\r", "\n")
@@ -481,8 +481,8 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
             var line = lines[i].Trim();
 
             if (string.IsNullOrEmpty(line) ||
-                line.StartsWith("NOTE")   ||
-                line.StartsWith("STYLE")  ||
+                line.StartsWith("NOTE") ||
+                line.StartsWith("STYLE") ||
                 line.StartsWith("REGION"))
             {
                 i++;
@@ -498,7 +498,11 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
                 line = lines[i].Trim();
             }
 
-            if (!line.Contains("-->")) { i++; continue; }
+            if (!line.Contains("-->"))
+            {
+                i++;
+                continue;
+            }
 
             var timing = line;
             i++;
@@ -524,7 +528,7 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
         var sb = new StringBuilder("WEBVTT\n\n");
         for (int i = 0; i < cues.Count; i++)
         {
-            var cue  = cues[i];
+            var cue = cues[i];
             var text = i < translatedTexts.Count ? translatedTexts[i] : cue.Text;
 
             if (cue.Id != null) sb.AppendLine(cue.Id);
@@ -532,6 +536,7 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
             sb.AppendLine(text.Replace("\\n", "\n"));
             sb.AppendLine();
         }
+
         return sb.ToString();
     }
 
@@ -566,16 +571,16 @@ public class EpisodeSubtitleService : IEpisodeSubtitleService
 
     private static EpisodeSubtitleDTO ToDto(EpisodeSubtitle e) => new()
     {
-        Id             = e.Id,
-        EpisodeId      = e.EpisodeId,
-        LanguageCode   = e.LanguageCode,
-        LanguageName   = e.LanguageName,
-        Source         = e.Source,
+        Id = e.Id,
+        EpisodeId = e.EpisodeId,
+        LanguageCode = e.LanguageCode,
+        LanguageName = e.LanguageName,
+        Source = e.Source,
         TranslatedFrom = e.TranslatedFrom,
-        Status         = e.Status,
-        ErrorMessage   = e.ErrorMessage,
-        IsDefault      = e.IsDefault,
-        CreatedAt      = e.CreatedAt,
-        UpdatedAt      = e.UpdatedAt
+        Status = e.Status,
+        ErrorMessage = e.ErrorMessage,
+        IsDefault = e.IsDefault,
+        CreatedAt = e.CreatedAt,
+        UpdatedAt = e.UpdatedAt
     };
 }

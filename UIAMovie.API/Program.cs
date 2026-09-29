@@ -23,6 +23,7 @@ using UIAMovie.Infrastructure.Caching;
 using UIAMovie.Infrastructure.Configuration;
 using UIAMovie.Infrastructure.Data;
 using UIAMovie.Infrastructure.Data.Repositories;
+using UIAMovie.Infrastructure.Email;
 using UIAMovie.Infrastructure.Messaging;
 using UIAMovie.Infrastructure.Security;
 using UIAMovie.Infrastructure.Services;
@@ -76,6 +77,11 @@ builder.Services.AddScoped<IRepository<MovieImage>, Repository<MovieImage>>();
 builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
 builder.Services.AddScoped<ITwoFactorAuthProvider, TwoFactorAuthProvider>();
 builder.Services.AddScoped<IEmailService, EmailService>();
+
+// Email queue chạy nền (gửi OTP không làm chậm request)
+builder.Services.AddSingleton<EmailQueue>();
+builder.Services.AddSingleton<IEmailQueue>(sp => sp.GetRequiredService<EmailQueue>());
+builder.Services.AddHostedService<EmailQueueWorker>();
 
 // ── SignalR & Realtime Notification (Đăng ký tại đây) ────────────────────────
 builder.Services.AddSignalR();

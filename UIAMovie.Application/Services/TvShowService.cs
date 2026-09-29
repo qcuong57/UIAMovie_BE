@@ -205,16 +205,19 @@ public class TvShowService : ITvShowService
         if (cachedSeason != null)
             return cachedSeason.Episodes.FirstOrDefault(e => e.EpisodeNumber == episodeNumber);
 
-        var season = await _seasonRepository.FindOneAsync(s => s.TvShowId == tvShowId && s.SeasonNumber == seasonNumber);
+        var season =
+            await _seasonRepository.FindOneAsync(s => s.TvShowId == tvShowId && s.SeasonNumber == seasonNumber);
         if (season == null) return null;
 
-        var episode = await _episodeRepository.FindOneAsync(e => e.SeasonId == season.Id && e.EpisodeNumber == episodeNumber);
+        var episode =
+            await _episodeRepository.FindOneAsync(e => e.SeasonId == season.Id && e.EpisodeNumber == episodeNumber);
         return episode == null ? null : MapEpisodeToDTO(episode);
     }
 
     public async Task<bool> UpdateSeasonAsync(Guid tvShowId, int seasonNumber, UpdateSeasonDTO dto)
     {
-        var season = await _seasonRepository.FindOneAsync(s => s.TvShowId == tvShowId && s.SeasonNumber == seasonNumber);
+        var season =
+            await _seasonRepository.FindOneAsync(s => s.TvShowId == tvShowId && s.SeasonNumber == seasonNumber);
         if (season == null) return false;
 
         if (dto.Name != null) season.Name = dto.Name;
@@ -251,12 +254,14 @@ public class TvShowService : ITvShowService
             await _cacheService.RemoveAsync(string.Format(SEASON_CACHE_KEY, season.TvShowId, season.SeasonNumber));
             await _cacheService.RemoveAsync(string.Format(TVSHOW_CACHE_KEY, season.TvShowId));
         }
+
         return true;
     }
 
     public async Task<EpisodeDTO?> AddEpisodeAsync(Guid tvShowId, int seasonNumber, CreateEpisodeDTO dto)
     {
-        var season = await _seasonRepository.FindOneAsync(s => s.TvShowId == tvShowId && s.SeasonNumber == seasonNumber);
+        var season =
+            await _seasonRepository.FindOneAsync(s => s.TvShowId == tvShowId && s.SeasonNumber == seasonNumber);
         if (season == null) return null;
 
         var episode = new Episode
@@ -324,8 +329,12 @@ public class TvShowService : ITvShowService
         {
             Title = dto.Title,
             Description = string.IsNullOrEmpty(dto.Description) ? dto.Title : dto.Description,
-            FirstAirDate = dto.FirstAirDate.HasValue ? DateTime.SpecifyKind(dto.FirstAirDate.Value, DateTimeKind.Utc) : null,
-            LastAirDate = dto.LastAirDate.HasValue ? DateTime.SpecifyKind(dto.LastAirDate.Value, DateTimeKind.Utc) : null,
+            FirstAirDate = dto.FirstAirDate.HasValue
+                ? DateTime.SpecifyKind(dto.FirstAirDate.Value, DateTimeKind.Utc)
+                : null,
+            LastAirDate = dto.LastAirDate.HasValue
+                ? DateTime.SpecifyKind(dto.LastAirDate.Value, DateTimeKind.Utc)
+                : null,
             PosterUrl = dto.PosterUrl,
             BackdropUrl = dto.BackdropUrl,
             EpisodeRuntime = dto.EpisodeRuntime,
@@ -430,6 +439,7 @@ public class TvShowService : ITvShowService
                 if (missingIds.Any())
                     throw new ArgumentException($"Thể loại không tồn tại: {string.Join(", ", missingIds)}");
             }
+
             await ReplaceGenresAsync(id, distinctGenreIds);
         }
 
@@ -487,8 +497,15 @@ public class TvShowService : ITvShowService
             var oldPublicId = ExtractCloudinaryPublicId(old.VideoUrl);
             if (oldPublicId != null)
             {
-                try { await _cloudinaryService.DeleteFileAsync(oldPublicId); } catch { }
+                try
+                {
+                    await _cloudinaryService.DeleteFileAsync(oldPublicId);
+                }
+                catch
+                {
+                }
             }
+
             _videoRepository.Remove(old);
         }
 
@@ -516,7 +533,13 @@ public class TvShowService : ITvShowService
         var publicId = ExtractCloudinaryPublicId(video.VideoUrl);
         if (publicId != null)
         {
-            try { await _cloudinaryService.DeleteFileAsync(publicId); } catch { }
+            try
+            {
+                await _cloudinaryService.DeleteFileAsync(publicId);
+            }
+            catch
+            {
+            }
         }
 
         _videoRepository.Remove(video);
@@ -629,13 +652,13 @@ public class TvShowService : ITvShowService
 
         if (episodeId.HasValue)
         {
-            existing = await _watchHistoryRepository.FindOneAsync(
-                h => h.UserId == userId && h.TvShowId == tvShowId && h.EpisodeId == episodeId);
+            existing = await _watchHistoryRepository.FindOneAsync(h =>
+                h.UserId == userId && h.TvShowId == tvShowId && h.EpisodeId == episodeId);
         }
         else
         {
-            existing = await _watchHistoryRepository.FindOneAsync(
-                h => h.UserId == userId && h.TvShowId == tvShowId && h.EpisodeId == null);
+            existing = await _watchHistoryRepository.FindOneAsync(h =>
+                h.UserId == userId && h.TvShowId == tvShowId && h.EpisodeId == null);
         }
 
         if (existing != null)
@@ -702,7 +725,8 @@ public class TvShowService : ITvShowService
                 var t = showMap[h.TvShowId];
                 (int SeasonNumber, int EpisodeNumber, string? Title, int? Runtime)? ep =
                     h.EpisodeId.HasValue && episodeMeta.TryGetValue(h.EpisodeId.Value, out var meta)
-                        ? meta : null;
+                        ? meta
+                        : null;
 
                 return new TvShowWatchHistoryDTO
                 {
@@ -758,7 +782,9 @@ public class TvShowService : ITvShowService
 
         foreach (var tmdbSeason in full.SeasonDetails.Values.Where(s => s.SeasonNumber > 0))
         {
-            var season = await _seasonRepository.FindOneAsync(s => s.TvShowId == id && s.SeasonNumber == tmdbSeason.SeasonNumber);
+            var season =
+                await _seasonRepository.FindOneAsync(s =>
+                    s.TvShowId == id && s.SeasonNumber == tmdbSeason.SeasonNumber);
 
             if (season == null)
             {
@@ -769,7 +795,9 @@ public class TvShowService : ITvShowService
                     Name = tmdbSeason.Name,
                     Overview = tmdbSeason.Overview,
                     PosterUrl = tmdbSeason.PosterUrl,
-                    AirDate = DateTime.TryParse(tmdbSeason.AirDate ?? string.Empty, out var ad) ? DateTime.SpecifyKind(ad, DateTimeKind.Utc) : null,
+                    AirDate = DateTime.TryParse(tmdbSeason.AirDate ?? string.Empty, out var ad)
+                        ? DateTime.SpecifyKind(ad, DateTimeKind.Utc)
+                        : null,
                     EpisodeCount = tmdbSeason.Episodes.Count
                 };
                 await _seasonRepository.AddAsync(season);
@@ -793,7 +821,9 @@ public class TvShowService : ITvShowService
                     StillUrl = ep.StillUrl,
                     Runtime = ep.Runtime,
                     Rating = ep.VoteAverage > 0 ? (decimal)ep.VoteAverage : null,
-                    AirDate = DateTime.TryParse(ep.AirDate ?? string.Empty, out var ea) ? DateTime.SpecifyKind(ea, DateTimeKind.Utc) : null
+                    AirDate = DateTime.TryParse(ep.AirDate ?? string.Empty, out var ea)
+                        ? DateTime.SpecifyKind(ea, DateTimeKind.Utc)
+                        : null
                 });
                 newEpisodes++;
             }
@@ -807,7 +837,8 @@ public class TvShowService : ITvShowService
             }
         }
 
-        var syncedSeasonNumbers = full.SeasonDetails.Values.Where(s => s.SeasonNumber > 0).Select(s => s.SeasonNumber).ToList();
+        var syncedSeasonNumbers = full.SeasonDetails.Values.Where(s => s.SeasonNumber > 0).Select(s => s.SeasonNumber)
+            .ToList();
         var genreRowsAlways = await _tvShowGenreRepository.FindAsync(g => g.TvShowId == id);
         var genreIdsAlways = genreRowsAlways.Select(g => g.GenreId).ToList();
 
@@ -818,7 +849,9 @@ public class TvShowService : ITvShowService
             show.NumberOfSeasons = full.Detail.NumberOfSeasons;
             show.NumberOfEpisodes = full.Detail.NumberOfEpisodes;
             show.Status = full.Detail.Status;
-            show.LastAirDate = DateTime.TryParse(full.Detail.LastAirDate ?? string.Empty, out var lad) ? DateTime.SpecifyKind(lad, DateTimeKind.Utc) : null;
+            show.LastAirDate = DateTime.TryParse(full.Detail.LastAirDate ?? string.Empty, out var lad)
+                ? DateTime.SpecifyKind(lad, DateTimeKind.Utc)
+                : null;
 
             _tvShowRepository.Update(show);
             await _tvShowRepository.SaveChangesAsync();
@@ -844,6 +877,7 @@ public class TvShowService : ITvShowService
         {
             await _tvShowGenreRepository.AddAsync(new TvShowGenre { TvShowId = showId, GenreId = genreId });
         }
+
         await _tvShowGenreRepository.SaveChangesAsync();
     }
 
@@ -855,8 +889,10 @@ public class TvShowService : ITvShowService
 
         foreach (var img in images)
         {
-            await _imageRepository.AddAsync(new TvShowImage { TvShowId = showId, Url = img.Url, ImageType = imageType });
+            await _imageRepository.AddAsync(new TvShowImage
+                { TvShowId = showId, Url = img.Url, ImageType = imageType });
         }
+
         await _imageRepository.SaveChangesAsync();
     }
 
@@ -871,7 +907,8 @@ public class TvShowService : ITvShowService
         for (int i = 0; i < cast.Count; i++)
         {
             var c = cast[i];
-            var person = await UpsertPersonAsync(c.PersonId, c.TmdbPersonId, c.Name, c.ProfileUrl, c.Biography, c.Birthday, c.PlaceOfBirth);
+            var person = await UpsertPersonAsync(c.PersonId, c.TmdbPersonId, c.Name, c.ProfileUrl, c.Biography,
+                c.Birthday, c.PlaceOfBirth);
 
             if (c.ProfileImages?.Count > 0) await SavePersonImagesAsync(person.Id, c.ProfileImages);
 
@@ -883,6 +920,7 @@ public class TvShowService : ITvShowService
                 Order = c.Order != 0 ? c.Order : i
             });
         }
+
         await _castRepository.SaveChangesAsync();
         await CleanupOrphanPersonsAsync(oldPersonIds);
     }
@@ -897,7 +935,8 @@ public class TvShowService : ITvShowService
 
         if (!string.IsNullOrWhiteSpace(director.Name))
         {
-            var person = await UpsertPersonAsync(director.PersonId, director.TmdbPersonId, director.Name, director.ProfileUrl, director.Biography, director.Birthday, director.PlaceOfBirth);
+            var person = await UpsertPersonAsync(director.PersonId, director.TmdbPersonId, director.Name,
+                director.ProfileUrl, director.Biography, director.Birthday, director.PlaceOfBirth);
 
             if (director.ProfileImages?.Count > 0) await SavePersonImagesAsync(person.Id, director.ProfileImages);
 
@@ -937,6 +976,7 @@ public class TvShowService : ITvShowService
                 await _tvShowGenreRepository.AddAsync(new TvShowGenre { TvShowId = showId, GenreId = genreId });
             }
         }
+
         await _tvShowGenreRepository.SaveChangesAsync();
     }
 
@@ -944,20 +984,24 @@ public class TvShowService : ITvShowService
     {
         foreach (var c in cast)
         {
-            var person = await UpsertPersonAsync(c.PersonId, c.TmdbPersonId, c.Name, c.ProfileUrl, c.Biography, c.Birthday, c.PlaceOfBirth);
+            var person = await UpsertPersonAsync(c.PersonId, c.TmdbPersonId, c.Name, c.ProfileUrl, c.Biography,
+                c.Birthday, c.PlaceOfBirth);
             await SavePersonImagesAsync(person.Id, c.ProfileImages);
 
             var existing = await _castRepository.FindOneAsync(x => x.TvShowId == showId && x.PersonId == person.Id);
             if (existing != null) continue;
 
-            await _castRepository.AddAsync(new TvShowCast { TvShowId = showId, PersonId = person.Id, Character = c.Character, Order = c.Order });
+            await _castRepository.AddAsync(new TvShowCast
+                { TvShowId = showId, PersonId = person.Id, Character = c.Character, Order = c.Order });
         }
+
         await _castRepository.SaveChangesAsync();
     }
 
     private async Task SaveDirectorAsync(Guid showId, ImportDirectorDTO dir)
     {
-        var person = await UpsertPersonAsync(dir.PersonId, dir.TmdbPersonId, dir.Name, dir.ProfileUrl, dir.Biography, dir.Birthday, dir.PlaceOfBirth);
+        var person = await UpsertPersonAsync(dir.PersonId, dir.TmdbPersonId, dir.Name, dir.ProfileUrl, dir.Biography,
+            dir.Birthday, dir.PlaceOfBirth);
         await SavePersonImagesAsync(person.Id, dir.ProfileImages);
 
         var existing = await _directorRepository.FindOneAsync(x => x.TvShowId == showId && x.PersonId == person.Id);
@@ -971,8 +1015,10 @@ public class TvShowService : ITvShowService
     {
         foreach (var img in images.Where(i => !string.IsNullOrEmpty(i.Url)))
         {
-            await _imageRepository.AddAsync(new TvShowImage { TvShowId = showId, Url = img.Url, ImageType = img.ImageType });
+            await _imageRepository.AddAsync(new TvShowImage
+                { TvShowId = showId, Url = img.Url, ImageType = img.ImageType });
         }
+
         await _imageRepository.SaveChangesAsync();
     }
 
@@ -980,8 +1026,10 @@ public class TvShowService : ITvShowService
     {
         foreach (var t in trailers.Where(t => !string.IsNullOrEmpty(t.YoutubeUrl)))
         {
-            await _videoRepository.AddAsync(new TvShowVideo { TvShowId = showId, VideoUrl = t.YoutubeUrl, VideoType = "trailer" });
+            await _videoRepository.AddAsync(new TvShowVideo
+                { TvShowId = showId, VideoUrl = t.YoutubeUrl, VideoType = "trailer" });
         }
+
         await _videoRepository.SaveChangesAsync();
     }
 
@@ -1017,14 +1065,18 @@ public class TvShowService : ITvShowService
                     AirDate = e.AirDate.HasValue ? DateTime.SpecifyKind(e.AirDate.Value, DateTimeKind.Utc) : null
                 });
             }
+
             await _episodeRepository.SaveChangesAsync();
         }
     }
 
-    private async Task<Person> UpsertPersonAsync(Guid? personId, int? tmdbPersonId, string name, string? profileUrl, string? biography, string? birthday, string? placeOfBirth)
+    private async Task<Person> UpsertPersonAsync(Guid? personId, int? tmdbPersonId, string name, string? profileUrl,
+        string? biography, string? birthday, string? placeOfBirth)
     {
         Person? person = personId.HasValue ? await _personRepository.GetByIdAsync(personId.Value) : null;
-        person ??= tmdbPersonId.HasValue ? await _personRepository.FindOneAsync(p => p.TmdbPersonId == tmdbPersonId) : null;
+        person ??= tmdbPersonId.HasValue
+            ? await _personRepository.FindOneAsync(p => p.TmdbPersonId == tmdbPersonId)
+            : null;
         person ??= await _personRepository.FindOneAsync(p => p.Name.ToLower() == name.Trim().ToLower());
 
         if (person == null)
@@ -1044,11 +1096,35 @@ public class TvShowService : ITvShowService
         else
         {
             bool changed = false;
-            if (!person.TmdbPersonId.HasValue && tmdbPersonId.HasValue) { person.TmdbPersonId = tmdbPersonId; changed = true; }
-            if (string.IsNullOrEmpty(person.Biography) && !string.IsNullOrEmpty(biography)) { person.Biography = biography; changed = true; }
-            if (string.IsNullOrEmpty(person.Birthday) && !string.IsNullOrEmpty(birthday)) { person.Birthday = birthday; changed = true; }
-            if (string.IsNullOrEmpty(person.PlaceOfBirth) && !string.IsNullOrEmpty(placeOfBirth)) { person.PlaceOfBirth = placeOfBirth; changed = true; }
-            if (string.IsNullOrEmpty(person.ProfileUrl) && !string.IsNullOrEmpty(profileUrl)) { person.ProfileUrl = profileUrl; changed = true; }
+            if (!person.TmdbPersonId.HasValue && tmdbPersonId.HasValue)
+            {
+                person.TmdbPersonId = tmdbPersonId;
+                changed = true;
+            }
+
+            if (string.IsNullOrEmpty(person.Biography) && !string.IsNullOrEmpty(biography))
+            {
+                person.Biography = biography;
+                changed = true;
+            }
+
+            if (string.IsNullOrEmpty(person.Birthday) && !string.IsNullOrEmpty(birthday))
+            {
+                person.Birthday = birthday;
+                changed = true;
+            }
+
+            if (string.IsNullOrEmpty(person.PlaceOfBirth) && !string.IsNullOrEmpty(placeOfBirth))
+            {
+                person.PlaceOfBirth = placeOfBirth;
+                changed = true;
+            }
+
+            if (string.IsNullOrEmpty(person.ProfileUrl) && !string.IsNullOrEmpty(profileUrl))
+            {
+                person.ProfileUrl = profileUrl;
+                changed = true;
+            }
 
             if (changed)
             {
@@ -1069,10 +1145,12 @@ public class TvShowService : ITvShowService
         {
             await _personImageRepository.AddAsync(new PersonImage { PersonId = personId, Url = url });
         }
+
         await _personImageRepository.SaveChangesAsync();
     }
 
-    private async Task InvalidateTvShowCachesAsync(Guid showId, List<Guid> genreIds, IEnumerable<int>? seasonNumbers = null)
+    private async Task InvalidateTvShowCachesAsync(Guid showId, List<Guid> genreIds,
+        IEnumerable<int>? seasonNumbers = null)
     {
         await _cacheService.RemoveAsync(string.Format(TVSHOW_CACHE_KEY, showId));
 
@@ -1095,8 +1173,11 @@ public class TvShowService : ITvShowService
         PosterUrl = t.PosterUrl, BackdropUrl = t.BackdropUrl, Rating = t.ImdbRating,
         OriginCountry = t.OriginCountry, Status = t.Status, NumberOfSeasons = t.NumberOfSeasons,
         NumberOfEpisodes = t.NumberOfEpisodes,
-        TrailerKey = t.TvShowVideos?.Where(v => v.VideoType == "trailer" && !string.IsNullOrEmpty(v.VideoUrl)).Select(v => ExtractYoutubeKey(v.VideoUrl)).FirstOrDefault(k => k != null),
-        TrailerVideoUrl = t.TvShowVideos?.Where(v => v.VideoType == "trailer_upload" && !string.IsNullOrEmpty(v.VideoUrl)).Select(v => v.VideoUrl).FirstOrDefault(),
+        TrailerKey = t.TvShowVideos?.Where(v => v.VideoType == "trailer" && !string.IsNullOrEmpty(v.VideoUrl))
+            .Select(v => ExtractYoutubeKey(v.VideoUrl)).FirstOrDefault(k => k != null),
+        TrailerVideoUrl = t.TvShowVideos
+            ?.Where(v => v.VideoType == "trailer_upload" && !string.IsNullOrEmpty(v.VideoUrl)).Select(v => v.VideoUrl)
+            .FirstOrDefault(),
         IsPremium = t.IsPremium, IsUpcoming = t.FirstAirDate.HasValue && t.FirstAirDate.Value > DateTime.UtcNow,
         Genres = t.TvShowGenres?.Select(g => g.Genre?.Name ?? "").Where(n => n != "").ToList() ?? new()
     };
@@ -1109,14 +1190,22 @@ public class TvShowService : ITvShowService
         Status = t.Status, NumberOfSeasons = t.NumberOfSeasons, NumberOfEpisodes = t.NumberOfEpisodes,
         IsPremium = t.IsPremium, IsUpcoming = t.FirstAirDate.HasValue && t.FirstAirDate.Value > DateTime.UtcNow,
         Genres = t.TvShowGenres?.Select(g => g.Genre?.Name ?? "").Where(n => n != "").ToList() ?? new(),
-        Videos = t.TvShowVideos?.Select(v => new TvShowVideoDTO { Id = v.Id, VideoUrl = v.VideoUrl, VideoType = v.VideoType, Duration = v.Duration, Quality = v.Quality }).ToList() ?? new(),
-        TrailerKey = t.TvShowVideos?.Where(v => v.VideoType == "trailer" && !string.IsNullOrEmpty(v.VideoUrl)).Select(v => ExtractYoutubeKey(v.VideoUrl)).FirstOrDefault(k => k != null),
-        TrailerVideoUrl = t.TvShowVideos?.Where(v => v.VideoType == "trailer_upload" && !string.IsNullOrEmpty(v.VideoUrl)).Select(v => v.VideoUrl).FirstOrDefault(),
+        Videos = t.TvShowVideos?.Select(v => new TvShowVideoDTO
+            {
+                Id = v.Id, VideoUrl = v.VideoUrl, VideoType = v.VideoType, Duration = v.Duration, Quality = v.Quality
+            })
+            .ToList() ?? new(),
+        TrailerKey = t.TvShowVideos?.Where(v => v.VideoType == "trailer" && !string.IsNullOrEmpty(v.VideoUrl))
+            .Select(v => ExtractYoutubeKey(v.VideoUrl)).FirstOrDefault(k => k != null),
+        TrailerVideoUrl = t.TvShowVideos
+            ?.Where(v => v.VideoType == "trailer_upload" && !string.IsNullOrEmpty(v.VideoUrl)).Select(v => v.VideoUrl)
+            .FirstOrDefault(),
         Cast = t.TvShowCasts?.OrderBy(c => c.Order).Where(c => c.Person != null).Take(6).Select(c => new TvShowCastDTO
         {
             Name = c.Person!.Name, Character = c.Character, Order = c.Order, ProfileUrl = c.Person.ProfileUrl,
             TmdbPersonId = c.Person.TmdbPersonId, Biography = c.Person.Biography, Birthday = c.Person.Birthday,
-            PlaceOfBirth = c.Person.PlaceOfBirth, ProfileImages = c.Person.Images.OrderByDescending(i => i.CreatedAt).Select(i => i.Url).ToList()
+            PlaceOfBirth = c.Person.PlaceOfBirth,
+            ProfileImages = c.Person.Images.OrderByDescending(i => i.CreatedAt).Select(i => i.Url).ToList()
         }).ToList() ?? new(),
         Director = t.TvShowDirectors?.Where(d => d.Person != null).Select(d => d.Person?.Name).FirstOrDefault(),
         DirectorDetail = t.TvShowDirectors?.Where(d => d.Person != null).Select(d => new PersonDetailDTO
@@ -1125,7 +1214,8 @@ public class TvShowService : ITvShowService
             Biography = d.Person.Biography, Birthday = d.Person.Birthday, PlaceOfBirth = d.Person.PlaceOfBirth,
             ProfileImages = d.Person.Images.OrderByDescending(i => i.CreatedAt).Select(i => i.Url).ToList()
         }).FirstOrDefault(),
-        Images = t.TvShowImages?.Select(i => new TvShowImageDTO { Url = i.Url, ImageType = i.ImageType }).ToList() ?? new(),
+        Images = t.TvShowImages?.Select(i => new TvShowImageDTO { Url = i.Url, ImageType = i.ImageType }).ToList() ??
+                 new(),
         Seasons = t.Seasons?.OrderBy(s => s.SeasonNumber).Select(s => new SeasonDTO
         {
             Id = s.Id, SeasonNumber = s.SeasonNumber, Name = s.Name, Overview = s.Overview,
@@ -1137,7 +1227,8 @@ public class TvShowService : ITvShowService
     {
         Id = s.Id, SeasonNumber = s.SeasonNumber, Name = s.Name, Overview = s.Overview,
         PosterUrl = s.PosterUrl, AirDate = s.AirDate, EpisodeCount = s.EpisodeCount,
-        Episodes = (episodes ?? s.Episodes ?? Enumerable.Empty<Episode>()).OrderBy(e => e.EpisodeNumber).Select(MapEpisodeToDTO).ToList()
+        Episodes = (episodes ?? s.Episodes ?? Enumerable.Empty<Episode>()).OrderBy(e => e.EpisodeNumber)
+            .Select(MapEpisodeToDTO).ToList()
     };
 
     private static EpisodeDTO MapEpisodeToDTO(Episode e) => new()

@@ -1,4 +1,5 @@
 ﻿// UIAMovie.Application/Services/SubscriptionChecker.cs
+
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Domain.Entities;
 using UIAMovie.Infrastructure.Data.Repositories;
@@ -13,20 +14,22 @@ namespace UIAMovie.Application.Services;
 public class SubscriptionChecker : ISubscriptionChecker
 {
     private readonly IRepository<UserSubscription> _subRepo;
-    private readonly IRepository<User>             _userRepo;
-    private readonly ICacheService                 _cache;
+    private readonly IRepository<User> _userRepo;
+    private readonly ICacheService _cache;
 
-    private const string SUB_CACHE_KEY       = "subscription:{0}";
-    private const string IS_PREMIUM_CACHE_KEY = "subscription:{0}:isPremium"; // phải khớp với PaymentService.InvalidateUserCacheAsync
+    private const string SUB_CACHE_KEY = "subscription:{0}";
+
+    private const string
+        IS_PREMIUM_CACHE_KEY = "subscription:{0}:isPremium"; // phải khớp với PaymentService.InvalidateUserCacheAsync
 
     public SubscriptionChecker(
         IRepository<UserSubscription> subRepo,
-        IRepository<User>             userRepo,
-        ICacheService                 cache)
+        IRepository<User> userRepo,
+        ICacheService cache)
     {
-        _subRepo  = subRepo;
+        _subRepo = subRepo;
         _userRepo = userRepo;
-        _cache    = cache;
+        _cache = cache;
     }
 
     /// <summary>
@@ -36,13 +39,13 @@ public class SubscriptionChecker : ISubscriptionChecker
     public async Task<bool> IsPremiumAsync(Guid userId)
     {
         var cacheKey = string.Format(IS_PREMIUM_CACHE_KEY, userId);
-        var cached   = await _cache.GetAsync<bool?>(cacheKey);
+        var cached = await _cache.GetAsync<bool?>(cacheKey);
         if (cached.HasValue) return cached.Value;
 
         var subs = await _subRepo.FindAsync(s => s.UserId == userId);
-        var sub  = subs.FirstOrDefault();
+        var sub = subs.FirstOrDefault();
 
-        var now       = DateTime.UtcNow;
+        var now = DateTime.UtcNow;
         var isPremium = sub?.SubscriptionType == "Premium" && sub.ExpiredAt > now;
 
         await _cache.SetAsync(cacheKey, isPremium, TimeSpan.FromMinutes(5));

@@ -168,27 +168,33 @@ public class PersonService : IPersonService
             if (!primary.TmdbPersonId.HasValue && dup.TmdbPersonId.HasValue) primary.TmdbPersonId = dup.TmdbPersonId;
             if (string.IsNullOrEmpty(primary.Biography)) primary.Biography = dup.Biography ?? primary.Biography;
             if (string.IsNullOrEmpty(primary.Birthday)) primary.Birthday = dup.Birthday ?? primary.Birthday;
-            if (string.IsNullOrEmpty(primary.PlaceOfBirth)) primary.PlaceOfBirth = dup.PlaceOfBirth ?? primary.PlaceOfBirth;
+            if (string.IsNullOrEmpty(primary.PlaceOfBirth))
+                primary.PlaceOfBirth = dup.PlaceOfBirth ?? primary.PlaceOfBirth;
             if (string.IsNullOrEmpty(primary.ProfileUrl)) primary.ProfileUrl = dup.ProfileUrl ?? primary.ProfileUrl;
 
             // Chuyển cast — nếu phim đó đã có primary trong cast rồi thì xóa bản dư (tránh trùng)
             foreach (var cast in await _castRepository.FindAsync(c => c.PersonId == dupId))
             {
-                var exists = await _castRepository.FindOneAsync(c => c.MovieId == cast.MovieId && c.PersonId == primary.Id);
-                if (exists != null) _castRepository.Remove(cast); else cast.PersonId = primary.Id;
+                var exists =
+                    await _castRepository.FindOneAsync(c => c.MovieId == cast.MovieId && c.PersonId == primary.Id);
+                if (exists != null) _castRepository.Remove(cast);
+                else cast.PersonId = primary.Id;
             }
 
             foreach (var dir in await _directorRepository.FindAsync(d => d.PersonId == dupId))
             {
-                var exists = await _directorRepository.FindOneAsync(d => d.MovieId == dir.MovieId && d.PersonId == primary.Id);
-                if (exists != null) _directorRepository.Remove(dir); else dir.PersonId = primary.Id;
+                var exists =
+                    await _directorRepository.FindOneAsync(d => d.MovieId == dir.MovieId && d.PersonId == primary.Id);
+                if (exists != null) _directorRepository.Remove(dir);
+                else dir.PersonId = primary.Id;
             }
 
             var primaryUrls = (await _personImageRepository.FindAsync(i => i.PersonId == primary.Id))
                 .Select(i => i.Url).ToHashSet();
             foreach (var img in await _personImageRepository.FindAsync(i => i.PersonId == dupId))
             {
-                if (primaryUrls.Contains(img.Url)) _personImageRepository.Remove(img); else img.PersonId = primary.Id;
+                if (primaryUrls.Contains(img.Url)) _personImageRepository.Remove(img);
+                else img.PersonId = primary.Id;
             }
 
             _personRepository.Remove(dup);

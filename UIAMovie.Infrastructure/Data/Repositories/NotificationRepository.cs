@@ -258,8 +258,9 @@ public class NotificationRepository : Repository<Notification>, INotificationRep
     public async Task<bool> AdminHardDeleteAsync(Guid id, CancellationToken ct = default)
     {
         // Xóa các bản ghi đã đọc liên quan trước
-        var reads = _db.NotificationReads.Where(nr => nr.NotificationId == id);
-        _db.NotificationReads.RemoveRange(reads);
+        await _db.NotificationReads
+            .Where(nr => nr.NotificationId == id)
+            .ExecuteDeleteAsync(ct);
 
         // Xóa thông báo vĩnh viễn
         var affected = await _db.Notifications

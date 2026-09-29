@@ -1,4 +1,5 @@
 ﻿// UIAMovie.Infrastructure/Services/GroqService.cs
+
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -165,7 +166,8 @@ public sealed class GroqService : IGroqService
         var genreSet = genres.Select(g => g.ToLowerInvariant()).ToHashSet();
         return all
             .Where(m => !string.IsNullOrWhiteSpace(m.Description))
-            .OrderByDescending(m => m.Genres.Split(',').Any(g => genreSet.Contains(g.Trim().ToLowerInvariant())) ? 1 : 0)
+            .OrderByDescending(m =>
+                m.Genres.Split(',').Any(g => genreSet.Contains(g.Trim().ToLowerInvariant())) ? 1 : 0)
             .ThenByDescending(m => m.Rating)
             .Take(limit)
             .ToList();
@@ -180,12 +182,14 @@ public sealed class GroqService : IGroqService
             .ToList();
     }
 
-    private static List<TvShowContext> SelectTvShowsForRecommend(List<TvShowContext> all, List<string> genres, int limit)
+    private static List<TvShowContext> SelectTvShowsForRecommend(List<TvShowContext> all, List<string> genres,
+        int limit)
     {
         var genreSet = genres.Select(g => g.ToLowerInvariant()).ToHashSet();
         return all
             .Where(s => !string.IsNullOrWhiteSpace(s.Description))
-            .OrderByDescending(s => s.Genres.Split(',').Any(g => genreSet.Contains(g.Trim().ToLowerInvariant())) ? 1 : 0)
+            .OrderByDescending(s =>
+                s.Genres.Split(',').Any(g => genreSet.Contains(g.Trim().ToLowerInvariant())) ? 1 : 0)
             .ThenByDescending(s => s.Rating)
             .Take(limit)
             .ToList();

@@ -31,17 +31,17 @@ public interface IGenreService
 public class GenreService : IGenreService
 {
     private readonly IRepository<Genre> _genreRepository;
-    private readonly ICacheService      _cacheService;
+    private readonly ICacheService _cacheService;
 
     private const string ALL_GENRES_CACHE_KEY = "genres:all";
-    private const string GENRE_CACHE_KEY      = "genre:{0}";
+    private const string GENRE_CACHE_KEY = "genre:{0}";
 
     public GenreService(
         IRepository<Genre> genreRepository,
-        ICacheService      cacheService)
+        ICacheService cacheService)
     {
         _genreRepository = genreRepository;
-        _cacheService    = cacheService;
+        _cacheService = cacheService;
     }
 
     // ─── Public CRUD ──────────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ public class GenreService : IGenreService
 
     public async Task<Guid> CreateAsync(CreateGenreDTO dto)
     {
-        var genres    = await _genreRepository.GetAllAsync();
+        var genres = await _genreRepository.GetAllAsync();
         var duplicate = genres.Any(g =>
             string.Equals(g.Name, dto.Name, StringComparison.OrdinalIgnoreCase));
         if (duplicate)
@@ -75,7 +75,7 @@ public class GenreService : IGenreService
 
         var genre = new Genre
         {
-            Name        = dto.Name.Trim(),
+            Name = dto.Name.Trim(),
             Description = dto.Description?.Trim()
         };
 
@@ -93,7 +93,7 @@ public class GenreService : IGenreService
 
         if (!string.IsNullOrWhiteSpace(dto.Name))
         {
-            var genres    = await _genreRepository.GetAllAsync();
+            var genres = await _genreRepository.GetAllAsync();
             var duplicate = genres.Any(g =>
                 g.Id != id &&
                 string.Equals(g.Name, dto.Name, StringComparison.OrdinalIgnoreCase));
@@ -142,7 +142,7 @@ public class GenreService : IGenreService
     public async Task<int> SyncFromTmdbAsync(List<TmdbGenreDTO> tmdbGenres)
     {
         var existing = (await _genreRepository.GetAllAsync()).ToList();
-        int created  = 0;
+        int created = 0;
 
         foreach (var tg in tmdbGenres)
         {
@@ -153,7 +153,7 @@ public class GenreService : IGenreService
                 await _genreRepository.AddAsync(new Genre
                 {
                     TmdbGenreId = tg.Id,
-                    Name        = tg.Name
+                    Name = tg.Name
                 });
                 created++;
             }
@@ -188,9 +188,9 @@ public class GenreService : IGenreService
 
     private static GenreDTO MapToDTO(Genre g) => new()
     {
-        Id          = g.Id,
-        Name        = g.Name,
+        Id = g.Id,
+        Name = g.Name,
         Description = g.Description,
-        MovieCount  = g.MovieGenres?.Count ?? 0
+        MovieCount = g.MovieGenres?.Count ?? 0
     };
 }
