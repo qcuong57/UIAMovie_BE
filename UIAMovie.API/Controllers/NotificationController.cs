@@ -3,8 +3,9 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IServices;
 
-namespace UIAMovie.API.Controllers;
+namespace UIAMovie.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]

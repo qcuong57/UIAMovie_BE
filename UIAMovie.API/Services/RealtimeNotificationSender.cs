@@ -1,8 +1,10 @@
 ﻿using Microsoft.AspNetCore.SignalR;
-using UIAMovie.API.Hubs;
+using UIAMovie.Hubs;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IServices;
+using UIAMovie.Hubs;
 
-namespace UIAMovie.API.Services;
+namespace UIAMovie.Services;
 
 public class RealtimeNotificationSender : IRealtimeNotificationSender
 {

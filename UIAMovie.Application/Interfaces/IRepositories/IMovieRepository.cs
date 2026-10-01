@@ -1,7 +1,7 @@
 ﻿using UIAMovie.Application.DTOs;
 using UIAMovie.Domain.Entities;
 
-namespace UIAMovie.Infrastructure.Data.Repositories;
+namespace UIAMovie.Application.Interfaces.IRepositories;
 
 public interface IMovieRepository : IRepository<Movie>
 {

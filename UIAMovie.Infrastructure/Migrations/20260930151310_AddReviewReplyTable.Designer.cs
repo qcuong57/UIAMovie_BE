@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using UIAMovie.Infrastructure.Data;
@@ -11,9 +12,11 @@ using UIAMovie.Infrastructure.Data;
 namespace UIAMovie.Infrastructure.Migrations
 {
     [DbContext(typeof(MovieDbContext))]
-    partial class MovieDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260930151310_AddReviewReplyTable")]
+    partial class AddReviewReplyTable
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -832,9 +835,6 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Property<bool>("IsPublished")
                         .HasColumnType("boolean");
 
-                    b.Property<Guid?>("ParentReplyId")
-                        .HasColumnType("uuid");
-
                     b.Property<Guid>("RatingReviewId")
                         .HasColumnType("uuid");
 
@@ -843,9 +843,6 @@ namespace UIAMovie.Infrastructure.Migrations
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
 
-                    b.Property<Guid?>("ReplyToUserId")
-                        .HasColumnType("uuid");
-
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -853,8 +850,6 @@ namespace UIAMovie.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("ParentReplyId");
 
                     b.HasIndex("UserId");
 
@@ -1237,7 +1232,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$TVaYF0bpESxZVGevVRxMzu1QyAcWWRK1RF1Kdhz.9ozDoWgtx2cx2",
+                            PasswordHash = "$2a$11$BqnuEr3Letxefhm9ox9uSu/6ESaLZns5phQVyJOYDrE5eH989WzGC",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
@@ -1559,11 +1554,6 @@ namespace UIAMovie.Infrastructure.Migrations
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.ReviewReply", b =>
                 {
-                    b.HasOne("UIAMovie.Domain.Entities.ReviewReply", "ParentReply")
-                        .WithMany("Children")
-                        .HasForeignKey("ParentReplyId")
-                        .OnDelete(DeleteBehavior.NoAction);
-
                     b.HasOne("UIAMovie.Domain.Entities.RatingReview", "RatingReview")
                         .WithMany("Replies")
                         .HasForeignKey("RatingReviewId")
@@ -1575,8 +1565,6 @@ namespace UIAMovie.Infrastructure.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.Navigation("ParentReply");
 
                     b.Navigation("RatingReview");
 
@@ -1785,11 +1773,6 @@ namespace UIAMovie.Infrastructure.Migrations
             modelBuilder.Entity("UIAMovie.Domain.Entities.RatingReview", b =>
                 {
                     b.Navigation("Replies");
-                });
-
-            modelBuilder.Entity("UIAMovie.Domain.Entities.ReviewReply", b =>
-                {
-                    b.Navigation("Children");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.Season", b =>

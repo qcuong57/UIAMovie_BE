@@ -1,8 +1,8 @@
 ﻿// UIAMovie.Application/AI/Tools/ReviewSummaryTool.cs
 using UIAMovie.Application.AI.Models;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IServices;
 using UIAMovie.Application.Services;
-using UIAMovie.Infrastructure.AI.Providers;
 
 namespace UIAMovie.Application.AI.Tools;
 

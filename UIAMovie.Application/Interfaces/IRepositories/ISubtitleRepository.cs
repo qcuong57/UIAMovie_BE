@@ -1,6 +1,6 @@
 ﻿using UIAMovie.Domain.Entities;
 
-namespace UIAMovie.Infrastructure.Data.Repositories;
+namespace UIAMovie.Application.Interfaces.IRepositories;
 
 public interface ISubtitleRepository : IRepository<MovieSubtitle>
 {

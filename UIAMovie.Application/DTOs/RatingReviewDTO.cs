@@ -43,6 +43,9 @@ public class ReviewDTO
     public bool    IsSpoiler  { get; set; }
     public DateTime  CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
+
+    /// <summary>Tổng số reply (cả reply cấp 1 và reply lồng) — để FE hiện sẵn "N trả lời".</summary>
+    public int ReplyCount { get; set; }
 }
 
 public class ReviewSummaryDTO

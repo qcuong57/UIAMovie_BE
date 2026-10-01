@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Services;
 
-namespace UIAMovie.API.Controllers;
+namespace UIAMovie.Controllers;
 
 [ApiController]
 [Route("api/payments")]

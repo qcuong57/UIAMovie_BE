@@ -1,6 +1,5 @@
-﻿using UIAMovie.Infrastructure.Data.Repositories;
-
-namespace UIAMovie.Application.Interfaces;
+﻿
+namespace UIAMovie.Application.Interfaces.IRepositories;
 
 // UIAMovie.Infrastructure/Data/Repositories/IPersonRepository.cs
 

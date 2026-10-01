@@ -1,7 +1,6 @@
 ﻿using UIAMovie.Domain.Entities;
-using UIAMovie.Infrastructure.Data.Repositories;
 
-namespace UIAMovie.Application.Interfaces;
+namespace UIAMovie.Application.Interfaces.IRepositories;
 
 public interface INotificationRepository : IRepository<Notification>
 {

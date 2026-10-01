@@ -1,6 +1,7 @@
 ﻿// UIAMovie.Infrastructure/Data/Repositories/GenericRepository.cs
 using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
+using UIAMovie.Application.Interfaces.IRepositories;
 
 namespace UIAMovie.Infrastructure.Data.Repositories;
 

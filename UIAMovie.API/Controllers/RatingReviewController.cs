@@ -270,6 +270,103 @@ public class RatingReviewController : ControllerBase
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // PUBLIC / AUTHENTICATED — Replies (trả lời review) — MỚI
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Danh sách reply của một review (phân trang, public)</summary>
+    [HttpGet("{reviewId:guid}/replies")]
+    [ProducesResponseType(typeof(ApiResponseDTO<ReviewRepliesResponseDTO>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponseDTO), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetReplies(
+        [FromRoute] Guid reviewId,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize   = 20)
+    {
+        Clamp(ref pageNumber, ref pageSize, 100);
+
+        var result = await _ratingReviewService.GetRepliesAsync(reviewId, pageNumber, pageSize);
+        if (result == null)
+            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy review", StatusCode = 404 });
+
+        return Ok(new ApiResponseDTO<ReviewRepliesResponseDTO> { Data = result });
+    }
+
+    /// <summary>Trả lời một review (bất kỳ user đã đăng nhập)</summary>
+    [HttpPost("{reviewId:guid}/replies")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponseDTO<CreateReplyResponseDTO>), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ApiErrorResponseDTO), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponseDTO), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CreateReply(
+        [FromRoute] Guid reviewId,
+        [FromBody]  ReviewReplyDTO dto)
+    {
+        if (dto == null || string.IsNullOrWhiteSpace(dto.ReplyText))
+            return BadRequest(new ApiErrorResponseDTO { Message = "Nội dung trả lời không được để trống", StatusCode = 400 });
+
+        if (dto.ReplyText.Length > 2000)
+            return BadRequest(new ApiErrorResponseDTO { Message = "Nội dung trả lời không được vượt quá 2000 ký tự", StatusCode = 400 });
+
+        try
+        {
+            var replyId = await _ratingReviewService.CreateReplyAsync(reviewId, GetUserId(), dto);
+            return CreatedAtAction(nameof(GetReplies), new { reviewId },
+                new ApiResponseDTO<CreateReplyResponseDTO>
+                {
+                    Data    = new CreateReplyResponseDTO { ReplyId = replyId },
+                    Message = "Trả lời đã được tạo thành công"
+                });
+        }
+        catch (InvalidOperationException ex) { return NotFound(new ApiErrorResponseDTO { Message = ex.Message, StatusCode = 404 }); }
+        catch (ArgumentException ex)         { return BadRequest(new ApiErrorResponseDTO { Message = ex.Message, StatusCode = 400 }); }
+    }
+
+    /// <summary>Cập nhật reply của mình</summary>
+    [HttpPut("replies/{replyId:guid}")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponseDTO<object>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponseDTO), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponseDTO), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> UpdateReply(
+        [FromRoute] Guid replyId,
+        [FromBody]  ReviewReplyDTO dto)
+    {
+        if (dto == null || string.IsNullOrWhiteSpace(dto.ReplyText))
+            return BadRequest(new ApiErrorResponseDTO { Message = "Nội dung trả lời không được để trống", StatusCode = 400 });
+
+        try
+        {
+            var success = await _ratingReviewService.UpdateReplyAsync(replyId, GetUserId(), dto);
+            if (!success)
+                return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy trả lời", StatusCode = 404 });
+
+            return Ok(new ApiResponseDTO<object> { Data = null, Message = "Cập nhật trả lời thành công" });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException ex)        { return BadRequest(new ApiErrorResponseDTO { Message = ex.Message, StatusCode = 400 }); }
+    }
+
+    /// <summary>Xóa reply của mình</summary>
+    [HttpDelete("replies/{replyId:guid}")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponseDTO<object>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponseDTO), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> DeleteReply([FromRoute] Guid replyId)
+    {
+        try
+        {
+            var success = await _ratingReviewService.DeleteReplyAsync(replyId, GetUserId());
+            if (!success)
+                return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy trả lời", StatusCode = 404 });
+
+            return Ok(new ApiResponseDTO<object> { Data = null, Message = "Xóa trả lời thành công" });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // AUTHENTICATED — User's own reviews & check
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -333,6 +430,20 @@ public class RatingReviewController : ControllerBase
             return BadRequest(new ApiErrorResponseDTO { Message = "Không thể xóa review", StatusCode = 400 });
 
         return Ok(new ApiResponseDTO<object> { Data = null, Message = "Review đã bị xóa bởi admin" });
+    }
+
+    /// <summary>[Admin] Xóa reply vi phạm</summary>
+    [HttpDelete("admin/replies/{replyId:guid}")]
+    [Authorize(Roles = Roles.Admin)]
+    [ProducesResponseType(typeof(ApiResponseDTO<object>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponseDTO), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> AdminDeleteReply([FromRoute] Guid replyId)
+    {
+        var success = await _ratingReviewService.AdminDeleteReplyAsync(replyId);
+        if (!success)
+            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy trả lời", StatusCode = 404 });
+
+        return Ok(new ApiResponseDTO<object> { Data = null, Message = "Trả lời đã bị xóa bởi admin" });
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

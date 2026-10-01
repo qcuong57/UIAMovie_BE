@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Http;
 
-namespace UIAMovie.Application.Interfaces;
+namespace UIAMovie.Application.Interfaces.IServices;
 
 public interface ICloudinaryService
 {

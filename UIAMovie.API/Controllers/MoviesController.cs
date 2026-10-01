@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IServices;
 using UIAMovie.Application.Services;
 using UIAMovie.Domain.Constants;
 using UIAMovie.Infrastructure.Configuration;

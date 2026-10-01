@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IServices;
 
 namespace UIAMovie.Infrastructure.Email;
 

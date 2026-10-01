@@ -1,5 +1,6 @@
 ﻿using OtpNet;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IServices;
 
 namespace UIAMovie.Infrastructure.Security;
 

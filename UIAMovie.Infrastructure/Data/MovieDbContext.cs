@@ -30,6 +30,7 @@ public class MovieDbContext : DbContext
     public DbSet<Favorite> Favorites { get; set; }
     public DbSet<WatchHistory> WatchHistories { get; set; }
     public DbSet<RatingReview> RatingReviews { get; set; }
+    public DbSet<ReviewReply> ReviewReplies { get; set; }
 
     public DbSet<TvShow> TvShows { get; set; }
     public DbSet<Season> Seasons { get; set; }
@@ -381,6 +382,36 @@ public class MovieDbContext : DbContext
             entity.HasOne(r => r.Movie)
                 .WithMany(m => m.RatingReviews)
                 .HasForeignKey(r => r.MovieId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── ReviewReply (MỚI) ────────────────────────────────────────────────
+        modelBuilder.Entity<ReviewReply>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.RatingReviewId, e.CreatedAt });
+            entity.HasIndex(e => e.UserId);
+
+            entity.Property(e => e.ReplyText)
+                .HasMaxLength(2000)
+                .IsRequired();
+
+            // Reply cha (review) bị xóa → xóa hết reply con
+            entity.HasOne(e => e.RatingReview)
+                .WithMany(r => r.Replies)
+                .HasForeignKey(e => e.RatingReviewId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.ParentReply)
+                .WithMany(p => p.Children)
+                .HasForeignKey(e => e.ParentReplyId)
+                .OnDelete(DeleteBehavior.NoAction); // xóa reply con bằng code (đã làm trong service)
+
+            entity.HasIndex(e => e.ParentReplyId);
+            // User bị xóa → xóa hết reply của họ (đồng bộ với RatingReview.User)
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

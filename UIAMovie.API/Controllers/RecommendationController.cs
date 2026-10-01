@@ -6,6 +6,7 @@ using UIAMovie.Application.AI.Models;
 using UIAMovie.Application.AI.Retrieval;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IServices;
 using UIAMovie.Application.Services;
 
 namespace UIAMovie.API.Controllers;

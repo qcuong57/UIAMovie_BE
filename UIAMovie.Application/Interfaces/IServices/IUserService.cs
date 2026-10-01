@@ -1,7 +1,7 @@
 ﻿// UIAMovie.Application/Services/IUserService.cs
 using UIAMovie.Application.DTOs;
 
-namespace UIAMovie.Application.Services;
+namespace UIAMovie.Application.Interfaces.IServices;
 
 public interface IUserService
 {

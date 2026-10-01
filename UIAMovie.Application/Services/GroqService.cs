@@ -4,12 +4,12 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using UIAMovie.Application.AI;
+using UIAMovie.Application.AI.Parsing;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
-using UIAMovie.Infrastructure.AI.Parsing;
-using UIAMovie.Infrastructure.AI.Providers;
+using UIAMovie.Application.Interfaces.IServices;
 
-namespace UIAMovie.Infrastructure.Services;
+namespace UIAMovie.Application.Services;
 
 public sealed class GroqService : IGroqService
 {

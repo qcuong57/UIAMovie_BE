@@ -37,4 +37,7 @@ public class RatingReview
     public Movie?   Movie   { get; set; }
     public TvShow?  TvShow  { get; set; }
     public Episode? Episode { get; set; }
+
+    /// <summary>Danh sách reply (bình luận trả lời) cho review này.</summary>
+    public ICollection<ReviewReply> Replies { get; set; } = new List<ReviewReply>();
 }

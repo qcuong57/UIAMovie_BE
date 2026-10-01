@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IServices;
 using UIAMovie.Application.Services;
 using UIAMovie.Domain.Constants;
 using UIAMovie.Infrastructure.Configuration;
@@ -16,23 +17,23 @@ namespace UIAMovie.Controllers;
 [Route("api/tvshows")]
 public class TvShowsController : ControllerBase
 {
-    private readonly ITvShowService    _tvShowService;
-    private readonly ITmdbService      _tmdbService;
-    private readonly IGenreService     _genreService;
+    private readonly ITvShowService _tvShowService;
+    private readonly ITmdbService _tmdbService;
+    private readonly IGenreService _genreService;
     private readonly ICloudinaryService _cloudinaryService;
     private readonly ISubscriptionChecker _subscriptionChecker;
 
     public TvShowsController(
-        ITvShowService      tvShowService,
-        ITmdbService        tmdbService,
-        IGenreService       genreService,
-        ICloudinaryService  cloudinaryService,
+        ITvShowService tvShowService,
+        ITmdbService tmdbService,
+        IGenreService genreService,
+        ICloudinaryService cloudinaryService,
         ISubscriptionChecker subscriptionChecker)
     {
-        _tvShowService       = tvShowService;
-        _tmdbService         = tmdbService;
-        _genreService        = genreService;
-        _cloudinaryService   = cloudinaryService;
+        _tvShowService = tvShowService;
+        _tmdbService = tmdbService;
+        _genreService = genreService;
+        _cloudinaryService = cloudinaryService;
         _subscriptionChecker = subscriptionChecker;
     }
 
@@ -65,9 +66,9 @@ public class TvShowsController : ControllerBase
             // User chưa đăng nhập nhưng show là Premium
             show.Access = new ContentAccessDTO
             {
-                CanWatch        = false,
+                CanWatch = false,
                 RequiresPremium = true,
-                BlockReason     = "Đăng nhập và nâng cấp Premium để xem TV show này"
+                BlockReason = "Đăng nhập và nâng cấp Premium để xem TV show này"
             };
         }
 
@@ -98,7 +99,7 @@ public class TvShowsController : ControllerBase
         {
             return Ok(new ApiResponseDTO<object>
             {
-                Data    = new { canWatch = true, videos = show.Videos },
+                Data = new { canWatch = true, videos = show.Videos },
                 Message = "Thành công"
             });
         }
@@ -107,7 +108,7 @@ public class TvShowsController : ControllerBase
         if (!userId.HasValue)
             return Unauthorized(new ApiErrorResponseDTO
             {
-                Message    = "Vui lòng đăng nhập để xem TV show Premium",
+                Message = "Vui lòng đăng nhập để xem TV show Premium",
                 StatusCode = 401
             });
 
@@ -115,7 +116,7 @@ public class TvShowsController : ControllerBase
         if (!canWatch)
         {
             var isPremium = await _subscriptionChecker.IsPremiumAsync(userId.Value);
-            var reason    = isPremium
+            var reason = isPremium
                 ? "Tài khoản của bạn đã bị khóa"
                 : "Nâng cấp lên Premium để xem TV show này";
 
@@ -124,7 +125,7 @@ public class TvShowsController : ControllerBase
 
         return Ok(new ApiResponseDTO<object>
         {
-            Data    = new { canWatch = true, videos = show.Videos },
+            Data = new { canWatch = true, videos = show.Videos },
             Message = "Thành công"
         });
     }
@@ -154,7 +155,7 @@ public class TvShowsController : ControllerBase
         {
             return Ok(new ApiResponseDTO<object>
             {
-                Data    = new { canWatch = true, videoUrl = episode.VideoUrl },
+                Data = new { canWatch = true, videoUrl = episode.VideoUrl },
                 Message = "Thành công"
             });
         }
@@ -163,7 +164,7 @@ public class TvShowsController : ControllerBase
         if (!userId.HasValue)
             return Unauthorized(new ApiErrorResponseDTO
             {
-                Message    = "Vui lòng đăng nhập để xem TV show Premium",
+                Message = "Vui lòng đăng nhập để xem TV show Premium",
                 StatusCode = 401
             });
 
@@ -171,7 +172,7 @@ public class TvShowsController : ControllerBase
         if (!canWatch)
         {
             var isPremium = await _subscriptionChecker.IsPremiumAsync(userId.Value);
-            var reason    = isPremium
+            var reason = isPremium
                 ? "Tài khoản của bạn đã bị khóa"
                 : "Nâng cấp lên Premium để xem tập này";
 
@@ -183,7 +184,7 @@ public class TvShowsController : ControllerBase
 
         return Ok(new ApiResponseDTO<object>
         {
-            Data    = new { canWatch = true, videoUrl = episode.VideoUrl },
+            Data = new { canWatch = true, videoUrl = episode.VideoUrl },
             Message = "Thành công"
         });
     }
@@ -194,7 +195,7 @@ public class TvShowsController : ControllerBase
         if (string.IsNullOrWhiteSpace(actorName))
             return BadRequest(new ApiErrorResponseDTO
             {
-                Message    = "actorName không được để trống",
+                Message = "actorName không được để trống",
                 StatusCode = 400
             });
 
@@ -338,7 +339,13 @@ public class TvShowsController : ControllerBase
         {
             var publicId = ExtractCloudinaryPublicId(oldVideoUrl);
             if (publicId != null)
-                try { await _cloudinaryService.DeleteFileAsync(publicId); } catch { }
+                try
+                {
+                    await _cloudinaryService.DeleteFileAsync(publicId);
+                }
+                catch
+                {
+                }
         }
 
         return Ok(new ApiResponseDTO<object> { Message = "Đã xóa tập phim" });
@@ -363,7 +370,8 @@ public class TvShowsController : ControllerBase
         var success = await _tvShowService.AddFavoriteAsync(GetUserId(), dto.TvShowId);
         return success
             ? Ok(new ApiResponseDTO<object> { Message = "Đã thêm vào yêu thích" })
-            : BadRequest(new ApiErrorResponseDTO { Message = "TV show đã có trong danh sách yêu thích", StatusCode = 400 });
+            : BadRequest(new ApiErrorResponseDTO
+                { Message = "TV show đã có trong danh sách yêu thích", StatusCode = 400 });
     }
 
     [HttpDelete("favorites/{tvShowId:guid}")]
@@ -373,7 +381,8 @@ public class TvShowsController : ControllerBase
         var success = await _tvShowService.RemoveFavoriteAsync(GetUserId(), tvShowId);
         return success
             ? Ok(new ApiResponseDTO<object> { Message = "Đã xóa khỏi yêu thích" })
-            : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy trong danh sách yêu thích", StatusCode = 404 });
+            : NotFound(new ApiErrorResponseDTO
+                { Message = "Không tìm thấy trong danh sách yêu thích", StatusCode = 404 });
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -412,7 +421,7 @@ public class TvShowsController : ControllerBase
         if (existing != null)
             return Conflict(new ApiErrorResponseDTO
             {
-                Message    = $"TV show này đã được import rồi (ID: {existing.Id})",
+                Message = $"TV show này đã được import rồi (ID: {existing.Id})",
                 StatusCode = 409
             });
 
@@ -420,7 +429,7 @@ public class TvShowsController : ControllerBase
         if (full == null)
             return NotFound(new ApiErrorResponseDTO
             {
-                Message    = "Không tìm thấy TV show trên TMDB",
+                Message = "Không tìm thấy TV show trên TMDB",
                 StatusCode = 404
             });
 
@@ -435,14 +444,14 @@ public class TvShowsController : ControllerBase
                 full.PersonDetails.TryGetValue(c.Id, out var detail);
                 return new ImportCastDTO
                 {
-                    TmdbPersonId  = c.Id,
-                    Name          = c.Name,
-                    Character     = c.Character,
-                    Order         = c.Order,
-                    ProfileUrl    = c.ProfileUrl,
-                    Biography     = detail?.Biography,
-                    Birthday      = detail?.Birthday,
-                    PlaceOfBirth  = detail?.PlaceOfBirth,
+                    TmdbPersonId = c.Id,
+                    Name = c.Name,
+                    Character = c.Character,
+                    Order = c.Order,
+                    ProfileUrl = c.ProfileUrl,
+                    Biography = detail?.Biography,
+                    Birthday = detail?.Birthday,
+                    PlaceOfBirth = detail?.PlaceOfBirth,
                     ProfileImages = imgs ?? new()
                 };
             }).ToList();
@@ -454,12 +463,12 @@ public class TvShowsController : ControllerBase
             full.PersonDetails.TryGetValue(full.Director.Id, out var dirDetail);
             directorDto = new ImportDirectorDTO
             {
-                TmdbPersonId  = full.Director.Id,
-                Name          = full.Director.Name,
-                ProfileUrl    = full.Director.ProfileUrl,
-                Biography     = dirDetail?.Biography,
-                Birthday      = dirDetail?.Birthday,
-                PlaceOfBirth  = dirDetail?.PlaceOfBirth,
+                TmdbPersonId = full.Director.Id,
+                Name = full.Director.Name,
+                ProfileUrl = full.Director.ProfileUrl,
+                Biography = dirDetail?.Biography,
+                Birthday = dirDetail?.Birthday,
+                PlaceOfBirth = dirDetail?.PlaceOfBirth,
                 ProfileImages = dirImgs ?? new()
             };
         }
@@ -483,45 +492,45 @@ public class TvShowsController : ControllerBase
             .Select(s => new CreateSeasonDTO
             {
                 SeasonNumber = s.SeasonNumber,
-                Name         = s.Name,
-                Overview     = string.IsNullOrEmpty(s.Overview) ? null : s.Overview,
-                PosterUrl    = s.PosterUrl,
-                AirDate      = DateTime.TryParse(s.AirDate, out var ad) ? ad : null,
-                Episodes     = s.Episodes
+                Name = s.Name,
+                Overview = string.IsNullOrEmpty(s.Overview) ? null : s.Overview,
+                PosterUrl = s.PosterUrl,
+                AirDate = DateTime.TryParse(s.AirDate, out var ad) ? ad : null,
+                Episodes = s.Episodes
                     .OrderBy(e => e.EpisodeNumber)
                     .Select(e => new CreateEpisodeDTO
                     {
                         EpisodeNumber = e.EpisodeNumber,
-                        Title         = e.Title,
-                        Overview      = string.IsNullOrEmpty(e.Overview) ? null : e.Overview,
-                        StillUrl      = e.StillUrl,
-                        Runtime       = e.Runtime,
-                        Rating        = e.VoteAverage > 0 ? (decimal)e.VoteAverage : null,
-                        AirDate       = DateTime.TryParse(e.AirDate, out var ea) ? ea : null
+                        Title = e.Title,
+                        Overview = string.IsNullOrEmpty(e.Overview) ? null : e.Overview,
+                        StillUrl = e.StillUrl,
+                        Runtime = e.Runtime,
+                        Rating = e.VoteAverage > 0 ? (decimal)e.VoteAverage : null,
+                        AirDate = DateTime.TryParse(e.AirDate, out var ea) ? ea : null
                     }).ToList()
             }).ToList();
 
         var dto = new CreateTvShowDTO
         {
-            TmdbId           = full.Detail.Id,
-            Title            = full.Detail.Name,
-            Description      = full.Detail.Overview,
-            FirstAirDate     = DateTime.TryParse(full.Detail.FirstAirDate, out var fad) ? fad : null,
-            LastAirDate      = DateTime.TryParse(full.Detail.LastAirDate, out var lad) ? lad : null,
-            PosterUrl        = full.Detail.PosterUrl,
-            BackdropUrl      = full.Detail.BackdropUrl,
-            EpisodeRuntime   = full.Detail.EpisodeRuntime,
-            ImdbRating       = full.Detail.VoteAverage > 0 ? (decimal)full.Detail.VoteAverage : null,
-            OriginCountry    = full.Detail.OriginCountry.FirstOrDefault(),
-            Status           = full.Detail.Status,
-            NumberOfSeasons  = full.Detail.NumberOfSeasons,
+            TmdbId = full.Detail.Id,
+            Title = full.Detail.Name,
+            Description = full.Detail.Overview,
+            FirstAirDate = DateTime.TryParse(full.Detail.FirstAirDate, out var fad) ? fad : null,
+            LastAirDate = DateTime.TryParse(full.Detail.LastAirDate, out var lad) ? lad : null,
+            PosterUrl = full.Detail.PosterUrl,
+            BackdropUrl = full.Detail.BackdropUrl,
+            EpisodeRuntime = full.Detail.EpisodeRuntime,
+            ImdbRating = full.Detail.VoteAverage > 0 ? (decimal)full.Detail.VoteAverage : null,
+            OriginCountry = full.Detail.OriginCountry.FirstOrDefault(),
+            Status = full.Detail.Status,
+            NumberOfSeasons = full.Detail.NumberOfSeasons,
             NumberOfEpisodes = full.Detail.NumberOfEpisodes,
-            GenreIds         = genreIds,
-            Cast             = cast,
-            Director         = directorDto,
-            Images           = images,
-            Trailers         = trailers,
-            Seasons          = seasons
+            GenreIds = genreIds,
+            Cast = cast,
+            Director = directorDto,
+            Images = images,
+            Trailers = trailers,
+            Seasons = seasons
         };
 
         var showId = await _tvShowService.CreateTvShowAsync(dto);
@@ -531,13 +540,13 @@ public class TvShowsController : ControllerBase
             Data = new
             {
                 showId,
-                genreCount       = genreIds.Count,
-                castCount        = cast.Count,
-                imageCount       = images.Count,
-                seasonCount      = seasons.Count,
-                episodeCount     = seasons.Sum(s => s.Episodes.Count),
-                hasDirector      = directorDto != null,
-                personBioCount   = full.PersonDetails.Count(kv => !string.IsNullOrEmpty(kv.Value?.Biography)),
+                genreCount = genreIds.Count,
+                castCount = cast.Count,
+                imageCount = images.Count,
+                seasonCount = seasons.Count,
+                episodeCount = seasons.Sum(s => s.Episodes.Count),
+                hasDirector = directorDto != null,
+                personBioCount = full.PersonDetails.Count(kv => !string.IsNullOrEmpty(kv.Value?.Biography)),
                 personImageCount = full.PersonImages.Count(kv => kv.Value.Any())
             },
             Message = "Import TV show thành công"
@@ -550,7 +559,7 @@ public class TvShowsController : ControllerBase
 
     [HttpPost("{id:guid}/videos")]
     [Authorize(Roles = Roles.Admin)]
-    [RequestSizeLimit(500 * 1024 * 1024)]       // 500MB
+    [RequestSizeLimit(500 * 1024 * 1024)] // 500MB
     [RequestFormLimits(MultipartBodyLengthLimit = 500 * 1024 * 1024)]
     public async Task<IActionResult> UploadVideo(Guid id, [FromForm] UploadTvShowVideoDTO dto)
     {
@@ -600,7 +609,8 @@ public class TvShowsController : ControllerBase
         var success = await _tvShowService.AddVideoAsync(id, url, "trailer_upload", quality: null);
 
         return success
-            ? Ok(new ApiResponseDTO<object> { Data = new { trailerVideoUrl = url }, Message = "Upload trailer thành công" })
+            ? Ok(new ApiResponseDTO<object>
+                { Data = new { trailerVideoUrl = url }, Message = "Upload trailer thành công" })
             : NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy TV show", StatusCode = 404 });
     }
 
@@ -646,7 +656,13 @@ public class TvShowsController : ControllerBase
         {
             var oldPublicId = ExtractCloudinaryPublicId(oldUrl);
             if (oldPublicId != null)
-                try { await _cloudinaryService.DeleteFileAsync(oldPublicId); } catch { }
+                try
+                {
+                    await _cloudinaryService.DeleteFileAsync(oldPublicId);
+                }
+                catch
+                {
+                }
         }
 
         return Ok(new ApiResponseDTO<object> { Data = new { videoUrl }, Message = "Upload video tập thành công" });
@@ -663,7 +679,13 @@ public class TvShowsController : ControllerBase
         {
             var publicId = ExtractCloudinaryPublicId(oldUrl);
             if (publicId != null)
-                try { await _cloudinaryService.DeleteFileAsync(publicId); } catch { }
+                try
+                {
+                    await _cloudinaryService.DeleteFileAsync(publicId);
+                }
+                catch
+                {
+                }
         }
 
         return Ok(new ApiResponseDTO<object> { Message = "Đã xóa video tập" });
@@ -681,7 +703,8 @@ public class TvShowsController : ControllerBase
     /// Form-data: file (bắt buộc), type ("poster" | "backdrop" | "person", mặc định "poster")
     /// Response: { url }
     /// </summary>
-    private static readonly string[] AllowedImageExtensions   = { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
+    private static readonly string[] AllowedImageExtensions = { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
+
     private static readonly string[] AllowedImageContentTypes =
         { "image/jpeg", "image/png", "image/webp", "image/gif" };
 
@@ -846,9 +869,9 @@ public class TvShowsController : ControllerBase
         var canWatch = await _subscriptionChecker.CanWatchPremiumContentAsync(userId);
         return new ContentAccessDTO
         {
-            CanWatch        = canWatch,
+            CanWatch = canWatch,
             RequiresPremium = true,
-            BlockReason     = canWatch ? null : "Nâng cấp lên Premium để xem TV show này"
+            BlockReason = canWatch ? null : "Nâng cấp lên Premium để xem TV show này"
         };
     }
 
@@ -856,7 +879,7 @@ public class TvShowsController : ControllerBase
     private Guid? TryGetUserId()
     {
         var claim = User.FindFirstValue(ClaimTypes.NameIdentifier)
-                 ?? User.FindFirstValue("sub");
+                    ?? User.FindFirstValue("sub");
 
         return Guid.TryParse(claim, out var id) ? id : null;
     }

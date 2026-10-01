@@ -3,6 +3,7 @@ using StackExchange.Redis;
 using Newtonsoft.Json;
 using UIAMovie.Application.Interfaces;
 using Microsoft.Extensions.Logging;
+using UIAMovie.Application.Interfaces.IServices;
 
 namespace UIAMovie.Infrastructure.Caching;
 

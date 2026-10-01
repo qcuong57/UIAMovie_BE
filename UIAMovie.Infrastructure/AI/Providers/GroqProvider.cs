@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IServices;
 using UIAMovie.Infrastructure.AI.Resilience;
 
 namespace UIAMovie.Infrastructure.AI.Providers;

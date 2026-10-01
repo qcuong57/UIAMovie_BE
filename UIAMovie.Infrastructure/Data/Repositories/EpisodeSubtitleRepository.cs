@@ -1,6 +1,7 @@
 ﻿// UIAMovie.Infrastructure/Data/Repositories/EpisodeSubtitleRepository.cs
 
 using Microsoft.EntityFrameworkCore;
+using UIAMovie.Application.Interfaces.IRepositories;
 using UIAMovie.Domain.Entities;
 
 namespace UIAMovie.Infrastructure.Data.Repositories;

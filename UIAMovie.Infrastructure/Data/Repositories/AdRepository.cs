@@ -3,6 +3,7 @@
 using Microsoft.EntityFrameworkCore;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IRepositories;
 using UIAMovie.Domain.Entities;
 using UIAMovie.Infrastructure.Data;
 

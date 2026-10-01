@@ -3,7 +3,7 @@
 using UIAMovie.Application.DTOs;
 using UIAMovie.Domain.Entities;
 
-namespace UIAMovie.Application.Interfaces;
+namespace UIAMovie.Application.Interfaces.IServices;
 
 public interface IAdService
 {

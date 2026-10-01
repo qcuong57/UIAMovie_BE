@@ -1,10 +1,10 @@
 ﻿using System.Text.Json;
 using UIAMovie.Application.AI.Models;
+using UIAMovie.Application.AI.Parsing;
 using UIAMovie.Application.AI.Retrieval;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
-using UIAMovie.Infrastructure.AI.Parsing;
-using UIAMovie.Infrastructure.AI.Providers;
+using UIAMovie.Application.Interfaces.IServices;
 
 namespace UIAMovie.Application.AI.Tools;
 

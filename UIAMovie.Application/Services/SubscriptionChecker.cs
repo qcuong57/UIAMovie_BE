@@ -1,8 +1,9 @@
 ﻿// UIAMovie.Application/Services/SubscriptionChecker.cs
 
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IRepositories;
+using UIAMovie.Application.Interfaces.IServices;
 using UIAMovie.Domain.Entities;
-using UIAMovie.Infrastructure.Data.Repositories;
 
 namespace UIAMovie.Application.Services;
 

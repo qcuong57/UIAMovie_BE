@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IServices;
 
 namespace UIAMovie.Application.AI;
 

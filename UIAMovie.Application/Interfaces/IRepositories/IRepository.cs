@@ -1,7 +1,7 @@
 ﻿// UIAMovie.Infrastructure/Data/Repositories/IRepository.cs
 using System.Linq.Expressions;
 
-namespace UIAMovie.Infrastructure.Data.Repositories;
+namespace UIAMovie.Application.Interfaces.IRepositories;
 
 public interface IRepository<T> where T : class
 {

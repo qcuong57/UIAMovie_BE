@@ -6,7 +6,7 @@ using System.Text;
 using Microsoft.Extensions.Options;
 using UIAMovie.Application.DTOs;
 
-namespace UIAMovie.Application.Services.Payment;
+namespace UIAMovie.Application.Services;
 
 public class VnpayOptions
 {

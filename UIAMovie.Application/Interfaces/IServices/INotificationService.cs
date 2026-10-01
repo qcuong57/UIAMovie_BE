@@ -1,6 +1,6 @@
 ﻿using UIAMovie.Application.DTOs;
 
-namespace UIAMovie.Application.Interfaces;
+namespace UIAMovie.Application.Interfaces.IServices;
 
 public interface INotificationService
 {

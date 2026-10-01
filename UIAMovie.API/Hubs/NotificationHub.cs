@@ -2,7 +2,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
-namespace UIAMovie.API.Hubs;
+namespace UIAMovie.Hubs;
 
 [Authorize]
 public class NotificationHub : Hub

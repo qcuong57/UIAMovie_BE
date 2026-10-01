@@ -8,7 +8,7 @@ using UIAMovie.Application.AI.Tools;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.DTOs.AI;
 using UIAMovie.Application.Interfaces;
-using UIAMovie.Infrastructure.AI.Providers;
+using UIAMovie.Application.Interfaces.IServices;
 
 namespace UIAMovie.Application.AI.Orchestration;
 

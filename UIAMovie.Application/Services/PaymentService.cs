@@ -4,9 +4,10 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
-using UIAMovie.Application.Services.Payment;
+using UIAMovie.Application.Interfaces.IRepositories;
+using UIAMovie.Application.Interfaces.IServices;
+using UIAMovie.Application.Services;
 using UIAMovie.Domain.Entities;
-using UIAMovie.Infrastructure.Data.Repositories;
 
 namespace UIAMovie.Application.Services;
 

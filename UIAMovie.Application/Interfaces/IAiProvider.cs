@@ -1,5 +1,5 @@
 ﻿// UIAMovie.Infrastructure/AI/Providers/IAiProvider.cs
-namespace UIAMovie.Infrastructure.AI.Providers;
+namespace UIAMovie.Application.Interfaces;
 
 public class AiProviderMessage
 {

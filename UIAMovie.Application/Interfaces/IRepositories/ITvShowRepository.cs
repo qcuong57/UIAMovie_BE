@@ -2,9 +2,9 @@
 
 using UIAMovie.Application.DTOs;
 using UIAMovie.Domain.Entities;
-using UIAMovie.Infrastructure.Data.Repositories;
+using UIAMovie.Application.Interfaces.IRepositories;
 
-namespace UIAMovie.Application.Interfaces;
+namespace UIAMovie.Application.Interfaces.IRepositories;
 
 public interface ITvShowRepository : IRepository<TvShow>
 {

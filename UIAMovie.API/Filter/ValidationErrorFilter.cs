@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using UIAMovie.Application.DTOs;
 
-namespace UIAMovie.API.Filters;
+namespace UIAMovie.Filter;
 
 public static class ValidationErrorFilter
 {

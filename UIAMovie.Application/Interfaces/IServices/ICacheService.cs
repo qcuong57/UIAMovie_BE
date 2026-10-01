@@ -1,5 +1,5 @@
 ﻿// UIAMovie.Application/Interfaces/ICacheService.cs
-namespace UIAMovie.Application.Interfaces;
+namespace UIAMovie.Application.Interfaces.IServices;
 
 public interface ICacheService
 {

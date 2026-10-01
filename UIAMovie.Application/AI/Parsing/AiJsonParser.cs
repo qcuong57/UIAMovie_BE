@@ -2,7 +2,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
-namespace UIAMovie.Infrastructure.AI.Parsing;
+namespace UIAMovie.Application.AI.Parsing;
 
 public static class AiJsonParser
 {

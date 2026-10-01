@@ -2,8 +2,9 @@
 
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
+using UIAMovie.Application.Interfaces.IServices;
 using UIAMovie.Domain.Entities;
-using UIAMovie.Infrastructure.Data.Repositories;
+using UIAMovie.Application.Interfaces.IRepositories;
 
 namespace UIAMovie.Application.Services;
 
