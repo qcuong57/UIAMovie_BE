@@ -29,6 +29,8 @@ public interface IMovieService
     Task<bool> RemoveFavoriteAsync(Guid userId, Guid movieId);
     Task<IEnumerable<FavoriteDTO>> GetFavoritesAsync(Guid userId);
     Task UpdateWatchProgressAsync(Guid userId, Guid movieId, int progressMinutes, bool isCompleted);
+    /// <summary>Phiên bản chính xác theo giây (HLS player). durationSeconds NULL = không cập nhật tổng thời lượng.</summary>
+    Task UpdateWatchProgressAsync(Guid userId, Guid movieId, int progressSeconds, int? durationSeconds, bool isCompleted);
     Task<IEnumerable<WatchHistoryDTO>> GetWatchHistoryAsync(Guid userId);
     Task<bool> DeleteWatchHistoryAsync(Guid userId, Guid historyId);
     Task ClearWatchHistoryAsync(Guid userId);
@@ -398,13 +400,23 @@ public class MovieService : IMovieService
             _videoRepository.Remove(old);
         }
 
+        // Lưu metadata streaming để Playback API trả HLS chuẩn.
+        // Chỉ video upload lên Cloudinary (không phải trailer YouTube) mới có PublicId.
+        var newPublicId = ExtractCloudinaryPublicId(videoUrl);
+        var isCloudinary = newPublicId != null;
+        var isTrailer = videoType.StartsWith("trailer", StringComparison.OrdinalIgnoreCase);
+
         await _videoRepository.AddAsync(new MovieVideo
         {
             MovieId = movieId,
             VideoUrl = videoUrl,
             VideoType = videoType,
             Quality = quality,
-            IsPublished = true
+            IsPublished = true,
+            PublicId = newPublicId,
+            Provider = isCloudinary ? "cloudinary" : (videoUrl.Contains("youtu") ? "youtube" : null),
+            // PlaybackUrl để null: PlaybackService sẽ sinh link HLS từ PublicId.
+            StreamingType = isCloudinary && !isTrailer ? "HLS" : null
         });
         await _videoRepository.SaveChangesAsync();
 
@@ -490,14 +502,24 @@ public class MovieService : IMovieService
 
     // ─── Watch History ────────────────────────────────────────────────────────
 
-    public async Task UpdateWatchProgressAsync(
+    // Giữ nguyên chữ ký cũ để controller/caller hiện có không vỡ — quy đổi phút → giây.
+    public Task UpdateWatchProgressAsync(
         Guid userId, Guid movieId, int progressMinutes, bool isCompleted)
+        => UpdateWatchProgressAsync(userId, movieId, Math.Max(0, progressMinutes) * 60, null, isCompleted);
+
+    public async Task UpdateWatchProgressAsync(
+        Guid userId, Guid movieId, int progressSeconds, int? durationSeconds, bool isCompleted)
     {
+        progressSeconds = Math.Max(0, progressSeconds);
+        var progressMinutes = progressSeconds / 60; // giữ thống kê theo phút đồng bộ
+
         var existing = await _watchHistoryRepository.FindOneAsync(h => h.UserId == userId && h.MovieId == movieId);
 
         if (existing != null)
         {
+            existing.ProgressSeconds = progressSeconds;
             existing.ProgressMinutes = progressMinutes;
+            if (durationSeconds is > 0) existing.Duration = durationSeconds;
             existing.IsCompleted = isCompleted;
             existing.WatchedAt = DateTime.UtcNow;
             _watchHistoryRepository.Update(existing);
@@ -508,7 +530,9 @@ public class MovieService : IMovieService
             {
                 UserId = userId,
                 MovieId = movieId,
+                ProgressSeconds = progressSeconds,
                 ProgressMinutes = progressMinutes,
+                Duration = durationSeconds is > 0 ? durationSeconds : null,
                 IsCompleted = isCompleted
             });
         }
@@ -534,6 +558,9 @@ public class MovieService : IMovieService
             .Select(h =>
             {
                 var m = movieMap[h.MovieId];
+                // Bản ghi cũ chỉ có phút (ProgressSeconds = 0) → suy ra giây từ phút.
+                var seconds = h.ProgressSeconds > 0 ? h.ProgressSeconds : h.ProgressMinutes * 60;
+                var duration = h.Duration is > 0 ? h.Duration : (m.Duration is > 0 ? m.Duration * 60 : null);
                 return new WatchHistoryDTO
                 {
                     Id = h.Id,
@@ -542,6 +569,11 @@ public class MovieService : IMovieService
                     PosterUrl = m.PosterUrl,
                     WatchedAt = h.WatchedAt,
                     ProgressMinutes = h.ProgressMinutes,
+                    ProgressSeconds = seconds,
+                    Duration = duration,
+                    ProgressPercentage = h.IsCompleted
+                        ? 100
+                        : duration is > 0 ? Math.Min(100, Math.Round(seconds * 100.0 / duration.Value, 1)) : 0,
                     IsCompleted = h.IsCompleted
                 };
             })
@@ -828,7 +860,16 @@ public class MovieService : IMovieService
         IsPremium = m.IsPremium,
         IsUpcoming = m.ReleaseDate.HasValue && m.ReleaseDate.Value > DateTime.UtcNow,
         Genres = m.MovieGenres?.Select(g => g.Genre?.Name ?? "").Where(n => n != "").ToList() ?? new(),
-        Videos = m.MovieVideos?.Select(v => new MovieVideoDTO { Id = v.Id, VideoUrl = v.VideoUrl, VideoType = v.VideoType, Duration = v.Duration, Quality = v.Quality }).ToList() ?? new(),
+        Videos = m.MovieVideos?.Select(v => new MovieVideoDTO
+        {
+            Id = v.Id,
+            // Chỉ trailer mới trả URL công khai; video chính phải phát qua /api/playback/movie/{id} (có kiểm tra Premium)
+            VideoUrl = (v.VideoType == "trailer" || v.VideoType == "trailer_upload") ? v.VideoUrl : string.Empty,
+            VideoType = v.VideoType,
+            Duration = v.Duration,
+            Quality = v.Quality,
+            HasVideo = !string.IsNullOrEmpty(v.VideoUrl) || !string.IsNullOrEmpty(v.PublicId)
+        }).ToList() ?? new(),
         TrailerKey = m.MovieVideos?.Where(v => v.VideoType == "trailer" && !string.IsNullOrEmpty(v.VideoUrl)).Select(v => ExtractYoutubeKey(v.VideoUrl)).FirstOrDefault(k => k != null),
         TrailerVideoUrl = m.MovieVideos?.Where(v => v.VideoType == "trailer_upload" && !string.IsNullOrEmpty(v.VideoUrl)).Select(v => v.VideoUrl).FirstOrDefault(),
         Cast = m.MovieCasts?.OrderBy(c => c.Order).Where(c => c.Person != null).Take(6).Select(c => new MovieCastDTO

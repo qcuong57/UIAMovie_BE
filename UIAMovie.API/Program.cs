@@ -133,6 +133,7 @@ builder.Services.AddScoped<IAdRepository, AdRepository>();
 builder.Services.AddScoped<IAdService, AdService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IVnpayPaymentService, VnpayPaymentService>();
+builder.Services.AddScoped<IPlaybackService, PlaybackService>();
 builder.Services.Configure<VnpayOptions>(builder.Configuration.GetSection("VNPay"));
 
 // JWT Configuration & SignalR Token Extraction

@@ -105,6 +105,10 @@ public class MovieDbContext : DbContext
         modelBuilder.Entity<MovieVideo>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.Property(e => e.StreamingType).HasMaxLength(20);
+            entity.Property(e => e.Provider).HasMaxLength(50);
+            entity.Property(e => e.PlaybackUrl).HasMaxLength(1000);
+            entity.Property(e => e.PublicId).HasMaxLength(500);
             entity.HasOne(e => e.Movie)
                 .WithMany(m => m.MovieVideos)
                 .HasForeignKey(e => e.MovieId)

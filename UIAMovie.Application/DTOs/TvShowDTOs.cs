@@ -98,8 +98,14 @@ public class EpisodeDTO
     public decimal? Rating { get; set; }
     public DateTime? AirDate { get; set; }
 
-    /// <summary>URL video thực tế (Cloudinary). null nếu chưa upload.</summary>
+    /// <summary>
+    /// Không còn trả URL file gốc ra API công khai (tránh vượt cổng Premium).
+    /// Phát tập phim qua GET /api/playback/tv/{tvShowId}/episode/{episodeId}.
+    /// </summary>
     public string? VideoUrl { get; set; }
+
+    /// <summary>TRUE nếu tập đã có video. Admin/FE dùng thay cho việc kiểm tra VideoUrl.</summary>
+    public bool HasVideo { get; set; }
 }
 
 /// <summary>
@@ -341,6 +347,9 @@ public class TvShowVideoDTO
     public string VideoType { get; set; } = string.Empty;
     public int? Duration { get; set; }
     public string? Quality { get; set; }
+
+    /// <summary>TRUE nếu bản ghi có file video (kể cả khi VideoUrl bị ẩn).</summary>
+    public bool HasVideo { get; set; }
 }
 
 public class TvShowImageDTO

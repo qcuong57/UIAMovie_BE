@@ -556,6 +556,13 @@ public class TvShowService : ITvShowService
 
         var oldUrl = episode.VideoUrl;
         episode.VideoUrl = videoUrl;
+
+        // Lưu metadata streaming để Playback API trả HLS chuẩn.
+        var publicId = ExtractCloudinaryPublicId(videoUrl);
+        episode.PublicId = publicId;
+        episode.Provider = publicId != null ? "cloudinary" : null;
+        episode.StreamingType = publicId != null ? "HLS" : null;
+        episode.PlaybackUrl = null; // PlaybackService sinh link HLS từ PublicId
         _episodeRepository.Update(episode);
         await _episodeRepository.SaveChangesAsync();
 
@@ -573,6 +580,11 @@ public class TvShowService : ITvShowService
 
         var oldUrl = episode.VideoUrl;
         episode.VideoUrl = null;
+        episode.PublicId = null;
+        episode.Provider = null;
+        episode.StreamingType = null;
+        episode.PlaybackUrl = null;
+        episode.Quality = null;
         _episodeRepository.Update(episode);
         await _episodeRepository.SaveChangesAsync();
 
@@ -1192,7 +1204,13 @@ public class TvShowService : ITvShowService
         Genres = t.TvShowGenres?.Select(g => g.Genre?.Name ?? "").Where(n => n != "").ToList() ?? new(),
         Videos = t.TvShowVideos?.Select(v => new TvShowVideoDTO
             {
-                Id = v.Id, VideoUrl = v.VideoUrl, VideoType = v.VideoType, Duration = v.Duration, Quality = v.Quality
+                Id = v.Id,
+                // Chỉ trailer mới trả URL công khai; video chính phải phát qua /api/playback (có kiểm tra Premium)
+                VideoUrl = (v.VideoType == "trailer" || v.VideoType == "trailer_upload") ? v.VideoUrl : string.Empty,
+                VideoType = v.VideoType,
+                Duration = v.Duration,
+                Quality = v.Quality,
+                HasVideo = !string.IsNullOrEmpty(v.VideoUrl)
             })
             .ToList() ?? new(),
         TrailerKey = t.TvShowVideos?.Where(v => v.VideoType == "trailer" && !string.IsNullOrEmpty(v.VideoUrl))
@@ -1234,7 +1252,9 @@ public class TvShowService : ITvShowService
     private static EpisodeDTO MapEpisodeToDTO(Episode e) => new()
     {
         Id = e.Id, EpisodeNumber = e.EpisodeNumber, Title = e.Title, Overview = e.Overview,
-        StillUrl = e.StillUrl, Runtime = e.Runtime, Rating = e.Rating, AirDate = e.AirDate, VideoUrl = e.VideoUrl
+        StillUrl = e.StillUrl, Runtime = e.Runtime, Rating = e.Rating, AirDate = e.AirDate,
+        VideoUrl = null, // không lộ URL công khai — phát qua /api/playback/episode/...
+        HasVideo = !string.IsNullOrEmpty(e.VideoUrl) || !string.IsNullOrEmpty(e.PublicId)
     };
 
     private static string? ExtractYoutubeKey(string url)

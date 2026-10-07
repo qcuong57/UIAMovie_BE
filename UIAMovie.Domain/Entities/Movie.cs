@@ -47,6 +47,24 @@ public class MovieVideo
     public bool IsPublished { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+    // ── Streaming (HLS / Adaptive Bitrate) ───────────────────────────────────
+    // Tất cả đều nullable để tương thích ngược với các video cũ (chỉ có VideoUrl .mp4).
+
+    /// <summary>"HLS" | "MP4". NULL = video cũ, coi như MP4.</summary>
+    public string? StreamingType { get; set; }
+
+    /// <summary>URL phát thực tế (vd: master.m3u8). NULL = dùng VideoUrl.</summary>
+    public string? PlaybackUrl { get; set; }
+
+    /// <summary>"cloudinary" | "youtube" | ... NULL = coi như cloudinary.</summary>
+    public string? Provider { get; set; }
+
+    /// <summary>
+    /// Cloudinary public ID (gồm folder, không có đuôi file). Lưu lúc upload để dựng
+    /// link HLS mà không phải parse URL. NULL với video cũ → fallback ExtractPublicId(VideoUrl).
+    /// </summary>
+    public string? PublicId { get; set; }
+
     // FK
     public Movie? Movie { get; set; }
 }
@@ -92,6 +110,12 @@ public class WatchHistory
     public DateTime WatchedAt { get; set; } = DateTime.UtcNow;
     public int ProgressMinutes { get; set; }
     public bool IsCompleted { get; set; }
+
+    /// <summary>Vị trí xem chính xác (giây) để player seek/resume. ProgressMinutes vẫn được giữ đồng bộ (= ProgressSeconds / 60).</summary>
+    public int ProgressSeconds { get; set; } = 0;
+
+    /// <summary>Tổng thời lượng video (giây) tại thời điểm xem, dùng tính % tiến độ. NULL với bản ghi cũ.</summary>
+    public int? Duration { get; set; }
 
     // FK
     public User? User { get; set; }

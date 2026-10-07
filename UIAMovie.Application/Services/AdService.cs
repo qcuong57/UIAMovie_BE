@@ -460,6 +460,7 @@ public class AdService : IAdService
         return ordered.Select(x => new AdPlaybackDTO
         {
             AdId = x.Ad.Id,
+            Title = x.Ad.Title,
             VideoUrl = x.Ad.VideoUrl ?? string.Empty,
             BrandImageUrl = x.Ad.BrandImageUrl,
             DurationSeconds = x.Ad.DurationSeconds,

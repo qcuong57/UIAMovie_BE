@@ -52,6 +52,7 @@ public class AdDTO
 public class AdPlaybackDTO
 {
     public Guid AdId { get; set; }
+    public string? Title { get; set; }
     public string VideoUrl { get; set; } = string.Empty;
 
     /// <summary>Ảnh logo/nhãn hiệu — player overlay khi phát ad.</summary>

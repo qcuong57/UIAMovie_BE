@@ -165,6 +165,7 @@ public class MoviesController : ControllerBase
     ///   - /watch là "playback gate" — chỉ trả về stream URL khi đủ quyền.
     ///   - Dễ add logging (tracking lượt xem) mà không ảnh hưởng GetById.
     /// </summary>
+    [Obsolete("Dùng GET /api/playback/... thay thế. Sẽ xóa ở bản sau.")]
     [HttpGet("{id:guid}/watch")]
     public async Task<IActionResult> WatchMovie(Guid id)
     {
@@ -208,8 +209,8 @@ public class MoviesController : ControllerBase
             return StatusCode(403, new ApiErrorResponseDTO { Message = reason, StatusCode = 403 });
         }
 
-        // Ghi lại lượt xem (async fire-and-forget, không block response)
-        _ = _movieService.UpdateWatchProgressAsync(userId.Value, id, 0, false);
+        // Không reset tiến độ xem ở đây (tránh ghi đè progress); player gọi UpdateWatchProgress riêng.
+        // Video chính phát qua GET /api/playback/movie/{id}.
 
         return Ok(new ApiResponseDTO<object>
         {

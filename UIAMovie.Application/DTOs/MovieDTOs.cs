@@ -157,10 +157,19 @@ public class PersonSearchDTO
 public class MovieVideoDTO
 {
     public Guid Id { get; set; }
+    /// <summary>
+    /// Chỉ có giá trị với trailer (YouTube / trailer_upload). Video chính (main...) luôn rỗng
+    /// để không lộ file gốc — phát qua GET /api/playback/movie/{id} (HLS + kiểm tra Premium).
+    /// </summary>
     public string VideoUrl { get; set; } = string.Empty;
     public string VideoType { get; set; } = string.Empty;
     public int? Duration { get; set; }
+
+    /// <summary>Nhãn chất lượng (chỉ để hiển thị). Chất lượng phát thực tế do HLS adaptive quyết định.</summary>
     public string? Quality { get; set; }
+
+    /// <summary>TRUE nếu bản ghi có file video (kể cả khi VideoUrl bị ẩn).</summary>
+    public bool HasVideo { get; set; }
 }
 
 public class UploadMovieVideoDTO

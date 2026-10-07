@@ -134,6 +134,18 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Property<string>("Overview")
                         .HasColumnType("text");
 
+                    b.Property<string>("PlaybackUrl")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Provider")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PublicId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Quality")
+                        .HasColumnType("text");
+
                     b.Property<decimal?>("Rating")
                         .HasPrecision(4, 1)
                         .HasColumnType("numeric(4,1)");
@@ -145,6 +157,9 @@ namespace UIAMovie.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<string>("StillUrl")
+                        .HasColumnType("text");
+
+                    b.Property<string>("StreamingType")
                         .HasColumnType("text");
 
                     b.Property<string>("Title")
@@ -564,8 +579,24 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Property<Guid>("MovieId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("PlaybackUrl")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("Provider")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("PublicId")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
                     b.Property<string>("Quality")
                         .HasColumnType("text");
+
+                    b.Property<string>("StreamingType")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<Guid?>("UploadedBy")
                         .HasColumnType("uuid");
@@ -1237,7 +1268,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$TVaYF0bpESxZVGevVRxMzu1QyAcWWRK1RF1Kdhz.9ozDoWgtx2cx2",
+                            PasswordHash = "$2a$11$cj4YEeaTN.IVeV7ysuzviOBzTjyrUG5z3yCBUd06M4tnaCNPrfAj.",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
@@ -1320,6 +1351,9 @@ namespace UIAMovie.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<int?>("Duration")
+                        .HasColumnType("integer");
+
                     b.Property<bool>("IsCompleted")
                         .HasColumnType("boolean");
 
@@ -1327,6 +1361,9 @@ namespace UIAMovie.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<int>("ProgressMinutes")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("ProgressSeconds")
                         .HasColumnType("integer");
 
                     b.Property<Guid>("UserId")

@@ -88,6 +88,7 @@ public class TvShowsController : ControllerBase
     ///
     /// GET /api/tvshows/{id}/watch
     /// </summary>
+    [Obsolete("Dùng GET /api/playback/... thay thế. Sẽ xóa ở bản sau.")]
     [HttpGet("{id:guid}/watch")]
     public async Task<IActionResult> WatchTvShow(Guid id)
     {
@@ -139,6 +140,7 @@ public class TvShowsController : ControllerBase
     ///
     /// GET /api/tvshows/{id}/seasons/{seasonNumber}/episodes/{episodeNumber}/watch
     /// </summary>
+    [Obsolete("Dùng GET /api/playback/... thay thế. Sẽ xóa ở bản sau.")]
     [HttpGet("{id:guid}/seasons/{seasonNumber:int}/episodes/{episodeNumber:int}/watch")]
     public async Task<IActionResult> WatchEpisode(Guid id, int seasonNumber, int episodeNumber)
     {
@@ -155,7 +157,7 @@ public class TvShowsController : ControllerBase
         {
             return Ok(new ApiResponseDTO<object>
             {
-                Data = new { canWatch = true, videoUrl = episode.VideoUrl },
+                Data = new { canWatch = true, hasVideo = episode.HasVideo, episodeId = episode.Id },
                 Message = "Thành công"
             });
         }
@@ -179,12 +181,11 @@ public class TvShowsController : ControllerBase
             return StatusCode(403, new ApiErrorResponseDTO { Message = reason, StatusCode = 403 });
         }
 
-        // Ghi lại tiến độ xem (fire-and-forget)
-        _ = _tvShowService.UpdateWatchProgressAsync(userId.Value, id, episode.Id, 0, false);
+        // Không reset tiến độ xem ở đây; player gọi UpdateWatchProgress riêng.
 
         return Ok(new ApiResponseDTO<object>
         {
-            Data = new { canWatch = true, videoUrl = episode.VideoUrl },
+            Data = new { canWatch = true, hasVideo = episode.HasVideo, episodeId = episode.Id },
             Message = "Thành công"
         });
     }
