@@ -573,8 +573,14 @@ public class MoviesController : ControllerBase
     [Authorize]
     public async Task<IActionResult> UpdateWatchProgress([FromBody] UpdateWatchProgressDTO dto)
     {
-        await _movieService.UpdateWatchProgressAsync(
-            GetUserId(), dto.MovieId, dto.ProgressMinutes, dto.IsCompleted);
+        // Client mới gửi ProgressSeconds (chính xác tới giây) → dùng overload theo giây.
+        // Client cũ chỉ có ProgressMinutes → giữ hành vi cũ.
+        if (dto.ProgressSeconds.HasValue)
+            await _movieService.UpdateWatchProgressAsync(
+                GetUserId(), dto.MovieId, dto.ProgressSeconds.Value, dto.DurationSeconds, dto.IsCompleted);
+        else
+            await _movieService.UpdateWatchProgressAsync(
+                GetUserId(), dto.MovieId, dto.ProgressMinutes, dto.IsCompleted);
 
         return Ok(new ApiResponseDTO<object> { Message = "Đã cập nhật tiến trình xem" });
     }
