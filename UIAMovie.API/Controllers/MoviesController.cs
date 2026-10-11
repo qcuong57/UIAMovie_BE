@@ -1,7 +1,7 @@
 ﻿// UIAMovie.API/Controllers/MoviesController.cs
 // THÊM:
 //   [1] GET /api/movies/{id}          → gắn ContentAccessDTO vào response nếu user đã login
-//   [2] GET /api/movies/{id}/watch    → Premium gate — trả video URL chỉ khi user có quyền
+//   [2] (đã xóa) GET /api/movies/{id}/watch — thay bằng /api/playback/...
 //   [3] PATCH /api/movies/{id}/premium → Admin toggle IsPremium của phim
 
 using System.IO;
@@ -78,6 +78,18 @@ public class MoviesController : ControllerBase
         return Ok(new ApiResponseDTO<object> { Data = result, Message = "Thành công" });
     }
 
+    /// <summary>
+    /// [Admin] Tổng số phim trong DB — dùng cho KPI dashboard (số liệu chính xác, không phụ thuộc pageSize).
+    /// GET /api/movies/stats/count  →  { total }
+    /// </summary>
+    [HttpGet("stats/count")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> GetTotalCount()
+    {
+        var total = await _movieService.GetTotalCountAsync();
+        return Ok(new ApiResponseDTO<object> { Data = new { total }, Message = "Thành công" });
+    }
+
     [HttpGet("trending")]
     public async Task<IActionResult> GetTrending()
     {
@@ -144,83 +156,6 @@ public class MoviesController : ControllerBase
         }
 
         return Ok(new ApiResponseDTO<object> { Data = movie, Message = "Thành công" });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // WATCH — Premium gate
-    // ═══════════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Endpoint để frontend lấy danh sách video URL có thể phát.
-    ///
-    /// Logic:
-    ///   - Phim FREE       → trả về videos cho mọi user (kể cả chưa đăng nhập)
-    ///   - Phim PREMIUM    → phải đăng nhập + có Premium hợp lệ
-    ///
-    /// GET /api/movies/{id}/watch
-    /// Response: { videos: [...], canWatch: true }
-    ///
-    /// Tại sao tách endpoint riêng thay vì ẩn URL trong GetById?
-    ///   - GetById vẫn trả về videos (để trailer public xem được).
-    ///   - /watch là "playback gate" — chỉ trả về stream URL khi đủ quyền.
-    ///   - Dễ add logging (tracking lượt xem) mà không ảnh hưởng GetById.
-    /// </summary>
-    [Obsolete("Dùng GET /api/playback/... thay thế. Sẽ xóa ở bản sau.")]
-    [HttpGet("{id:guid}/watch")]
-    public async Task<IActionResult> WatchMovie(Guid id)
-    {
-        var movie = await _movieService.GetMovieByIdAsync(id);
-        if (movie == null)
-            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy phim", StatusCode = 404 });
-
-        // Phim FREE → ai cũng xem được
-        if (!movie.IsPremium)
-        {
-            return Ok(new ApiResponseDTO<object>
-            {
-                Data = new
-                {
-                    canWatch = true,
-                    videos = movie.Videos
-                },
-                Message = "Thành công"
-            });
-        }
-
-        // Phim PREMIUM → cần đăng nhập
-        var userId = TryGetUserId();
-        if (!userId.HasValue)
-            return Unauthorized(new ApiErrorResponseDTO
-            {
-                Message = "Vui lòng đăng nhập để xem phim Premium",
-                StatusCode = 401
-            });
-
-        // Kiểm tra tài khoản active + subscription còn hạn
-        var canWatch = await _subscriptionChecker.CanWatchPremiumContentAsync(userId.Value);
-        if (!canWatch)
-        {
-            // Phân biệt bị ban vs hết hạn để frontend hiển thị thông báo đúng
-            var isPremium = await _subscriptionChecker.IsPremiumAsync(userId.Value);
-            var reason = isPremium
-                ? "Tài khoản của bạn đã bị khóa"
-                : "Nâng cấp lên Premium để xem phim này";
-
-            return StatusCode(403, new ApiErrorResponseDTO { Message = reason, StatusCode = 403 });
-        }
-
-        // Không reset tiến độ xem ở đây (tránh ghi đè progress); player gọi UpdateWatchProgress riêng.
-        // Video chính phát qua GET /api/playback/movie/{id}.
-
-        return Ok(new ApiResponseDTO<object>
-        {
-            Data = new
-            {
-                canWatch = true,
-                videos = movie.Videos
-            },
-            Message = "Thành công"
-        });
     }
 
     // ═══════════════════════════════════════════════════════════════════

@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using StackExchange.Redis;
@@ -26,6 +27,7 @@ using UIAMovie.Infrastructure.Data;
 using UIAMovie.Infrastructure.Data.Repositories;
 using UIAMovie.Infrastructure.Email;
 using UIAMovie.Infrastructure.Messaging;
+using UIAMovie.Infrastructure.Repositories;
 using UIAMovie.Infrastructure.Security;
 using UIAMovie.Infrastructure.Services;
 using UIAMovie.Middleware;
@@ -73,6 +75,9 @@ builder.Services.AddScoped<IRepository<Person>, Repository<Person>>();
 builder.Services.AddScoped<IRepository<MovieCast>, Repository<MovieCast>>();
 builder.Services.AddScoped<IRepository<MovieDirector>, Repository<MovieDirector>>();
 builder.Services.AddScoped<IRepository<MovieImage>, Repository<MovieImage>>();
+builder.Services.AddScoped<IViewSessionRepository, ViewSessionRepository>(); // Infrastructure.Data.Repositories
+builder.Services.AddScoped<IViewStatsRepository, ViewStatsRepository>();
+
 
 // Authentication
 builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
@@ -113,7 +118,7 @@ builder.Services.AddScoped<IAiRouter, AiRouter>();
 builder.Services.AddScoped<MovieCompareTool>();
 builder.Services.AddScoped<ReviewSummaryTool>();
 builder.Services.AddScoped<IAiAssistantService, AiAssistantService>();
-builder.Services.AddHttpClient<IGroqService, GroqService>();
+builder.Services.AddScoped<IGroqService, GroqService>(); // không dùng typed HttpClient: GroqService gọi AI qua IAiProvider
 builder.Services.AddScoped<ITvShowService, TvShowService>();
 builder.Services.AddScoped<IRepository<TvShowVideo>, Repository<TvShowVideo>>();
 builder.Services.AddScoped<IRepository<TvShowImage>, Repository<TvShowImage>>();
@@ -134,6 +139,11 @@ builder.Services.AddScoped<IAdService, AdService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IVnpayPaymentService, VnpayPaymentService>();
 builder.Services.AddScoped<IPlaybackService, PlaybackService>();
+builder.Services.AddScoped<IViewTrackingService, ViewTrackingService>();
+builder.Services.AddScoped<IViewStatsService, ViewStatsService>();
+builder.Services.AddSingleton<IClock, VnClock>(); // "hôm nay" theo giờ VN cho ViewDate/thống kê/trending
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IContentMetaProvider, ContentMetaProvider>(); // cache metadata nhẹ cho heartbeat
 builder.Services.Configure<VnpayOptions>(builder.Configuration.GetSection("VNPay"));
 
 // JWT Configuration & SignalR Token Extraction
@@ -185,7 +195,8 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(allowedOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod()
-            .AllowCredentials());
+            .AllowCredentials()
+            .WithExposedHeaders("X-Cache-Invalidated"));
 });
 
 // Built-in Rate Limiter
@@ -202,6 +213,26 @@ builder.Services.AddRateLimiter(options =>
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                 QueueLimit = 0
             }));
+
+    // Heartbeat đếm view: ~4 request/phút/tab. 240/phút/IP ≈ 50 tab cùng IP (ký túc xá, quán cà phê, NAT);
+    // chống gian lận từng session đã có ClampSeconds trong ViewTrackingService
+    options.AddPolicy("heartbeat", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 240,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
+});
+
+// Chạy sau reverse proxy (Render/Azure/...): lấy IP thật + scheme https thật từ X-Forwarded-*
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
 });
 
 builder.Services.AddControllers()
@@ -222,6 +253,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+app.UseForwardedHeaders(); // phải đứng đầu pipeline, trước UseHttpsRedirection
 app.UseHttpsRedirection();
 
 // Security Headers

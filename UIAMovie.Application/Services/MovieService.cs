@@ -12,6 +12,7 @@ namespace UIAMovie.Application.Services;
 public interface IMovieService
 {
     Task<PaginatedDTO<MovieDTO>> GetMoviesAsync(FilterMoviesDTO filter);
+    Task<int> GetTotalCountAsync();
     Task<IEnumerable<TrendingMovieDTO>> GetTrendingMoviesAsync();
     Task<MovieDTO?> GetMovieByIdAsync(Guid movieId);
     Task<MovieDTO?> GetMovieByTmdbIdAsync(int tmdbId);
@@ -54,6 +55,7 @@ public class MovieService : IMovieService
     private readonly ICacheService _cacheService;
     private readonly ICloudinaryService _cloudinaryService;
     private readonly INotificationService _notificationService;
+    private readonly IClock _clock;
 
     private const string TRENDING_CACHE_KEY = "movies:trending";
     private const string GENRE_CACHE_KEY = "movies:genre:{0}";
@@ -76,9 +78,11 @@ public class MovieService : IMovieService
         IRepository<Genre> genreRepository,
         ICloudinaryService cloudinaryService,
         ICacheService cacheService,
-        INotificationService notificationService)
+        INotificationService notificationService,
+        IClock clock)
     {
         _movieRepository = movieRepository;
+        _clock = clock;
         _videoRepository = videoRepository;
         _favoriteRepository = favoriteRepository;
         _watchHistoryRepository = watchHistoryRepository;
@@ -108,16 +112,19 @@ public class MovieService : IMovieService
         };
     }
 
+    /// <summary>Tổng số phim khớp bộ lọc mặc định (cùng tiêu chí với danh sách). Lấy 1 bản ghi để chỉ tốn 1 truy vấn nhẹ.</summary>
+    public async Task<int> GetTotalCountAsync()
+    {
+        var (_, totalCount) = await _movieRepository.GetPagedAsync(new FilterMoviesDTO { Page = 1, PageSize = 1 });
+        return totalCount;
+    }
+
     public async Task<IEnumerable<TrendingMovieDTO>> GetTrendingMoviesAsync()
     {
         var cached = await _cacheService.GetAsync<List<TrendingMovieDTO>>(TRENDING_CACHE_KEY);
         if (cached != null) return cached;
 
-        var now = DateTime.UtcNow;
-        var cutoff7 = now.AddDays(-7);
-        var cutoff30 = now.AddDays(-30);
-
-        var projections = await _movieRepository.GetTrendingAsync(cutoff7, cutoff30, take: 20);
+        var projections = await _movieRepository.GetTrendingAsync(_clock.Today, take: 20);
 
         var trending = projections
             .Select((p, index) =>
@@ -538,7 +545,6 @@ public class MovieService : IMovieService
         }
 
         await _watchHistoryRepository.SaveChangesAsync();
-        await _cacheService.RemoveAsync(TRENDING_CACHE_KEY);
     }
 
     public async Task<IEnumerable<WatchHistoryDTO>> GetWatchHistoryAsync(Guid userId)

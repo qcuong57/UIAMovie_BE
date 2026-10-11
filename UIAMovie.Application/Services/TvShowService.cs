@@ -1,6 +1,7 @@
 ﻿// UIAMovie.Application/Services/TvShowService.cs
 
 using UIAMovie.Application.DTOs;
+using UIAMovie.Application.Interfaces;
 using UIAMovie.Application.Interfaces.IRepositories;
 using UIAMovie.Application.Interfaces.IServices;
 using UIAMovie.Domain.Entities;
@@ -10,6 +11,8 @@ namespace UIAMovie.Application.Services;
 public interface ITvShowService
 {
     Task<PaginatedDTO<TvShowSummaryDTO>> GetTvShowsAsync(FilterTvShowsDTO filter);
+    Task<int> GetTotalCountAsync();
+    Task<IEnumerable<TrendingTvShowDTO>> GetTrendingTvShowsAsync();
     Task<TvShowDTO?> GetTvShowByIdAsync(Guid id);
     Task<TvShowDTO?> GetTvShowByTmdbIdAsync(int tmdbId);
     Task<Guid> CreateTvShowAsync(CreateTvShowDTO dto);
@@ -61,12 +64,14 @@ public class TvShowService : ITvShowService
     private readonly ICacheService _cacheService;
     private readonly ICloudinaryService _cloudinaryService;
     private readonly INotificationService _notificationService;
+    private readonly IClock _clock;
 
     private const string TVSHOW_CACHE_KEY = "tvshow:{0}";
     private const string SEASON_CACHE_KEY = "tvshow:{0}:season:{1}";
     private const string GENRE_CACHE_KEY = "tvshows:genre:{0}";
     private const string AI_CONTEXTS_KEY = "ai:tvshow_contexts";
     private const string AI_ALL_DTOS_KEY = "ai:all_tvshow_dtos";
+    private const string TRENDING_CACHE_KEY = "tvshows:trending";
 
     public TvShowService(
         ITvShowRepository tvShowRepository,
@@ -84,8 +89,10 @@ public class TvShowService : ITvShowService
         IRepository<TvShowWatchHistory> watchHistoryRepository,
         ICacheService cacheService,
         ICloudinaryService cloudinaryService,
-        INotificationService notificationService)
+        INotificationService notificationService,
+        IClock clock)
     {
+        _clock = clock;
         _tvShowRepository = tvShowRepository;
         _videoRepository = videoRepository;
         _imageRepository = imageRepository;
@@ -116,6 +123,36 @@ public class TvShowService : ITvShowService
             PageNumber = filter.Page,
             PageSize = filter.PageSize
         };
+    }
+
+    /// <summary>Tổng số TV show khớp bộ lọc mặc định (cùng tiêu chí với danh sách). Lấy 1 bản ghi để chỉ tốn 1 truy vấn nhẹ.</summary>
+    public async Task<int> GetTotalCountAsync()
+    {
+        var (_, totalCount) = await _tvShowRepository.GetPagedAsync(new FilterTvShowsDTO { Page = 1, PageSize = 1 });
+        return totalCount;
+    }
+
+    public async Task<IEnumerable<TrendingTvShowDTO>> GetTrendingTvShowsAsync()
+    {
+        var cached = await _cacheService.GetAsync<List<TrendingTvShowDTO>>(TRENDING_CACHE_KEY);
+        if (cached != null) return cached;
+
+        var projections = await _tvShowRepository.GetTrendingAsync(_clock.Today, take: 20);
+
+        var trending = projections
+            .Select((p, index) =>
+            {
+                var dto = MapToTrendingDTO(p.TvShow);
+                dto.TrendingRank = index + 1;
+                dto.Views7d = p.Views7d;
+                dto.Views30d = p.Views30d;
+                dto.TrendingScore = p.Score;
+                return dto;
+            })
+            .ToList();
+
+        await _cacheService.SetAsync(TRENDING_CACHE_KEY, trending, TimeSpan.FromMinutes(30));
+        return trending;
     }
 
     public async Task<TvShowDTO?> GetTvShowByIdAsync(Guid id)
@@ -420,6 +457,7 @@ public class TvShowService : ITvShowService
         if (dto.IsPremium.HasValue) show.IsPremium = dto.IsPremium.Value;
         if (dto.PosterUrl != null) show.PosterUrl = dto.PosterUrl;
         if (dto.BackdropUrl != null) show.BackdropUrl = dto.BackdropUrl;
+        show.UpdatedAt = DateTime.UtcNow;
 
         _tvShowRepository.Update(show);
         await _tvShowRepository.SaveChangesAsync();
@@ -509,12 +547,21 @@ public class TvShowService : ITvShowService
             _videoRepository.Remove(old);
         }
 
+        // Metadata streaming — giống MovieService.AddVideoAsync.
+        // Chỉ video upload lên Cloudinary (không phải trailer) mới phát HLS.
+        var newPublicId = ExtractCloudinaryPublicId(videoUrl);
+        var isCloudinary = newPublicId != null;
+        var isTrailer = videoType.StartsWith("trailer", StringComparison.OrdinalIgnoreCase);
+
         await _videoRepository.AddAsync(new TvShowVideo
         {
             TvShowId = tvShowId,
             VideoUrl = videoUrl,
             VideoType = videoType,
-            Quality = quality
+            Quality = quality,
+            PublicId = newPublicId,
+            Provider = isCloudinary ? "cloudinary" : (videoUrl.Contains("youtu") ? "youtube" : null),
+            StreamingType = isCloudinary && !isTrailer ? "HLS" : null
         });
         await _videoRepository.SaveChangesAsync();
 
@@ -1169,7 +1216,8 @@ public class TvShowService : ITvShowService
         var keysToRemove = genreIds
             .Select(gid => string.Format(GENRE_CACHE_KEY, gid))
             .Append(AI_CONTEXTS_KEY)
-            .Append(AI_ALL_DTOS_KEY);
+            .Append(AI_ALL_DTOS_KEY)
+            .Append(TRENDING_CACHE_KEY);
 
         if (seasonNumbers != null)
         {
@@ -1194,6 +1242,20 @@ public class TvShowService : ITvShowService
         Genres = t.TvShowGenres?.Select(g => g.Genre?.Name ?? "").Where(n => n != "").ToList() ?? new()
     };
 
+    private static TrendingTvShowDTO MapToTrendingDTO(TvShow t)
+    {
+        var b = MapToSummaryDTO(t);
+        return new TrendingTvShowDTO
+        {
+            Id = b.Id, Title = b.Title, Description = b.Description, FirstAirDate = b.FirstAirDate,
+            PosterUrl = b.PosterUrl, BackdropUrl = b.BackdropUrl, Rating = b.Rating,
+            OriginCountry = b.OriginCountry, Status = b.Status, NumberOfSeasons = b.NumberOfSeasons,
+            NumberOfEpisodes = b.NumberOfEpisodes, TrailerKey = b.TrailerKey, TrailerVideoUrl = b.TrailerVideoUrl,
+            IsPremium = b.IsPremium, IsUpcoming = b.IsUpcoming, Genres = b.Genres,
+            TrendingRank = 0, Views7d = 0, Views30d = 0, TrendingScore = 0
+        };
+    }
+
     private static TvShowDTO MapToDTO(TvShow t) => new()
     {
         Id = t.Id, Title = t.Title, Description = t.Description, FirstAirDate = t.FirstAirDate,
@@ -1210,7 +1272,7 @@ public class TvShowService : ITvShowService
                 VideoType = v.VideoType,
                 Duration = v.Duration,
                 Quality = v.Quality,
-                HasVideo = !string.IsNullOrEmpty(v.VideoUrl)
+                HasVideo = !string.IsNullOrEmpty(v.VideoUrl) || !string.IsNullOrEmpty(v.PublicId)
             })
             .ToList() ?? new(),
         TrailerKey = t.TvShowVideos?.Where(v => v.VideoType == "trailer" && !string.IsNullOrEmpty(v.VideoUrl))

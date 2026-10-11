@@ -382,6 +382,9 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Property<Guid?>("UploadedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<long>("ViewCount")
+                        .HasColumnType("bigint");
+
                     b.HasKey("Id");
 
                     b.HasIndex("ImdbRating");
@@ -614,6 +617,63 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.HasIndex("MovieId");
 
                     b.ToTable("MovieVideos");
+                });
+
+            modelBuilder.Entity("UIAMovie.Domain.Entities.MovieViewSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("AccumulatedSeconds")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("GuestId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<bool>("IsCountedAsView")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("LastHeartbeatAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("MovieId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("ViewDate")
+                        .HasColumnType("date");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MovieId", "LastHeartbeatAt")
+                        .HasDatabaseName("IX_MovieViewSessions_Counted_Movie_Heartbeat")
+                        .HasFilter("\"IsCountedAsView\" = TRUE");
+
+                    b.HasIndex("ViewDate", "MovieId")
+                        .HasDatabaseName("IX_MovieViewSessions_Counted_ViewDate_Movie")
+                        .HasFilter("\"IsCountedAsView\" = TRUE");
+
+                    b.HasIndex("GuestId", "MovieId", "ViewDate")
+                        .IsUnique()
+                        .HasDatabaseName("UX_MovieViewSessions_Guest_Movie_Date")
+                        .HasFilter("\"GuestId\" IS NOT NULL");
+
+                    b.HasIndex("UserId", "MovieId", "ViewDate")
+                        .IsUnique()
+                        .HasDatabaseName("UX_MovieViewSessions_User_Movie_Date")
+                        .HasFilter("\"UserId\" IS NOT NULL");
+
+                    b.ToTable("MovieViewSessions", t =>
+                        {
+                            t.HasCheckConstraint("CK_MovieViewSessions_UserOrGuest", "(\"UserId\" IS NOT NULL AND \"GuestId\" IS NULL) OR (\"UserId\" IS NULL AND \"GuestId\" IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.Notification", b =>
@@ -986,6 +1046,12 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Property<int?>("TmdbId")
                         .HasColumnType("integer");
 
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("ViewCount")
+                        .HasColumnType("bigint");
+
                     b.HasKey("Id");
 
                     b.HasIndex("FirstAirDate");
@@ -1139,7 +1205,19 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Property<int?>("Duration")
                         .HasColumnType("integer");
 
+                    b.Property<string>("PlaybackUrl")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Provider")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PublicId")
+                        .HasColumnType("text");
+
                     b.Property<string>("Quality")
+                        .HasColumnType("text");
+
+                    b.Property<string>("StreamingType")
                         .HasColumnType("text");
 
                     b.Property<Guid>("TvShowId")
@@ -1158,6 +1236,63 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.HasIndex("TvShowId");
 
                     b.ToTable("TvShowVideos");
+                });
+
+            modelBuilder.Entity("UIAMovie.Domain.Entities.TvShowViewSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("AccumulatedSeconds")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("GuestId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<bool>("IsCountedAsView")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("LastHeartbeatAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("TvShowId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("ViewDate")
+                        .HasColumnType("date");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TvShowId", "LastHeartbeatAt")
+                        .HasDatabaseName("IX_TvShowViewSessions_Counted_Show_Heartbeat")
+                        .HasFilter("\"IsCountedAsView\" = TRUE");
+
+                    b.HasIndex("ViewDate", "TvShowId")
+                        .HasDatabaseName("IX_TvShowViewSessions_Counted_ViewDate_Show")
+                        .HasFilter("\"IsCountedAsView\" = TRUE");
+
+                    b.HasIndex("GuestId", "TvShowId", "ViewDate")
+                        .IsUnique()
+                        .HasDatabaseName("UX_TvShowViewSessions_Guest_Show_Date")
+                        .HasFilter("\"GuestId\" IS NOT NULL");
+
+                    b.HasIndex("UserId", "TvShowId", "ViewDate")
+                        .IsUnique()
+                        .HasDatabaseName("UX_TvShowViewSessions_User_Show_Date")
+                        .HasFilter("\"UserId\" IS NOT NULL");
+
+                    b.ToTable("TvShowViewSessions", t =>
+                        {
+                            t.HasCheckConstraint("CK_TvShowViewSessions_UserOrGuest", "(\"UserId\" IS NOT NULL AND \"GuestId\" IS NULL) OR (\"UserId\" IS NULL AND \"GuestId\" IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.TvShowWatchHistory", b =>
@@ -1268,7 +1403,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$cj4YEeaTN.IVeV7ysuzviOBzTjyrUG5z3yCBUd06M4tnaCNPrfAj.",
+                            PasswordHash = "$2a$11$sBshAlPF1LF4gR/lou2lUeWFswJeJJbfFigPDCst1b8JPHYtuiK1m",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
@@ -1535,6 +1670,17 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Navigation("Movie");
                 });
 
+            modelBuilder.Entity("UIAMovie.Domain.Entities.MovieViewSession", b =>
+                {
+                    b.HasOne("UIAMovie.Domain.Entities.Movie", "Movie")
+                        .WithMany()
+                        .HasForeignKey("MovieId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Movie");
+                });
+
             modelBuilder.Entity("UIAMovie.Domain.Entities.Notification", b =>
                 {
                     b.HasOne("UIAMovie.Domain.Entities.User", null)
@@ -1714,6 +1860,17 @@ namespace UIAMovie.Infrastructure.Migrations
                 {
                     b.HasOne("UIAMovie.Domain.Entities.TvShow", "TvShow")
                         .WithMany("TvShowVideos")
+                        .HasForeignKey("TvShowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("TvShow");
+                });
+
+            modelBuilder.Entity("UIAMovie.Domain.Entities.TvShowViewSession", b =>
+                {
+                    b.HasOne("UIAMovie.Domain.Entities.TvShow", "TvShow")
+                        .WithMany()
                         .HasForeignKey("TvShowId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

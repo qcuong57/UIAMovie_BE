@@ -11,13 +11,20 @@ public class Movie
     public string? BackdropUrl { get; set; }
     public int? Duration { get; set; }
     public decimal? ImdbRating { get; set; }
-    public string? ContentRating  { get; set; }
+    public string? ContentRating { get; set; }
+
     /// <summary>Mã quốc gia sản xuất — ISO 3166-1 alpha-2, VD: "US", "KR", "JP"</summary>
-    public string? OriginCountry  { get; set; }
+    public string? OriginCountry { get; set; }
+
     /// <summary>TRUE = chỉ dành cho user Premium. Mặc định false (free).</summary>
     public bool IsPremium { get; set; } = false;
+
     public Guid? UploadedBy { get; set; }
     public bool IsPublished { get; set; }
+
+    /// <summary>Tổng lượt xem hợp lệ (session đạt ngưỡng). Tăng nguyên tử bởi ViewTrackingService.</summary>
+    public long ViewCount { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

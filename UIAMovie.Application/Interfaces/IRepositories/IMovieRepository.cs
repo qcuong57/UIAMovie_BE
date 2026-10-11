@@ -61,17 +61,12 @@ public interface IMovieRepository : IRepository<Movie>
     Task<IEnumerable<Movie>> GetByGenreAsync(Guid genreId);
 
     /// <summary>
-    /// Tính trending score TRÊN DATABASE (không kéo data về RAM).
-    /// Trả về top <paramref name="take"/> phim kèm Genres, không include Cast/Images.
-    ///
-    /// Score = (views_7_ngày × 3) + (views_30_ngày × 1) + (imdbRating × 10) + recencyBonus
-    ///
+    /// Trending = tổng view hợp lệ (MovieViewSessions.IsCountedAsView) có time-decay,
+    /// half-life 3 ngày, trong 30 ngày gần nhất tính từ <paramref name="today"/> (giờ VN, cùng nguồn IClock).
+    /// Chỉ phim đã publish và đã chiếu; thiếu thì bù bằng phim mới nhất (Views = 0, Score = 0).
     /// Dùng cho GET /movies/trending.
     /// </summary>
-    Task<IEnumerable<TrendingMovieProjection>> GetTrendingAsync(
-        DateTime cutoff7,
-        DateTime cutoff30,
-        int      take = 20);
+    Task<IEnumerable<TrendingMovieProjection>> GetTrendingAsync(DateOnly today, int take = 20);
 
     /// <summary>
     /// Lấy danh sách distinct OriginCountry có trong DB.

@@ -194,69 +194,86 @@ public class MovieRepository : Repository<Movie>, IMovieRepository
             .ToListAsync();
     }
 
-    public async Task<IEnumerable<TrendingMovieProjection>> GetTrendingAsync(
-        DateTime cutoff7,
-        DateTime cutoff30,
-        int take = 20)
+    /// <summary>
+    /// Trending = tổng view hợp lệ có time-decay (half-life 3 ngày) trong 30 ngày gần nhất.
+    /// Nguồn: MovieViewSessions (IsCountedAsView, theo ViewDate giờ VN). Phim có view luôn xếp trên phim "bù chỗ trống"
+    /// (Views7d = Views30d = 0, Score = 0 → FE không nên hiện "🔥 0 lượt xem").
+    /// </summary>
+    public async Task<IEnumerable<TrendingMovieProjection>> GetTrendingAsync(DateOnly today, int take = 20)
     {
-        var viewStats = await _context.WatchHistories
-            .AsNoTracking()
-            .Where(wh => wh.WatchedAt >= cutoff30)
-            .GroupBy(wh => wh.MovieId)
-            .Select(g => new
-            {
-                MovieId  = g.Key,
-                Views30d = g.Count(),
-                Views7d  = g.Count(wh => wh.WatchedAt >= cutoff7)
-            })
-            .ToDictionaryAsync(x => x.MovieId, x => x);
+        const double HALF_LIFE_DAYS = 3.0;
+        var from30 = today.AddDays(-29);
+        var from7  = today.AddDays(-6);
 
-        var movies = await _context.Movies
+        var daily = await _context.MovieViewSessions
             .AsNoTracking()
-            .Where(m => m.IsPublished)
-            .Include(m => m.MovieGenres)
-                .ThenInclude(g => g.Genre)
+            .Where(s => s.IsCountedAsView && s.ViewDate >= from30 && s.ViewDate <= today)
+            .GroupBy(s => new { s.MovieId, s.ViewDate })
+            .Select(g => new { g.Key.MovieId, g.Key.ViewDate, Views = g.Count() })
             .ToListAsync();
 
-        var now = DateTime.UtcNow;
-        var result = movies
-            .Select(m =>
+        var stats = daily
+            .GroupBy(d => d.MovieId)
+            .ToDictionary(g => g.Key, g => new
             {
-                viewStats.TryGetValue(m.Id, out var stat);
-                var v7d  = stat?.Views7d  ?? 0;
-                var v30d = stat?.Views30d ?? 0;
+                V7    = g.Where(d => d.ViewDate >= from7).Sum(d => d.Views),
+                V30   = g.Sum(d => d.Views),
+                Score = g.Sum(d => d.Views * Math.Pow(0.5, (today.DayNumber - d.ViewDate.DayNumber) / HALF_LIFE_DAYS))
+            });
 
-                double recencyBonus = 0;
-                if (m.ReleaseDate.HasValue)
-                {
-                    var daysOld = (now - m.ReleaseDate.Value).TotalDays;
-                    recencyBonus = daysOld switch
-                    {
-                        <= 7   => 120,
-                        <= 30  => 80,
-                        <= 90  => 50,
-                        <= 180 => 25,
-                        <= 365 => 10,
-                        _      => 0
-                    };
-                }
+        var now = DateTime.UtcNow;
+        var ids = stats.Keys.ToList();
 
-                var score = (v7d  * 3.0)
-                          + (v30d * 1.0)
-                          + ((double)(m.ImdbRating ?? 0) * 10.0)
-                          + recencyBonus;
+        // Phim chưa publish / chưa chiếu không được lọt trending
+        var released = _context.Movies
+            .AsNoTracking()
+            .Where(m => m.IsPublished && (!m.ReleaseDate.HasValue || m.ReleaseDate <= now));
 
-                return new TrendingMovieProjection
-                {
-                    Movie    = m,
-                    Views7d  = v7d,
-                    Views30d = v30d,
-                    Score    = score
-                };
-            })
-            .OrderByDescending(x => x.Score)
+        // Lọc published/đã chiếu TRƯỚC, rồi chọn top N id, chỉ load entity cho N phim đó
+        var eligibleIds = await released
+            .Where(m => ids.Contains(m.Id))
+            .Select(m => m.Id)
+            .ToListAsync();
+
+        var topIds = eligibleIds
+            .OrderByDescending(id => stats[id].Score)
+            .ThenByDescending(id => stats[id].V30)
             .Take(take)
             .ToList();
+
+        var loaded = await released
+            .Where(m => topIds.Contains(m.Id))
+            .Include(m => m.MovieGenres).ThenInclude(g => g.Genre)
+            .ToDictionaryAsync(m => m.Id);
+
+        var result = topIds
+            .Where(loaded.ContainsKey)
+            .Select(id => new TrendingMovieProjection
+            {
+                Movie    = loaded[id],
+                Views7d  = stats[id].V7,
+                Views30d = stats[id].V30,
+                Score    = stats[id].Score
+            })
+            .ToList();
+
+        // Site ít traffic: bù bằng phim mới nhất / rating cao để trang chủ không trống
+        if (result.Count < take)
+        {
+            var have = result.Select(r => r.Movie.Id).ToList();
+            var fillers = await released
+                .Where(m => !have.Contains(m.Id))
+                .OrderByDescending(m => m.ReleaseDate)
+                .ThenByDescending(m => m.ImdbRating)
+                .Include(m => m.MovieGenres).ThenInclude(g => g.Genre)
+                .Take(take - result.Count)
+                .ToListAsync();
+
+            result.AddRange(fillers.Select(m => new TrendingMovieProjection
+            {
+                Movie = m, Views7d = 0, Views30d = 0, Score = 0
+            }));
+        }
 
         return result;
     }

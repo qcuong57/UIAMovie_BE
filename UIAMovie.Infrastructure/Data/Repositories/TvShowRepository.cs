@@ -236,4 +236,87 @@ public class TvShowRepository : Repository<TvShow>, ITvShowRepository
             .AsSplitQuery()
             .ToListAsync();
     }
+
+    /// <summary>
+    /// Trending TV show = tổng view hợp lệ có time-decay (half-life 3 ngày) trong 30 ngày gần nhất,
+    /// nguồn TvShowViewSessions (1 view/người/ngày/show). Show có view luôn xếp trên show "bù chỗ trống".
+    /// </summary>
+    public async Task<IEnumerable<TrendingTvShowProjection>> GetTrendingAsync(DateOnly today, int take = 20)
+    {
+        const double HALF_LIFE_DAYS = 3.0;
+        var from30 = today.AddDays(-29);
+        var from7  = today.AddDays(-6);
+
+        var daily = await _context.TvShowViewSessions
+            .AsNoTracking()
+            .Where(s => s.IsCountedAsView && s.ViewDate >= from30 && s.ViewDate <= today)
+            .GroupBy(s => new { s.TvShowId, s.ViewDate })
+            .Select(g => new { g.Key.TvShowId, g.Key.ViewDate, Views = g.Count() })
+            .ToListAsync();
+
+        var stats = daily
+            .GroupBy(d => d.TvShowId)
+            .ToDictionary(g => g.Key, g => new
+            {
+                V7    = g.Where(d => d.ViewDate >= from7).Sum(d => d.Views),
+                V30   = g.Sum(d => d.Views),
+                Score = g.Sum(d => d.Views * Math.Pow(0.5, (today.DayNumber - d.ViewDate.DayNumber) / HALF_LIFE_DAYS))
+            });
+
+        var now = DateTime.UtcNow;
+        var ids = stats.Keys.ToList();
+
+        // Show chưa publish / chưa lên sóng không được lọt trending
+        var aired = _context.TvShows
+            .AsNoTracking()
+            .Where(t => t.IsPublished && (!t.FirstAirDate.HasValue || t.FirstAirDate <= now));
+
+        var eligibleIds = await aired
+            .Where(t => ids.Contains(t.Id))
+            .Select(t => t.Id)
+            .ToListAsync();
+
+        var topIds = eligibleIds
+            .OrderByDescending(id => stats[id].Score)
+            .ThenByDescending(id => stats[id].V30)
+            .Take(take)
+            .ToList();
+
+        var loaded = await aired
+            .Where(t => topIds.Contains(t.Id))
+            .Include(t => t.TvShowGenres).ThenInclude(g => g.Genre)
+            .Include(t => t.TvShowVideos)
+            .ToDictionaryAsync(t => t.Id);
+
+        var result = topIds
+            .Where(loaded.ContainsKey)
+            .Select(id => new TrendingTvShowProjection
+            {
+                TvShow   = loaded[id],
+                Views7d  = stats[id].V7,
+                Views30d = stats[id].V30,
+                Score    = stats[id].Score
+            })
+            .ToList();
+
+        if (result.Count < take)
+        {
+            var have = result.Select(r => r.TvShow.Id).ToList();
+            var fillers = await aired
+                .Where(t => !have.Contains(t.Id))
+                .OrderByDescending(t => t.FirstAirDate)
+                .ThenByDescending(t => t.ImdbRating)
+                .Include(t => t.TvShowGenres).ThenInclude(g => g.Genre)
+                .Include(t => t.TvShowVideos)
+                .Take(take - result.Count)
+                .ToListAsync();
+
+            result.AddRange(fillers.Select(t => new TrendingTvShowProjection
+            {
+                TvShow = t, Views7d = 0, Views30d = 0, Score = 0
+            }));
+        }
+
+        return result;
+    }
 }

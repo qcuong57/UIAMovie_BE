@@ -22,6 +22,13 @@ public interface ITvShowRepository : IRepository<TvShow>
     /// </summary>
     Task<Season?> GetSeasonWithEpisodesAsync(Guid tvShowId, int seasonNumber);
 
+    /// <summary>
+    /// Trending TV show = tổng view hợp lệ (TvShowViewSessions.IsCountedAsView) có time-decay,
+    /// half-life 3 ngày, trong 30 ngày gần nhất tính từ <paramref name="today"/> (giờ VN, cùng nguồn IClock).
+    /// Dùng cho GET /tvshows/trending.
+    /// </summary>
+    Task<IEnumerable<TrendingTvShowProjection>> GetTrendingAsync(DateOnly today, int take = 20);
+
     Task<TvShow?> GetByTmdbIdAsync(int tmdbId);
     Task<IEnumerable<TvShow>> SearchByTitleAsync(string query);
     Task<IEnumerable<TvShow>> SearchByActorNameAsync(string actorName);

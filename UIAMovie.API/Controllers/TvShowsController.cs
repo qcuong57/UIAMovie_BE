@@ -48,6 +48,26 @@ public class TvShowsController : ControllerBase
         return Ok(new ApiResponseDTO<object> { Data = result, Message = "Thành công" });
     }
 
+    /// <summary>
+    /// [Admin] Tổng số TV show trong DB — dùng cho KPI dashboard (số liệu chính xác, không phụ thuộc pageSize).
+    /// GET /api/tvshows/stats/count  →  { total }
+    /// </summary>
+    [HttpGet("stats/count")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> GetTotalCount()
+    {
+        var total = await _tvShowService.GetTotalCountAsync();
+        return Ok(new ApiResponseDTO<object> { Data = new { total }, Message = "Thành công" });
+    }
+
+    /// <summary>Top TV show đang thịnh hành (view hợp lệ có time-decay 30 ngày). Song song với GET api/movies/trending.</summary>
+    [HttpGet("trending")]
+    public async Task<IActionResult> GetTrending()
+    {
+        var shows = await _tvShowService.GetTrendingTvShowsAsync();
+        return Ok(new ApiResponseDTO<object> { Data = shows, Message = "Thành công" });
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
@@ -73,121 +93,6 @@ public class TvShowsController : ControllerBase
         }
 
         return Ok(new ApiResponseDTO<object> { Data = show, Message = "Thành công" });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // WATCH — Premium gate cho TV show & episode
-    // ═══════════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Endpoint để frontend lấy danh sách video URL của TV show (trailer/teaser).
-    ///
-    /// Logic:
-    ///   - Show FREE    → trả về videos cho mọi user (kể cả chưa đăng nhập)
-    ///   - Show PREMIUM → phải đăng nhập + có Premium hợp lệ
-    ///
-    /// GET /api/tvshows/{id}/watch
-    /// </summary>
-    [Obsolete("Dùng GET /api/playback/... thay thế. Sẽ xóa ở bản sau.")]
-    [HttpGet("{id:guid}/watch")]
-    public async Task<IActionResult> WatchTvShow(Guid id)
-    {
-        var show = await _tvShowService.GetTvShowByIdAsync(id);
-        if (show == null)
-            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy TV show", StatusCode = 404 });
-
-        if (!show.IsPremium)
-        {
-            return Ok(new ApiResponseDTO<object>
-            {
-                Data = new { canWatch = true, videos = show.Videos },
-                Message = "Thành công"
-            });
-        }
-
-        var userId = TryGetUserId();
-        if (!userId.HasValue)
-            return Unauthorized(new ApiErrorResponseDTO
-            {
-                Message = "Vui lòng đăng nhập để xem TV show Premium",
-                StatusCode = 401
-            });
-
-        var canWatch = await _subscriptionChecker.CanWatchPremiumContentAsync(userId.Value);
-        if (!canWatch)
-        {
-            var isPremium = await _subscriptionChecker.IsPremiumAsync(userId.Value);
-            var reason = isPremium
-                ? "Tài khoản của bạn đã bị khóa"
-                : "Nâng cấp lên Premium để xem TV show này";
-
-            return StatusCode(403, new ApiErrorResponseDTO { Message = reason, StatusCode = 403 });
-        }
-
-        return Ok(new ApiResponseDTO<object>
-        {
-            Data = new { canWatch = true, videos = show.Videos },
-            Message = "Thành công"
-        });
-    }
-
-    /// <summary>
-    /// Endpoint để frontend lấy video URL của một episode cụ thể.
-    ///
-    /// Logic:
-    ///   - Show FREE    → trả về videoUrl cho mọi user
-    ///   - Show PREMIUM → phải đăng nhập + có Premium hợp lệ
-    ///
-    /// GET /api/tvshows/{id}/seasons/{seasonNumber}/episodes/{episodeNumber}/watch
-    /// </summary>
-    [Obsolete("Dùng GET /api/playback/... thay thế. Sẽ xóa ở bản sau.")]
-    [HttpGet("{id:guid}/seasons/{seasonNumber:int}/episodes/{episodeNumber:int}/watch")]
-    public async Task<IActionResult> WatchEpisode(Guid id, int seasonNumber, int episodeNumber)
-    {
-        // Lấy show để kiểm tra IsPremium
-        var show = await _tvShowService.GetTvShowByIdAsync(id);
-        if (show == null)
-            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy TV show", StatusCode = 404 });
-
-        var episode = await _tvShowService.GetEpisodeAsync(id, seasonNumber, episodeNumber);
-        if (episode == null)
-            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy episode", StatusCode = 404 });
-
-        if (!show.IsPremium)
-        {
-            return Ok(new ApiResponseDTO<object>
-            {
-                Data = new { canWatch = true, hasVideo = episode.HasVideo, episodeId = episode.Id },
-                Message = "Thành công"
-            });
-        }
-
-        var userId = TryGetUserId();
-        if (!userId.HasValue)
-            return Unauthorized(new ApiErrorResponseDTO
-            {
-                Message = "Vui lòng đăng nhập để xem TV show Premium",
-                StatusCode = 401
-            });
-
-        var canWatch = await _subscriptionChecker.CanWatchPremiumContentAsync(userId.Value);
-        if (!canWatch)
-        {
-            var isPremium = await _subscriptionChecker.IsPremiumAsync(userId.Value);
-            var reason = isPremium
-                ? "Tài khoản của bạn đã bị khóa"
-                : "Nâng cấp lên Premium để xem tập này";
-
-            return StatusCode(403, new ApiErrorResponseDTO { Message = reason, StatusCode = 403 });
-        }
-
-        // Không reset tiến độ xem ở đây; player gọi UpdateWatchProgress riêng.
-
-        return Ok(new ApiResponseDTO<object>
-        {
-            Data = new { canWatch = true, hasVideo = episode.HasVideo, episodeId = episode.Id },
-            Message = "Thành công"
-        });
     }
 
     [HttpGet("search/actor")]

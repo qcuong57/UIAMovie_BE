@@ -414,3 +414,15 @@ public class UploadTvShowVideoDTO
     public string VideoType { get; set; } = string.Empty;
     public string? Quality { get; set; }
 }
+
+/// <summary>
+/// DTO trending cho TV show — kế thừa TvShowSummaryDTO, song song với TrendingMovieDTO.
+/// Views7d = 0 và TrendingScore = 0 nghĩa là show chỉ được "bù chỗ trống" (FE đừng hiện 🔥).
+/// </summary>
+public class TrendingTvShowDTO : TvShowSummaryDTO
+{
+    public int TrendingRank { get; set; }
+    public int Views7d { get; set; }
+    public int Views30d { get; set; }
+    public double TrendingScore { get; set; }
+}
