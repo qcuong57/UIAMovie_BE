@@ -146,6 +146,10 @@ public class TvShowWatchHistory
 
     public DateTime WatchedAt { get; set; } = DateTime.UtcNow;
     public int ProgressSeconds { get; set; }
+
+    /// <summary>Tổng thời lượng thật của tập (giây) lấy từ player. NULL với bản ghi cũ → fallback Episode.Runtime * 60.</summary>
+    public int? DurationSeconds { get; set; }
+
     public bool IsCompleted { get; set; }
 
     // Navigation

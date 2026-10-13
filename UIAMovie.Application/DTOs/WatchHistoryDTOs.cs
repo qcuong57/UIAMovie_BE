@@ -53,5 +53,9 @@ public class TvShowWatchHistoryDTO
 
     public DateTime  WatchedAt       { get; set; }
     public int       ProgressSeconds { get; set; }
+
+    /// <summary>Tổng thời lượng (giây): ưu tiên duration thật từ player, thiếu thì EpisodeRuntime * 60.</summary>
+    public int?      DurationSeconds { get; set; }
+
     public bool      IsCompleted     { get; set; }
 }

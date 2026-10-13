@@ -375,6 +375,20 @@ public class MovieDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        // ── TvShowWatchHistory ────────────────────────────────────────────────
+        // Postgres coi NULL là khác nhau → cần 2 unique index riêng (có episode / cấp show).
+        modelBuilder.Entity<TvShowWatchHistory>(entity =>
+        {
+            entity.HasIndex(e => new { e.UserId, e.TvShowId, e.EpisodeId })
+                .IsUnique()
+                .HasFilter("\"EpisodeId\" IS NOT NULL");
+
+            entity.HasIndex(e => new { e.UserId, e.TvShowId })
+                .IsUnique()
+                .HasFilter("\"EpisodeId\" IS NULL")
+                .HasDatabaseName("IX_TvShowWatchHistories_UserId_TvShowId_ShowLevel");
+        });
+
         // ── MovieViewSession / TvShowViewSession ──────────────────────────────
         modelBuilder.Entity<MovieViewSession>(entity =>
         {

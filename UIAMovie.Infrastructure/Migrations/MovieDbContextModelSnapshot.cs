@@ -1301,6 +1301,9 @@ namespace UIAMovie.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<int?>("DurationSeconds")
+                        .HasColumnType("integer");
+
                     b.Property<Guid?>("EpisodeId")
                         .HasColumnType("uuid");
 
@@ -1324,6 +1327,15 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.HasIndex("EpisodeId");
 
                     b.HasIndex("TvShowId");
+
+                    b.HasIndex("UserId", "TvShowId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_TvShowWatchHistories_UserId_TvShowId_ShowLevel")
+                        .HasFilter("\"EpisodeId\" IS NULL");
+
+                    b.HasIndex("UserId", "TvShowId", "EpisodeId")
+                        .IsUnique()
+                        .HasFilter("\"EpisodeId\" IS NOT NULL");
 
                     b.ToTable("TvShowWatchHistory");
                 });
@@ -1403,7 +1415,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$sBshAlPF1LF4gR/lou2lUeWFswJeJJbfFigPDCst1b8JPHYtuiK1m",
+                            PasswordHash = "$2a$11$nRQXMT4cCCTS8xBQMWv07O2ykmsW7Xzhe7EbNKQp1DDDpoRBI6BdG",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),

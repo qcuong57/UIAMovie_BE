@@ -40,8 +40,10 @@ public interface ITvShowService
     Task<bool> AddFavoriteAsync(Guid userId, Guid tvShowId);
     Task<bool> RemoveFavoriteAsync(Guid userId, Guid tvShowId);
     Task<IEnumerable<TvShowFavoriteDTO>> GetFavoritesAsync(Guid userId);
-    Task UpdateWatchProgressAsync(Guid userId, Guid tvShowId, Guid? episodeId, int progressSeconds, bool isCompleted);
+    /// <returns>false nếu episodeId không thuộc tvShowId.</returns>
+    Task<bool> UpdateWatchProgressAsync(Guid userId, Guid tvShowId, Guid? episodeId, int progressSeconds, int? durationSeconds, bool isCompleted);
     Task<IEnumerable<TvShowWatchHistoryDTO>> GetWatchHistoryAsync(Guid userId);
+    Task<IEnumerable<TvShowWatchHistoryDTO>> GetContinueWatchingAsync(Guid userId);
     Task<bool> DeleteWatchHistoryAsync(Guid userId, Guid historyId);
     Task ClearWatchHistoryAsync(Guid userId);
 }
@@ -700,57 +702,183 @@ public class TvShowService : ITvShowService
 
     // ─── Watch History ────────────────────────────────────────────────────────
 
-    public async Task UpdateWatchProgressAsync(
+    public async Task<bool> UpdateWatchProgressAsync(
         Guid userId,
         Guid tvShowId,
         Guid? episodeId,
         int progressSeconds,
+        int? durationSeconds,
         bool isCompleted)
     {
-        TvShowWatchHistory? existing;
-
+        // Episode phải thuộc đúng TV show
         if (episodeId.HasValue)
         {
-            existing = await _watchHistoryRepository.FindOneAsync(h =>
-                h.UserId == userId && h.TvShowId == tvShowId && h.EpisodeId == episodeId);
-        }
-        else
-        {
-            existing = await _watchHistoryRepository.FindOneAsync(h =>
-                h.UserId == userId && h.TvShowId == tvShowId && h.EpisodeId == null);
+            var episode = await _episodeRepository.GetByIdAsync(episodeId.Value);
+            if (episode == null) return false;
+
+            var season = await _seasonRepository.GetByIdAsync(episode.SeasonId);
+            if (season == null || season.TvShowId != tvShowId) return false;
         }
 
+        if (durationSeconds is not > 0) durationSeconds = null;
+        progressSeconds = Math.Clamp(progressSeconds, 0, durationSeconds ?? int.MaxValue);
+
+        var existing = await FindWatchHistoryAsync(userId, tvShowId, episodeId);
         if (existing != null)
         {
-            existing.ProgressSeconds = progressSeconds;
-            existing.IsCompleted = isCompleted;
-            existing.WatchedAt = DateTime.UtcNow;
-            _watchHistoryRepository.Update(existing);
-        }
-        else
-        {
-            await _watchHistoryRepository.AddAsync(new TvShowWatchHistory
+            if (ApplyProgress(existing, progressSeconds, durationSeconds, isCompleted))
             {
-                UserId = userId,
-                TvShowId = tvShowId,
-                EpisodeId = episodeId,
-                ProgressSeconds = progressSeconds,
-                IsCompleted = isCompleted
-            });
+                _watchHistoryRepository.Update(existing);
+                await _watchHistoryRepository.SaveChangesAsync();
+            }
+            return true;
         }
 
-        await _watchHistoryRepository.SaveChangesAsync();
+        var created = new TvShowWatchHistory
+        {
+            UserId = userId,
+            TvShowId = tvShowId,
+            EpisodeId = episodeId,
+            ProgressSeconds = progressSeconds,
+            DurationSeconds = durationSeconds,
+            IsCompleted = isCompleted
+        };
+        await _watchHistoryRepository.AddAsync(created);
+
+        try
+        {
+            await _watchHistoryRepository.SaveChangesAsync();
+        }
+        catch (Exception)
+        {
+            // Thua race (unique index) → bỏ entity vừa thêm, update bản ghi đã có.
+            _watchHistoryRepository.Remove(created);
+            existing = await FindWatchHistoryAsync(userId, tvShowId, episodeId);
+            if (existing == null) throw;
+
+            if (ApplyProgress(existing, progressSeconds, durationSeconds, isCompleted))
+            {
+                _watchHistoryRepository.Update(existing);
+                await _watchHistoryRepository.SaveChangesAsync();
+            }
+        }
+
+        return true;
+    }
+
+    private Task<TvShowWatchHistory?> FindWatchHistoryAsync(Guid userId, Guid tvShowId, Guid? episodeId)
+        => episodeId.HasValue
+            ? _watchHistoryRepository.FindOneAsync(h =>
+                h.UserId == userId && h.TvShowId == tvShowId && h.EpisodeId == episodeId.Value)
+            : _watchHistoryRepository.FindOneAsync(h =>
+                h.UserId == userId && h.TvShowId == tvShowId && h.EpisodeId == null);
+
+    /// <summary>
+    /// Gán tiến độ vào bản ghi. Trả false nếu request đến trễ/sai thứ tự
+    /// (không hoàn thành, đến trong 2 giây sau lần ghi trước mà lùi tiến độ) → bỏ qua.
+    /// </summary>
+    private static bool ApplyProgress(TvShowWatchHistory h, int progressSeconds, int? durationSeconds, bool isCompleted)
+    {
+        var now = DateTime.UtcNow;
+        if (!isCompleted && (now - h.WatchedAt).TotalSeconds < 2 && progressSeconds < h.ProgressSeconds)
+            return false;
+
+        h.ProgressSeconds = progressSeconds;
+        if (durationSeconds.HasValue) h.DurationSeconds = durationSeconds;
+        h.IsCompleted = isCompleted;
+        h.WatchedAt = now;
+        return true;
     }
 
     public async Task<IEnumerable<TvShowWatchHistoryDTO>> GetWatchHistoryAsync(Guid userId)
     {
-        var histories = await _watchHistoryRepository.FindAsync(h => h.UserId == userId);
+        var histories = (await _watchHistoryRepository.FindAsync(h => h.UserId == userId)).ToList();
+        return await BuildHistoryDtosAsync(histories);
+    }
+
+    /// <summary>
+    /// Continue Watching: 1 thẻ / show (bản ghi mới nhất). Nếu đã xem xong thì chuyển sang tập kế tiếp,
+    /// hết series (không còn tập kế có video) thì ẩn.
+    /// </summary>
+    public async Task<IEnumerable<TvShowWatchHistoryDTO>> GetContinueWatchingAsync(Guid userId)
+    {
+        var all = (await _watchHistoryRepository.FindAsync(h => h.UserId == userId)).ToList();
+
+        var latestPerShow = all
+            .GroupBy(h => h.TvShowId)
+            .Select(g => g.OrderByDescending(x => x.WatchedAt).First())
+            .OrderByDescending(h => h.WatchedAt)
+            .Take(20)
+            .ToList();
+
+        var dtoMap = (await BuildHistoryDtosAsync(latestPerShow)).ToDictionary(d => d.Id);
+        var result = new List<TvShowWatchHistoryDTO>();
+
+        foreach (var h in latestPerShow)
+        {
+            if (!dtoMap.TryGetValue(h.Id, out var dto)) continue; // show đã gỡ / không còn công khai
+
+            if (h.IsCompleted)
+            {
+                var next = await FindNextEpisodeAsync(h.TvShowId, h.EpisodeId);
+                if (next == null) continue; // hết series → ẩn
+
+                dto.EpisodeId = next.Value.Episode.Id;
+                dto.SeasonNumber = next.Value.SeasonNumber;
+                dto.EpisodeNumber = next.Value.Episode.EpisodeNumber;
+                dto.EpisodeName = next.Value.Episode.Title;
+                dto.EpisodeRuntime = next.Value.Episode.Runtime;
+                dto.ProgressSeconds = 0;
+                dto.DurationSeconds = next.Value.Episode.Runtime.HasValue ? next.Value.Episode.Runtime.Value * 60 : null;
+                dto.IsCompleted = false;
+            }
+
+            result.Add(dto);
+        }
+
+        return result;
+    }
+
+    /// <summary>Tập kế tiếp (có video) theo thứ tự mùa → tập. Bỏ qua season 0 (specials).</summary>
+    private async Task<(Episode Episode, int SeasonNumber)?> FindNextEpisodeAsync(Guid tvShowId, Guid? currentEpisodeId)
+    {
+        if (!currentEpisodeId.HasValue) return null;
+
+        var seasons = (await _seasonRepository.FindAsync(s => s.TvShowId == tvShowId && s.SeasonNumber > 0)).ToList();
+        if (seasons.Count == 0) return null;
+
+        var seasonMap = seasons.ToDictionary(s => s.Id, s => s.SeasonNumber);
+        var seasonIds = seasonMap.Keys.ToList();
+
+        var episodes = await _episodeRepository.FindAsync(e => seasonIds.Contains(e.SeasonId));
+        var ordered = episodes
+            .Select(e => (Episode: e, SeasonNumber: seasonMap[e.SeasonId]))
+            .OrderBy(x => x.SeasonNumber)
+            .ThenBy(x => x.Episode.EpisodeNumber)
+            .ToList();
+
+        var idx = ordered.FindIndex(x => x.Episode.Id == currentEpisodeId.Value);
+        if (idx < 0) return null;
+
+        for (var i = idx + 1; i < ordered.Count; i++)
+        {
+            var ep = ordered[i].Episode;
+            if (!string.IsNullOrEmpty(ep.VideoUrl) || !string.IsNullOrEmpty(ep.PublicId))
+                return ordered[i];
+        }
+
+        return null;
+    }
+
+    private async Task<List<TvShowWatchHistoryDTO>> BuildHistoryDtosAsync(List<TvShowWatchHistory> histories)
+    {
         var tvShowIds = histories.Select(h => h.TvShowId).Distinct().ToList();
+        if (tvShowIds.Count == 0) return new();
 
         var (showList, _) = await _tvShowRepository.GetPagedAsync(new FilterTvShowsDTO
         {
             Ids = tvShowIds,
-            PageSize = tvShowIds.Count > 0 ? tvShowIds.Count : 1
+            PageSize = tvShowIds.Count
         });
 
         var showMap = showList.ToDictionary(t => t.Id);
@@ -800,6 +928,10 @@ public class TvShowService : ITvShowService
                     EpisodeRuntime = ep?.Runtime,
                     WatchedAt = h.WatchedAt,
                     ProgressSeconds = h.ProgressSeconds,
+                    // Ưu tiên duration thật từ player, thiếu thì dùng runtime TMDB
+                    DurationSeconds = h.DurationSeconds is > 0
+                        ? h.DurationSeconds
+                        : ep?.Runtime is > 0 ? (int?)(ep.Value.Runtime!.Value * 60) : null,
                     IsCompleted = h.IsCompleted
                 };
             })

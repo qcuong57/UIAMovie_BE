@@ -517,34 +517,66 @@ public class MovieService : IMovieService
     public async Task UpdateWatchProgressAsync(
         Guid userId, Guid movieId, int progressSeconds, int? durationSeconds, bool isCompleted)
     {
-        progressSeconds = Math.Max(0, progressSeconds);
-        var progressMinutes = progressSeconds / 60; // giữ thống kê theo phút đồng bộ
+        if (durationSeconds is not > 0) durationSeconds = null;
+        progressSeconds = Math.Clamp(progressSeconds, 0, durationSeconds ?? int.MaxValue);
 
         var existing = await _watchHistoryRepository.FindOneAsync(h => h.UserId == userId && h.MovieId == movieId);
-
         if (existing != null)
         {
-            existing.ProgressSeconds = progressSeconds;
-            existing.ProgressMinutes = progressMinutes;
-            if (durationSeconds is > 0) existing.Duration = durationSeconds;
-            existing.IsCompleted = isCompleted;
-            existing.WatchedAt = DateTime.UtcNow;
-            _watchHistoryRepository.Update(existing);
-        }
-        else
-        {
-            await _watchHistoryRepository.AddAsync(new WatchHistory
+            if (ApplyProgress(existing, progressSeconds, durationSeconds, isCompleted))
             {
-                UserId = userId,
-                MovieId = movieId,
-                ProgressSeconds = progressSeconds,
-                ProgressMinutes = progressMinutes,
-                Duration = durationSeconds is > 0 ? durationSeconds : null,
-                IsCompleted = isCompleted
-            });
+                _watchHistoryRepository.Update(existing);
+                await _watchHistoryRepository.SaveChangesAsync();
+            }
+            return;
         }
 
-        await _watchHistoryRepository.SaveChangesAsync();
+        var created = new WatchHistory
+        {
+            UserId = userId,
+            MovieId = movieId,
+            ProgressSeconds = progressSeconds,
+            ProgressMinutes = progressSeconds / 60,
+            Duration = durationSeconds,
+            IsCompleted = isCompleted
+        };
+        await _watchHistoryRepository.AddAsync(created);
+
+        try
+        {
+            await _watchHistoryRepository.SaveChangesAsync();
+        }
+        catch (Exception)
+        {
+            // Thua race (unique index UserId+MovieId) → bỏ entity vừa thêm, update bản ghi đã có.
+            _watchHistoryRepository.Remove(created);
+            existing = await _watchHistoryRepository.FindOneAsync(h => h.UserId == userId && h.MovieId == movieId);
+            if (existing == null) throw;
+
+            if (ApplyProgress(existing, progressSeconds, durationSeconds, isCompleted))
+            {
+                _watchHistoryRepository.Update(existing);
+                await _watchHistoryRepository.SaveChangesAsync();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gán tiến độ vào bản ghi. Trả false nếu request đến trễ/sai thứ tự
+    /// (không hoàn thành, đến trong 2 giây sau lần ghi trước mà lùi tiến độ) → bỏ qua.
+    /// </summary>
+    private static bool ApplyProgress(WatchHistory h, int progressSeconds, int? durationSeconds, bool isCompleted)
+    {
+        var now = DateTime.UtcNow;
+        if (!isCompleted && (now - h.WatchedAt).TotalSeconds < 2 && progressSeconds < h.ProgressSeconds)
+            return false;
+
+        h.ProgressSeconds = progressSeconds;
+        h.ProgressMinutes = progressSeconds / 60;
+        if (durationSeconds.HasValue) h.Duration = durationSeconds;
+        h.IsCompleted = isCompleted;
+        h.WatchedAt = now;
+        return true;
     }
 
     public async Task<IEnumerable<WatchHistoryDTO>> GetWatchHistoryAsync(Guid userId)

@@ -399,6 +399,10 @@ public class UpdateTvShowWatchProgressDTO
     public Guid? EpisodeId { get; set; }
 
     public int ProgressSeconds { get; set; }
+
+    /// <summary>Tổng thời lượng thật của tập (giây) từ player. NULL = client cũ.</summary>
+    public int? DurationSeconds { get; set; }
+
     public bool IsCompleted { get; set; }
 }
 

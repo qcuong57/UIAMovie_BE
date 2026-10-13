@@ -735,12 +735,23 @@ public class TvShowsController : ControllerBase
         return Ok(new ApiResponseDTO<object> { Data = history, Message = "Thành công" });
     }
 
+    [HttpGet("continue-watching")]
+    [Authorize]
+    public async Task<IActionResult> GetContinueWatching()
+    {
+        var items = await _tvShowService.GetContinueWatchingAsync(GetUserId());
+        return Ok(new ApiResponseDTO<object> { Data = items, Message = "Thành công" });
+    }
+
     [HttpPost("history")]
     [Authorize]
     public async Task<IActionResult> UpdateWatchProgress([FromBody] UpdateTvShowWatchProgressDTO dto)
     {
-        await _tvShowService.UpdateWatchProgressAsync(
-            GetUserId(), dto.TvShowId, dto.EpisodeId, dto.ProgressSeconds, dto.IsCompleted);
+        var ok = await _tvShowService.UpdateWatchProgressAsync(
+            GetUserId(), dto.TvShowId, dto.EpisodeId, dto.ProgressSeconds, dto.DurationSeconds, dto.IsCompleted);
+
+        if (!ok)
+            return BadRequest(new ApiErrorResponseDTO { Message = "Tập phim không thuộc TV show này", StatusCode = 400 });
 
         return Ok(new ApiResponseDTO<object> { Message = "Đã cập nhật tiến trình xem" });
     }
