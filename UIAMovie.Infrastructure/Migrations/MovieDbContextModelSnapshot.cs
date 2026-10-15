@@ -128,6 +128,10 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.Property<DateTime?>("AirDate")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("DeliveryType")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
                     b.Property<int>("EpisodeNumber")
                         .HasColumnType("integer");
 
@@ -569,6 +573,10 @@ namespace UIAMovie.Infrastructure.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeliveryType")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<int?>("Duration")
                         .HasColumnType("integer");
@@ -1415,7 +1423,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$nRQXMT4cCCTS8xBQMWv07O2ykmsW7Xzhe7EbNKQp1DDDpoRBI6BdG",
+                            PasswordHash = "$2a$11$HO4U7Si8Gk3OIpyvKnOD/.ugLd7UDZBAE52iWt5CZUxc07A.pIiU.",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),

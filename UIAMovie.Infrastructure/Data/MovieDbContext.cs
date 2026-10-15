@@ -112,6 +112,7 @@ public class MovieDbContext : DbContext
             entity.Property(e => e.Provider).HasMaxLength(50);
             entity.Property(e => e.PlaybackUrl).HasMaxLength(1000);
             entity.Property(e => e.PublicId).HasMaxLength(500);
+            entity.Property(e => e.DeliveryType).HasMaxLength(20);
             entity.HasOne(e => e.Movie)
                 .WithMany(m => m.MovieVideos)
                 .HasForeignKey(e => e.MovieId)
@@ -175,6 +176,7 @@ public class MovieDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => new { e.SeasonId, e.EpisodeNumber }).IsUnique();
             entity.Property(e => e.Rating).HasPrecision(4, 1);
+            entity.Property(e => e.DeliveryType).HasMaxLength(20);
 
             entity.HasOne(e => e.Season)
                 .WithMany(s => s.Episodes)

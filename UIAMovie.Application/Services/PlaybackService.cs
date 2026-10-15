@@ -77,7 +77,7 @@ public class PlaybackService : IPlaybackService
         var video = movie.MovieVideos?
             .Where(v => v.IsPublished)
             .Where(v => IsMainVideoType(v.VideoType))
-            .Select(v => new { Video = v, Resolved = ResolvePlayback(v.StreamingType, v.PlaybackUrl, v.PublicId, v.VideoUrl) })
+            .Select(v => new { Video = v, Resolved = ResolvePlayback(v.StreamingType, v.PlaybackUrl, v.PublicId, v.VideoUrl, v.DeliveryType) })
             .Where(x => !string.IsNullOrWhiteSpace(x.Resolved.Url))
             .OrderByDescending(x => x.Resolved.StreamingType == TypeHls)
             .ThenByDescending(x => QualityRank(x.Video.Quality))
@@ -155,7 +155,8 @@ public class PlaybackService : IPlaybackService
             episode.StreamingType,
             episode.PlaybackUrl,
             episode.PublicId,
-            episode.VideoUrl);
+            episode.VideoUrl,
+            episode.DeliveryType);
 
         if (string.IsNullOrWhiteSpace(r.Url))
             return null;
@@ -206,8 +207,29 @@ public class PlaybackService : IPlaybackService
         string? streamingType,
         string? playbackUrl,
         string? publicId,
-        string? videoUrl)
+        string? videoUrl,
+        string? deliveryType)
     {
+        // ── Video được bảo vệ (type=authenticated) ──────────────────────────────
+        // Gọi hàm này chỉ SAU KHI đã qua CheckPremiumAccessAsync. Tuyệt đối không trả
+        // playbackUrl/videoUrl lưu trong DB (không có chữ ký) → luôn ký lại từ PublicId.
+        // Nhận diện: cột DeliveryType, hoặc URL lưu trong DB có "/authenticated/" (video upload
+        // trước khi có cột DeliveryType / service chưa lưu cột này).
+        if (IsAuthenticated(deliveryType, videoUrl, playbackUrl))
+        {
+            var pid = !string.IsNullOrWhiteSpace(publicId)
+                ? publicId
+                : _cloudinaryService.ExtractPublicId(videoUrl)
+                  ?? _cloudinaryService.ExtractPublicId(playbackUrl);
+
+            // Không có PublicId → không thể ký; KHÔNG fallback sang URL công khai.
+            if (string.IsNullOrWhiteSpace(pid))
+                return (null, TypeHls, null);
+
+            // Không trả PublicId cho client: không cần thiết, và là khóa để dựng link.
+            return (_cloudinaryService.GenerateSignedHlsPlaybackUrl(pid), TypeHls, null);
+        }
+
         var forceMp4 = string.Equals(streamingType, TypeMp4, StringComparison.OrdinalIgnoreCase);
 
         if (!forceMp4)
@@ -233,6 +255,11 @@ public class PlaybackService : IPlaybackService
 
         return (null, TypeMp4, publicId);
     }
+
+    private static bool IsAuthenticated(string? deliveryType, string? videoUrl, string? playbackUrl)
+        => string.Equals(deliveryType, "authenticated", StringComparison.OrdinalIgnoreCase)
+           || (videoUrl?.Contains("/authenticated/", StringComparison.OrdinalIgnoreCase) ?? false)
+           || (playbackUrl?.Contains("/authenticated/", StringComparison.OrdinalIgnoreCase) ?? false);
 
     /// <summary>
     /// Whitelist chỉ chấp nhận video chính (main / full_movie).

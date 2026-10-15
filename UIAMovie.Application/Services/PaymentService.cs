@@ -42,7 +42,10 @@ public interface IPaymentService
 
     /// <summary>[Admin] Thu hồi Premium của user.</summary>
     Task AdminRevokeSubscriptionAsync(Guid userId);
-    
+
+    /// <summary>User tự hủy Premium của chính mình.</summary>
+    Task CancelMySubscriptionAsync(Guid userId);
+
     Task<RevenueSummaryDTO> GetRevenueSummaryAsync();
     Task<RevenueChartDTO> GetRevenueChartAsync(string groupBy, int year, int? month = null);
     Task<List<RevenueByPlanDTO>> GetRevenueByPlanAsync(DateTime? from = null, DateTime? to = null);
@@ -479,6 +482,40 @@ public class PaymentService : IPaymentService
         await InvalidateUserCacheAsync(userId, user.Email);
 
         _logger.LogInformation("[Admin] Revoked Premium from user {UserId}", userId);
+    }
+
+    /// <summary>
+    /// User tự hủy Premium của chính mình:
+    ///   - Chỉ cho phép khi đang có Premium còn hạn
+    ///   - Xóa UserSubscription, reset User.SubscriptionType = Free
+    ///   - Invalidate cache
+    /// Tách riêng khỏi AdminRevokeSubscriptionAsync để logic/log/quyền không dùng chung.
+    /// </summary>
+    public async Task CancelMySubscriptionAsync(Guid userId)
+    {
+        var user = await _userRepo.GetByIdAsync(userId)
+                   ?? throw new ArgumentException("Không tìm thấy user.");
+
+        var subs = (await _subRepo.FindAsync(s => s.UserId == userId)).ToList();
+        var now  = DateTime.UtcNow;
+
+        var hasActivePremium = subs.Any(s =>
+            s.SubscriptionType == SubscriptionTypes.Premium && s.ExpiredAt > now);
+        if (!hasActivePremium)
+            throw new ArgumentException("Bạn không có gói Premium đang hoạt động.");
+
+        foreach (var sub in subs)
+            _subRepo.Remove(sub);
+        await _subRepo.SaveChangesAsync();
+
+        user.SubscriptionType = SubscriptionTypes.Free;
+        user.UpdatedAt        = now;
+        _userRepo.Update(user);
+        await _userRepo.SaveChangesAsync();
+
+        await InvalidateUserCacheAsync(userId, user.Email);
+
+        _logger.LogInformation("[User] Cancelled own Premium: user {UserId}", userId);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

@@ -60,6 +60,12 @@ public class Episode
     public string? PublicId { get; set; }
 
     /// <summary>
+    /// "authenticated" | "upload". NULL = video cũ (coi như "upload", công khai).
+    /// authenticated → luôn sinh lại URL HLS có chữ ký từ PublicId, không dùng PlaybackUrl/VideoUrl trong DB.
+    /// </summary>
+    public string? DeliveryType { get; set; }
+
+    /// <summary>
     /// Chất lượng video.
     /// Ví dụ: 1080p, 720p, 480p.
     /// </summary>

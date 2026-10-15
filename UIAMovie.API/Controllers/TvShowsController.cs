@@ -243,11 +243,11 @@ public class TvShowsController : ControllerBase
 
         if (!string.IsNullOrEmpty(oldVideoUrl))
         {
-            var publicId = ExtractCloudinaryPublicId(oldVideoUrl);
+            var publicId = _cloudinaryService.ExtractPublicId(oldVideoUrl);
             if (publicId != null)
                 try
                 {
-                    await _cloudinaryService.DeleteFileAsync(publicId);
+                    await _cloudinaryService.DeleteFileAsync(publicId, "video", _cloudinaryService.GetDeliveryType(oldVideoUrl));
                 }
                 catch
                 {
@@ -472,8 +472,10 @@ public class TvShowsController : ControllerBase
         if (dto.VideoFile == null || dto.VideoFile.Length == 0)
             return BadRequest(new ApiErrorResponseDTO { Message = "File không hợp lệ", StatusCode = 400 });
 
-        var videoUrl = await _cloudinaryService.UploadVideoAsync(
+        // Video chính: upload type=authenticated (xem ghi chú ở MoviesController.UploadVideo).
+        var upload = await _cloudinaryService.UploadProtectedVideoAsync(
             dto.VideoFile, $"uiamovie/tvshows/{id}");
+        var videoUrl = upload.SecureUrl;
 
         var success = await _tvShowService.AddVideoAsync(id, videoUrl, dto.VideoType, dto.Quality);
 
@@ -551,8 +553,9 @@ public class TvShowsController : ControllerBase
         if (videoFile == null || videoFile.Length == 0)
             return BadRequest(new ApiErrorResponseDTO { Message = "File không hợp lệ", StatusCode = 400 });
 
-        var videoUrl = await _cloudinaryService.UploadVideoAsync(
+        var upload = await _cloudinaryService.UploadProtectedVideoAsync(
             videoFile, $"uiamovie/episodes/{episodeId}");
+        var videoUrl = upload.SecureUrl;
 
         var (found, oldUrl) = await _tvShowService.SetEpisodeVideoAsync(episodeId, videoUrl);
         if (!found) return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy episode", StatusCode = 404 });
@@ -560,11 +563,11 @@ public class TvShowsController : ControllerBase
         // Xóa file cũ trên Cloudinary nếu có
         if (!string.IsNullOrEmpty(oldUrl))
         {
-            var oldPublicId = ExtractCloudinaryPublicId(oldUrl);
+            var oldPublicId = _cloudinaryService.ExtractPublicId(oldUrl);
             if (oldPublicId != null)
                 try
                 {
-                    await _cloudinaryService.DeleteFileAsync(oldPublicId);
+                    await _cloudinaryService.DeleteFileAsync(oldPublicId, "video", _cloudinaryService.GetDeliveryType(oldUrl));
                 }
                 catch
                 {
@@ -583,11 +586,11 @@ public class TvShowsController : ControllerBase
 
         if (!string.IsNullOrEmpty(oldUrl))
         {
-            var publicId = ExtractCloudinaryPublicId(oldUrl);
+            var publicId = _cloudinaryService.ExtractPublicId(oldUrl);
             if (publicId != null)
                 try
                 {
-                    await _cloudinaryService.DeleteFileAsync(publicId);
+                    await _cloudinaryService.DeleteFileAsync(publicId, "video", _cloudinaryService.GetDeliveryType(oldUrl));
                 }
                 catch
                 {
@@ -804,18 +807,6 @@ public class TvShowsController : ControllerBase
     private Guid GetUserId() =>
         Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value
                    ?? Guid.Empty.ToString());
-
-    private static string? ExtractCloudinaryPublicId(string? url)
-    {
-        if (string.IsNullOrEmpty(url)) return null;
-        if (url.Contains("youtube.com") || url.Contains("youtu.be")) return null;
-        if (!url.Contains("cloudinary.com")) return null;
-
-        var match = System.Text.RegularExpressions.Regex.Match(
-            url, @"/upload/(?:v\d+/)?(.+?)(?:\.[^./]+)?$");
-
-        return match.Success ? match.Groups[1].Value : null;
-    }
 }
 
 // ─── Helper DTO ───────────────────────────────────────────────────────────────

@@ -222,7 +222,7 @@ public class PaymentController : ControllerBase
 
         try
         {
-            await _paymentService.AdminRevokeSubscriptionAsync(userId.Value);
+            await _paymentService.CancelMySubscriptionAsync(userId.Value);
             return Ok(new { message = "Hủy gói Premium thành công." });
         }
         catch (ArgumentException ex)

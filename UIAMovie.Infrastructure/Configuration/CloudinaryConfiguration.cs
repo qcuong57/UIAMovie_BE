@@ -11,10 +11,17 @@ namespace UIAMovie.Infrastructure.Configuration;
 public class CloudinaryService : ICloudinaryService
 {
     private const string DefaultStreamingProfile = "auto";
+    private const string DeliveryUpload = "upload";
+    private const string DeliveryAuthenticated = "authenticated";
 
     // Streaming profile chỉ gồm chữ thường, số, gạch dưới → chặn chèn ký tự lạ vào URL.
     private static readonly Regex ProfileRegex = new("^[a-z0-9_]+$", RegexOptions.Compiled);
     private static readonly Regex VersionSegmentRegex = new(@"^v\d+$", RegexOptions.Compiled);
+    // Chữ ký URL của Cloudinary: s--AbCdEfGh--
+    private static readonly Regex SignatureSegmentRegex = new(@"^s--[^/]+--$", RegexOptions.Compiled);
+    // Segment transformation streaming profile đứng đầu: sp_auto, sp_hd ...
+    private static readonly Regex StreamingProfileSegmentRegex = new(@"^sp_[a-z0-9_]+$", RegexOptions.Compiled);
+    private static readonly string[] DeliveryMarkers = { "/upload/", "/authenticated/" };
 
     private readonly Cloudinary _cloudinary;
     private readonly string _defaultStreamingProfile;
@@ -56,9 +63,11 @@ public class CloudinaryService : ICloudinaryService
         if (file == null || file.Length == 0)
             throw new ArgumentException("File không hợp lệ");
 
+        await using var stream = file.OpenReadStream();
+
         var uploadParams = new VideoUploadParams
         {
-            File       = new FileDescription(file.FileName, file.OpenReadStream()),
+            File       = new FileDescription(file.FileName, stream),
             Folder     = folderName,
             PublicId   = Guid.NewGuid().ToString(),
             // Ép transcode NGAY lúc upload sang H.264/AAC/mp4 để mọi trình duyệt
@@ -79,6 +88,41 @@ public class CloudinaryService : ICloudinaryService
             throw new Exception($"Upload lỗi: {uploadResult.Error.Message}");
 
         return uploadResult.SecureUrl.ToString();
+    }
+
+    public async Task<ProtectedVideoUploadResult> UploadProtectedVideoAsync(IFormFile file, string folderName)
+    {
+        if (file == null || file.Length == 0)
+            throw new ArgumentException("File không hợp lệ");
+
+        await using var stream = file.OpenReadStream();
+
+        var uploadParams = new VideoUploadParams
+        {
+            File     = new FileDescription(file.FileName, stream),
+            Folder   = folderName,
+            PublicId = Guid.NewGuid().ToString(),
+            // authenticated: URL không chữ ký bị Cloudinary từ chối.
+            Type     = DeliveryAuthenticated,
+            // Không áp Transformation đồng bộ (mp4 h264) như video public: phát qua HLS nên
+            // Cloudinary tự transcode H.264/AAC theo streaming profile, bản mp4 derived sẽ tốn credits vô ích.
+            // Sinh sẵn HLS ở nền để người xem đầu tiên không phải chờ lazy transcode.
+            EagerTransforms = new List<Transformation>
+            {
+                new Transformation().StreamingProfile(_defaultStreamingProfile)
+            },
+            EagerAsync = true,
+        };
+
+        var uploadResult = await _cloudinary.UploadAsync(uploadParams);
+
+        if (uploadResult.Error != null)
+            throw new Exception($"Upload lỗi: {uploadResult.Error.Message}");
+
+        return new ProtectedVideoUploadResult(
+            uploadResult.PublicId,
+            uploadResult.SecureUrl.ToString(),
+            DeliveryAuthenticated);
     }
 
     public async Task<string> UploadImageAsync(IFormFile file, string folderName)
@@ -102,7 +146,7 @@ public class CloudinaryService : ICloudinaryService
         return uploadResult.SecureUrl.ToString();
     }
 
-    public async Task<bool> DeleteFileAsync(string publicId, string resourceType = "video")
+    public async Task<bool> DeleteFileAsync(string publicId, string resourceType = "video", string deliveryType = DeliveryUpload)
     {
         var type = resourceType.Equals("image", StringComparison.OrdinalIgnoreCase)
             ? CloudinaryDotNet.Actions.ResourceType.Image
@@ -110,7 +154,12 @@ public class CloudinaryService : ICloudinaryService
 
         var deleteParams = new DeletionParams(publicId)
         {
-            ResourceType = type
+            ResourceType = type,
+            Type = deliveryType.Equals(DeliveryAuthenticated, StringComparison.OrdinalIgnoreCase)
+                ? DeliveryAuthenticated
+                : DeliveryUpload,
+            // Xóa luôn các bản derived (HLS segment/manifest) và purge CDN cache → link cũ chết hẳn.
+            Invalidate = true
         };
 
         var result = await _cloudinary.DestroyAsync(deleteParams);
@@ -129,7 +178,7 @@ public class CloudinaryService : ICloudinaryService
 
     // ── HLS ──────────────────────────────────────────────────────────────────
 
-    public string GenerateHlsPlaybackUrl(string publicId, string? streamingProfile = null)
+    public string GenerateHlsPlaybackUrl(string publicId, string? streamingProfile = null, bool authenticated = false)
     {
         if (string.IsNullOrWhiteSpace(publicId))
             throw new ArgumentException("publicId không hợp lệ", nameof(publicId));
@@ -143,15 +192,29 @@ public class CloudinaryService : ICloudinaryService
                     $"Streaming profile '{streamingProfile}' không hợp lệ", nameof(streamingProfile));
         }
 
-        // => https://res.cloudinary.com/<cloud>/video/upload/sp_<profile>/<publicId>.m3u8
-        // Lần đầu request, Cloudinary có thể mất vài giây để sinh manifest/segment (lazy transcode).
-        // ApiSecret không bao giờ nằm trong URL này.
-        return _cloudinary.Api.UrlVideoUp
+        // public:        https://res.cloudinary.com/<cloud>/video/upload/sp_<profile>/<publicId>.m3u8
+        // authenticated: https://res.cloudinary.com/<cloud>/video/authenticated/s--<sig>--/sp_<profile>/<publicId>.m3u8
+        // Lần đầu request (nếu eager chưa xong), Cloudinary có thể mất vài giây để sinh manifest/segment.
+        // ApiSecret không bao giờ nằm trong URL này (chỉ dùng để tính chữ ký).
+        var url = _cloudinary.Api.UrlVideoUp
             .Secure(true)
             .Transform(new Transformation().StreamingProfile(profile))
-            .Format("m3u8")
-            .BuildUrl(publicId.Trim('/'));
+            .Format("m3u8");
+
+        if (authenticated)
+            url = url.Type(DeliveryAuthenticated).Signed(true);
+
+        return url.BuildUrl(publicId.Trim('/'));
     }
+
+    public string GenerateSignedHlsPlaybackUrl(string publicId, string? streamingProfile = null)
+        => GenerateHlsPlaybackUrl(publicId, streamingProfile, authenticated: true);
+
+    public string GetDeliveryType(string? cloudinaryUrl)
+        => !string.IsNullOrWhiteSpace(cloudinaryUrl) &&
+           cloudinaryUrl.Contains("/authenticated/", StringComparison.OrdinalIgnoreCase)
+            ? DeliveryAuthenticated
+            : DeliveryUpload;
 
     public string? ExtractPublicId(string? cloudinaryUrl)
     {
@@ -160,15 +223,25 @@ public class CloudinaryService : ICloudinaryService
             !uri.Host.EndsWith("cloudinary.com", StringComparison.OrdinalIgnoreCase))
             return null;
 
-        // Path dạng: /<cloud>/video/upload/[transformations/][v123/]<folder>/<id>.<ext>
-        const string marker = "/upload/";
+        // Path dạng:
+        //   /<cloud>/video/upload/[transformations/][v123/]<folder>/<id>.<ext>
+        //   /<cloud>/video/authenticated/[s--sig--/][transformations/][v123/]<folder>/<id>.<ext>
         var path = uri.AbsolutePath;
-        var idx  = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (idx < 0) return null;
+        string? marker = null;
+        var idx = -1;
+        foreach (var m in DeliveryMarkers)
+        {
+            var i = path.IndexOf(m, StringComparison.OrdinalIgnoreCase);
+            if (i >= 0 && (idx < 0 || i < idx)) { idx = i; marker = m; }
+        }
+        if (marker == null) return null;
 
         var segments = path[(idx + marker.Length)..]
             .Split('/', StringSplitOptions.RemoveEmptyEntries)
             .ToList();
+
+        // Bỏ chữ ký URL (s--xxxx--) nếu có.
+        segments = segments.Where(seg => !SignatureSegmentRegex.IsMatch(seg)).ToList();
         if (segments.Count == 0) return null;
 
         // Bỏ mọi thứ đứng trước segment version (v1234567890) — đó là các transformation.
@@ -182,6 +255,10 @@ public class CloudinaryService : ICloudinaryService
             // Không có version: chỉ bỏ các segment chắc chắn là transformation (chứa dấu phẩy,
             // vd "q_auto,f_mp4"). Không đoán theo tiền tố "xx_" để tránh nhầm với tên folder.
             segments = segments.Where(s => !s.Contains(',')).ToList();
+
+            // URL HLS không version: chỉ bỏ segment sp_<profile> đứng ĐẦU (vd .../sp_auto/<folder>/<id>.m3u8).
+            if (segments.Count > 1 && StreamingProfileSegmentRegex.IsMatch(segments[0]))
+                segments = segments.Skip(1).ToList();
         }
 
         if (segments.Count == 0) return null;

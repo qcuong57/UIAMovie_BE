@@ -436,8 +436,11 @@ public class MoviesController : ControllerBase
         if (dto.VideoFile == null || dto.VideoFile.Length == 0)
             return BadRequest(new ApiErrorResponseDTO { Message = "File không hợp lệ", StatusCode = 400 });
 
-        var videoUrl = await _cloudinaryService.UploadVideoAsync(
+        // Video phim chính: upload type=authenticated (URL lưu trong DB có "/authenticated/" →
+        // PlaybackService nhận diện và luôn ký lại URL khi user đủ quyền xem).
+        var upload = await _cloudinaryService.UploadProtectedVideoAsync(
             dto.VideoFile, $"uiamovie/movies/{id}");
+        var videoUrl = upload.SecureUrl;
 
         var success = await _movieService.AddVideoAsync(id, videoUrl, dto.VideoType, dto.Quality);
 
