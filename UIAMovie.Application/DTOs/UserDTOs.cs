@@ -4,10 +4,21 @@ namespace UIAMovie.Application.DTOs;
 
 public class RegisterDTO
 {
-    public string Email { get; set; }
-    public string Username { get; set; }
-    public string Password { get; set; }
-    public string ConfirmPassword { get; set; }
+    [Required(ErrorMessage = "Email không được để trống")]
+    [EmailAddress(ErrorMessage = "Email không hợp lệ")]
+    [MaxLength(254, ErrorMessage = "Email quá dài")]
+    public string Email { get; set; } = string.Empty;
+
+    [Required(ErrorMessage = "Tên người dùng không được để trống")]
+    [StringLength(50, MinimumLength = 3, ErrorMessage = "Tên người dùng phải từ 3 đến 50 ký tự")]
+    [RegularExpression("^[a-zA-Z0-9_]+$", ErrorMessage = "Tên người dùng chỉ được chứa chữ, số, dấu gạch dưới")]
+    public string Username { get; set; } = string.Empty;
+
+    [Required(ErrorMessage = "Mật khẩu không được để trống")]
+    public string Password { get; set; } = string.Empty;
+
+    [Required(ErrorMessage = "Vui lòng nhập lại mật khẩu")]
+    public string ConfirmPassword { get; set; } = string.Empty;
 }
 
 public class LoginDTO
@@ -51,10 +62,18 @@ public class ForgotPasswordDTO
 
 public class ResetPasswordDTO
 {
-    public string Email { get; set; }
-    public string Code { get; set; }
-    public string NewPassword { get; set; }
-    public string ConfirmPassword { get; set; }
+    [Required(ErrorMessage = "Email không được để trống")]
+    [EmailAddress(ErrorMessage = "Email không hợp lệ")]
+    public string Email { get; set; } = string.Empty;
+
+    [Required(ErrorMessage = "Mã OTP không được để trống")]
+    public string Code { get; set; } = string.Empty;
+
+    [Required(ErrorMessage = "Mật khẩu mới không được để trống")]
+    public string NewPassword { get; set; } = string.Empty;
+
+    [Required(ErrorMessage = "Vui lòng nhập lại mật khẩu mới")]
+    public string ConfirmPassword { get; set; } = string.Empty;
 }
 
 // ─── User ────────────────────────────────────────────────────────────────────

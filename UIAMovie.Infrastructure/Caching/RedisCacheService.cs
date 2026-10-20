@@ -140,6 +140,52 @@ public class RedisCacheService : ICacheService
         }
     }
 
+    // ── Increment (nguyên tử) ────────────────────────────────────────────────
+    // INCR + đặt TTL chỉ ở lần đầu, trong một script Lua nên không có khoảng hở giữa hai lệnh.
+    // Lỗi Redis → trả int.MaxValue (từ chối): bộ đếm dùng cho giới hạn thử OTP nên fail-closed.
+
+    private const string IncrScript = @"
+local v = redis.call('INCR', KEYS[1])
+if v == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+return v";
+
+    public async Task<long> IncrementAsync(string key, TimeSpan window)
+    {
+        try
+        {
+            var db = TryGetDb();
+            if (db == null) return int.MaxValue;
+
+            var res = await db.ScriptEvaluateAsync(
+                IncrScript,
+                new RedisKey[] { key },
+                new RedisValue[] { (long)window.TotalMilliseconds });
+            return (long)res;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Redis] IncrementAsync '{Key}' thất bại", key);
+            return int.MaxValue;
+        }
+    }
+
+    // ── TryRemove: true nếu CHÍNH lời gọi này xóa được key (dùng để dùng-một-lần) ─
+
+    public async Task<bool> TryRemoveAsync(string key)
+    {
+        try
+        {
+            var db = TryGetDb();
+            if (db == null) return false;
+            return await db.KeyDeleteAsync(key);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Redis] TryRemoveAsync '{Key}' thất bại", key);
+            return false;
+        }
+    }
+
     // ── Exists ───────────────────────────────────────────────────────────────
 
     public async Task<bool> ExistsAsync(string key)

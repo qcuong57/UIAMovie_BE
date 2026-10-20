@@ -26,6 +26,12 @@ public class AiAssistantService : IAiAssistantService
 
     private const int MaxMovieCards = 6;
 
+    /// <summary>Giới hạn token đầu ra mỗi lần gọi AI (trước đây không giới hạn ở service này).</summary>
+    private const int MaxOutputTokens = 600;
+
+    /// <summary>Tổng ký tự history gửi lên AI mỗi request (tối đa 8 lượt x 2000 ký tự trước đây).</summary>
+    private const int MaxHistoryChars = 4000;
+
     public AiAssistantService(
         IAiRouter router,
         IMovieRetriever movieRetriever,
@@ -87,7 +93,8 @@ public class AiAssistantService : IAiAssistantService
         var systemPrompt = MoviePrompts.SiteGuideSystem + "\n\n" + siteKnowledge;
 
         var messages = BuildProviderMessages(systemPrompt, message, request.History, userContext);
-        var reply = await _provider.GenerateChatResponseAsync(messages);
+        var reply = await _provider.GenerateChatResponseAsync(
+            messages, new AiProviderOptions { MaxTokens = MaxOutputTokens });
 
         if (string.IsNullOrWhiteSpace(reply))
         {
@@ -159,7 +166,8 @@ public class AiAssistantService : IAiAssistantService
             user: userContext);
 
         var messages = BuildProviderMessages(MoviePrompts.ChatSystem, userPrompt, request.History);
-        var reply = await _provider.GenerateChatResponseAsync(messages);
+        var reply = await _provider.GenerateChatResponseAsync(
+            messages, new AiProviderOptions { MaxTokens = MaxOutputTokens });
 
         if (string.IsNullOrWhiteSpace(reply))
         {
@@ -264,7 +272,8 @@ public class AiAssistantService : IAiAssistantService
             user: userContext);
 
         var messages = BuildProviderMessages(MoviePrompts.ChatSystem, userPrompt, request.History);
-        var reply = await _provider.GenerateChatResponseAsync(messages);
+        var reply = await _provider.GenerateChatResponseAsync(
+            messages, new AiProviderOptions { MaxTokens = MaxOutputTokens });
 
         if (string.IsNullOrWhiteSpace(reply))
         {
@@ -391,7 +400,8 @@ public class AiAssistantService : IAiAssistantService
         var userPrompt = MoviePrompts.BuildMoodPickUser(targetMood, string.Join(", ", targetGenres), catalogCsv);
 
         var messages = BuildProviderMessages(MoviePrompts.ChatSystem, userPrompt, request.History);
-        var reply = await _provider.GenerateChatResponseAsync(messages);
+        var reply = await _provider.GenerateChatResponseAsync(
+            messages, new AiProviderOptions { MaxTokens = MaxOutputTokens });
 
         if (string.IsNullOrWhiteSpace(reply))
         {
@@ -478,7 +488,18 @@ public class AiAssistantService : IAiAssistantService
                 trimmed.RemoveAt(trimmed.Count - 1);
             }
 
-            foreach (var h in trimmed)
+            // Giữ các lượt gần nhất cho tới khi hết ngân sách ký tự (duyệt từ mới → cũ)
+            var kept = new List<AiChatMessageDto>();
+            var budget = MaxHistoryChars;
+            for (var i = trimmed.Count - 1; i >= 0; i--)
+            {
+                var len = trimmed[i].Content.Length;
+                if (len > budget) break;
+                budget -= len;
+                kept.Insert(0, trimmed[i]);
+            }
+
+            foreach (var h in kept)
                 list.Add(new AiProviderMessage { Role = h.Role, Content = h.Content });
         }
 

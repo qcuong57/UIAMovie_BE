@@ -802,10 +802,16 @@ namespace UIAMovie.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CreatedAt");
+
                     b.HasIndex("OrderCode")
                         .IsUnique();
 
-                    b.HasIndex("UserId");
+                    b.HasIndex("PaidAt");
+
+                    b.HasIndex("Status", "ExpiredAt");
+
+                    b.HasIndex("UserId", "Status");
 
                     b.ToTable("PaymentOrders");
                 });
@@ -1423,7 +1429,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$HO4U7Si8Gk3OIpyvKnOD/.ugLd7UDZBAE52iWt5CZUxc07A.pIiU.",
+                            PasswordHash = "$2a$11$UHGKd4izQIHf4s2BaSBE3OrFx9Eqvh.ScNlHNUcYV8QZseeOZi72W",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
@@ -1495,7 +1501,8 @@ namespace UIAMovie.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("UserId");
+                    b.HasIndex("UserId")
+                        .IsUnique();
 
                     b.ToTable("UserSubscriptions");
                 });

@@ -33,4 +33,7 @@ public interface ICacheService
 
         return value;
     }
+    
+    Task<long> IncrementAsync(string key, TimeSpan window);
+    Task<bool> TryRemoveAsync(string key);
 }

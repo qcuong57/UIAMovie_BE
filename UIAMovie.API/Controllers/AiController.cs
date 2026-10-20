@@ -1,6 +1,7 @@
 ﻿// UIAMovie.Controllers/AiController.cs
 using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using UIAMovie.Application.AI.Orchestration;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.DTOs.AI;
@@ -25,6 +26,7 @@ public sealed class AiController : ControllerBase
     }
 
     [HttpPost("chat")]
+    [EnableRateLimiting("ai")] // user: 20/phút theo userId; guest: 5/phút theo IP. Muốn bắt buộc đăng nhập thì thêm [Authorize]
     public async Task<IActionResult> Chat([FromBody] AiChatRequestDto dto, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(dto.Message))

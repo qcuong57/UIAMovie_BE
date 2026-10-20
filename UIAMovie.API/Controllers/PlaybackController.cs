@@ -1,6 +1,7 @@
 ﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces.IRepositories;
 using UIAMovie.Application.Interfaces.IServices;
@@ -35,6 +36,7 @@ public class PlaybackController : ControllerBase
     /// </summary>
     [HttpGet("movie/{movieId:guid}")]
     [AllowAnonymous]
+    [EnableRateLimiting("playback")]
     public async Task<IActionResult> GetMoviePlayback(Guid movieId)
     {
         var userId = GetCurrentUserId();
@@ -77,6 +79,7 @@ public class PlaybackController : ControllerBase
     /// </summary>
     [HttpGet("tv/{tvShowId:guid}/episode/{episodeId:guid}")]
     [AllowAnonymous]
+    [EnableRateLimiting("playback")]
     public async Task<IActionResult> GetEpisodePlayback(Guid tvShowId, Guid episodeId)
     {
         var userId = GetCurrentUserId();
@@ -120,6 +123,7 @@ public class PlaybackController : ControllerBase
     /// </summary>
     [HttpGet("tv/{tvShowId:guid}/season/{seasonNumber:int}/episode/{episodeNumber:int}")]
     [AllowAnonymous]
+    [EnableRateLimiting("playback")]
     public async Task<IActionResult> GetEpisodePlaybackByNumber(Guid tvShowId, int seasonNumber, int episodeNumber)
     {
         var season = await _seasonRepository.FindOneAsync(s => s.TvShowId == tvShowId && s.SeasonNumber == seasonNumber);

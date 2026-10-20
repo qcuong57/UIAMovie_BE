@@ -62,6 +62,14 @@ public class EpisodeSubtitlesController : ControllerBase
     [HttpGet("{id:guid}/content")]
     public async Task<IActionResult> GetSubtitleContent(Guid episodeId, Guid id)
     {
+        // Subtitle phải thuộc đúng episodeId trong route (trước đây episodeId bị bỏ qua)
+        if (!await OwnsAsync(episodeId, id))
+            return NotFound(new ApiErrorResponseDTO
+            {
+                Message    = "Không tìm thấy subtitle",
+                StatusCode = 404
+            });
+
         var subtitle = await _subtitleService.GetSubtitleContentAsync(id);
         if (subtitle == null)
             return NotFound(new ApiErrorResponseDTO
@@ -94,6 +102,14 @@ public class EpisodeSubtitlesController : ControllerBase
         // [FIX] Query thẳng bằng id thay vì load cả list rồi FirstOrDefault.
         // Dùng GetSubtitleAsync (trả EpisodeSubtitleDTO) — có đủ Status + ErrorMessage,
         // không kéo theo Content (blob lớn không cần thiết ở đây).
+        // Kiểm tra id thuộc đúng tập trước khi trả trạng thái
+        if (!await OwnsAsync(episodeId, id))
+            return NotFound(new ApiErrorResponseDTO
+            {
+                Message    = "Không tìm thấy subtitle",
+                StatusCode = 404
+            });
+
         var subtitle = await _subtitleService.GetSubtitleAsync(id);
 
         if (subtitle == null)
@@ -233,6 +249,9 @@ public class EpisodeSubtitlesController : ControllerBase
     [Authorize(Roles = Roles.Admin)]
     public async Task<IActionResult> DeleteSubtitle(Guid episodeId, Guid id)
     {
+        if (!await OwnsAsync(episodeId, id))
+            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy subtitle", StatusCode = 404 });
+
         var success = await _subtitleService.DeleteSubtitleAsync(id);
         return success
             ? Ok(new ApiResponseDTO<object>    { Message = "Đã xóa subtitle" })
@@ -240,6 +259,13 @@ public class EpisodeSubtitlesController : ControllerBase
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>Subtitle id có thuộc tập này không (dùng danh sách meta, không kéo content).</summary>
+    private async Task<bool> OwnsAsync(Guid episodeId, Guid subtitleId)
+    {
+        var owned = await _subtitleService.GetSubtitlesAsync(episodeId);
+        return owned.Any(x => x.Id == subtitleId);
+    }
 
     private Guid GetUserId() =>
         Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? Guid.Empty.ToString());

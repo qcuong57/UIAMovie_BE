@@ -62,6 +62,14 @@ public class SubtitlesController : ControllerBase
     [HttpGet("{id:guid}/content")]
     public async Task<IActionResult> GetSubtitleContent(Guid movieId, Guid id)
     {
+        // Subtitle phải thuộc đúng movieId trong route (trước đây movieId bị bỏ qua)
+        if (!await OwnsAsync(movieId, id))
+            return NotFound(new ApiErrorResponseDTO
+            {
+                Message    = "Không tìm thấy subtitle",
+                StatusCode = 404
+            });
+
         var subtitle = await _subtitleService.GetSubtitleContentAsync(id);
         if (subtitle == null)
             return NotFound(new ApiErrorResponseDTO
@@ -235,6 +243,9 @@ public class SubtitlesController : ControllerBase
     [Authorize(Roles = Roles.Admin)]
     public async Task<IActionResult> DeleteSubtitle(Guid movieId, Guid id)
     {
+        if (!await OwnsAsync(movieId, id))
+            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy subtitle", StatusCode = 404 });
+
         var success = await _subtitleService.DeleteSubtitleAsync(id);
         return success
             ? Ok(new ApiResponseDTO<object>    { Message = "Đã xóa subtitle" })
@@ -242,6 +253,13 @@ public class SubtitlesController : ControllerBase
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>Subtitle id có thuộc phim này không (dùng danh sách meta, không kéo content).</summary>
+    private async Task<bool> OwnsAsync(Guid movieId, Guid subtitleId)
+    {
+        var owned = await _subtitleService.GetSubtitlesAsync(movieId);
+        return owned.Any(x => x.Id == subtitleId);
+    }
 
     private Guid GetUserId() =>
         Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? Guid.Empty.ToString());

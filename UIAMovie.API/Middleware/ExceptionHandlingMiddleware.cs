@@ -6,6 +6,9 @@ namespace UIAMovie.Middleware;
 
 public class ExceptionHandlingMiddleware
 {
+    // camelCase giống phản hồi của MVC controller, để FE luôn đọc được response.data.message.
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     private readonly RequestDelegate _next;
     private readonly ILogger<ExceptionHandlingMiddleware> _logger;
 
@@ -62,6 +65,6 @@ public class ExceptionHandlingMiddleware
                 break;
         }
 
-        return context.Response.WriteAsync(JsonSerializer.Serialize(response));
+        return context.Response.WriteAsync(JsonSerializer.Serialize(response, JsonOptions));
     }
 }

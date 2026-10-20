@@ -15,17 +15,15 @@ namespace UIAMovie.Application.Services;
 public class SubscriptionChecker : ISubscriptionChecker
 {
     private readonly IRepository<UserSubscription> _subRepo;
-    private readonly IRepository<User> _userRepo;
+    private readonly IUserRepository _userRepo;
     private readonly ICacheService _cache;
-
-    private const string SUB_CACHE_KEY = "subscription:{0}";
 
     private const string
         IS_PREMIUM_CACHE_KEY = "subscription:{0}:isPremium"; // phải khớp với PaymentService.InvalidateUserCacheAsync
 
     public SubscriptionChecker(
         IRepository<UserSubscription> subRepo,
-        IRepository<User> userRepo,
+        IUserRepository userRepo,
         ICacheService cache)
     {
         _subRepo = subRepo;
@@ -57,12 +55,11 @@ public class SubscriptionChecker : ISubscriptionChecker
     /// True nếu user có thể xem content Premium:
     ///   - Tài khoản phải active (không bị ban)
     ///   - Subscription còn hạn
+    /// Kiểm tra active chỉ đọc đúng cột IsActive (không tải PasswordHash...).
     /// </summary>
     public async Task<bool> CanWatchPremiumContentAsync(Guid userId)
     {
-        // Kiểm tra tài khoản còn active không
-        var user = await _userRepo.GetByIdAsync(userId);
-        if (user == null || !user.IsActive) return false;
+        if (!await _userRepo.IsActiveAsync(userId)) return false;
 
         return await IsPremiumAsync(userId);
     }

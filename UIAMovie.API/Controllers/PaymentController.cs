@@ -1,8 +1,10 @@
 ﻿// UIAMovie.API/Controllers/PaymentController.cs
 
+using System.Net;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using UIAMovie.API.Services;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Services;
 
@@ -14,19 +16,24 @@ public class PaymentController : ControllerBase
 {
     private readonly IPaymentService _paymentService;
     private readonly ILogger<PaymentController> _logger;
+    private readonly IConfiguration _config;
+    private readonly IHostEnvironment _env;
 
-    public PaymentController(IPaymentService paymentService, ILogger<PaymentController> logger)
+    public PaymentController(
+        IPaymentService paymentService,
+        ILogger<PaymentController> logger,
+        IConfiguration config,
+        IHostEnvironment env)
     {
         _paymentService = paymentService;
         _logger = logger;
+        _config = config;
+        _env = env;
     }
 
     // ── Plans ─────────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Lấy danh sách gói subscription để hiển thị cho user chọn.
-    /// GET /api/payments/plans
-    /// </summary>
+    /// <summary>GET /api/payments/plans</summary>
     [HttpGet("plans")]
     public IActionResult GetPlans()
     {
@@ -37,9 +44,11 @@ public class PaymentController : ControllerBase
     // ── Bước 1: Tạo order ─────────────────────────────────────────────────────
 
     /// <summary>
-    /// User chọn gói → tạo PaymentOrder → trả về URL redirect sang VNPay.
+    /// User chọn gói → tạo PaymentOrder → trả về thông tin chuyển sang cổng thanh toán.
     /// POST /api/payments/create-order
-    /// Body: { "planId": "monthly_premium", "paymentProvider": "vnpay" }
+    /// Body: { "planId": "monthly_premium", "paymentProvider": "vnpay" | "sepay" }
+    /// Response.paymentMethod = "redirect" → location.href = paymentUrl
+    /// Response.paymentMethod = "form_post" → POST form tới paymentUrl với formFields
     /// </summary>
     [Authorize]
     [HttpPost("create-order")]
@@ -48,18 +57,21 @@ public class PaymentController : ControllerBase
         var userId = GetUserId();
         if (userId == null) return Unauthorized();
 
-        // Lấy IP thật của client (cần cho VNPay)
-        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        // IP client: chỉ tin RemoteIpAddress đã được ForwardedHeaders middleware xử lý
+        // (middleware chỉ tin proxy trong KnownNetworks), không tự đọc X-Forwarded-For.
+        var ip = HttpContext.Connection.RemoteIpAddress;
+        if (ip is null || IPAddress.IsLoopback(ip)) ip = IPAddress.Loopback;
+        else if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+        var ipAddress = ip.ToString();
 
-        if (Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor))
-            ipAddress = forwardedFor.ToString().Split(',')[0].Trim();
-
-        // Convert ::1 (IPv6 loopback) sang 127.0.0.1
-        if (ipAddress == "::1") ipAddress = "127.0.0.1";
-
-        // Build backendBaseUrl từ Request thay vì cấu hình cứng trong appsettings
-        // VD: "https://api.yourdomain.com" hoặc "http://localhost:5000" khi dev
-        var backendBaseUrl = $"{Request.Scheme}://{Request.Host}";
+        // Base URL lấy từ cấu hình, không lấy từ Request.Host (Host header có thể bị giả)
+        var backendBaseUrl = _config["Backend:PublicUrl"]?.TrimEnd('/');
+        if (string.IsNullOrEmpty(backendBaseUrl))
+        {
+            if (!_env.IsDevelopment())
+                return StatusCode(500, new { message = "Thiếu cấu hình Backend:PublicUrl." });
+            backendBaseUrl = $"{Request.Scheme}://{Request.Host}";
+        }
 
         try
         {
@@ -89,44 +101,153 @@ public class PaymentController : ControllerBase
     {
         _logger.LogInformation("VNPay IPN received: txnRef={TxnRef}", ipn.vnp_TxnRef);
 
-        var success = await _paymentService.HandleVnpayIpnAsync(ipn);
-
-        // VNPay yêu cầu trả về JSON { RspCode, Message }
-        return success
-            ? Ok(new { RspCode = "00", Message = "Confirm Success" })
-            : Ok(new { RspCode = "97", Message = "Invalid Signature" });
+        // VNPay yêu cầu luôn trả JSON { RspCode, Message } với mã đúng theo từng tình huống.
+        try
+        {
+            var result = await _paymentService.HandleVnpayIpnAsync(ipn, GetVnpayQuery());
+            return result switch
+            {
+                PaymentCallbackResult.Confirmed => Ok(new { RspCode = "00", Message = "Confirm Success" }),
+                PaymentCallbackResult.AlreadyConfirmed => Ok(
+                    new { RspCode = "02", Message = "Order already confirmed" }),
+                PaymentCallbackResult.OrderNotFound => Ok(new { RspCode = "01", Message = "Order not found" }),
+                PaymentCallbackResult.InvalidAmount => Ok(new { RspCode = "04", Message = "Invalid amount" }),
+                PaymentCallbackResult.InvalidSignature => Ok(new { RspCode = "97", Message = "Invalid Signature" }),
+                _ => Ok(new { RspCode = "99", Message = "Processing, please retry" })
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "VNPay IPN failed for txnRef={TxnRef}", ipn.vnp_TxnRef);
+            return Ok(new { RspCode = "99", Message = "Unknown error" });
+        }
     }
+
+    // ── Bước 2b: Return URL (trình duyệt) ────────────────────────────────────
 
     /// <summary>
     /// URL backend nhận redirect từ VNPay sau khi user hoàn tất thanh toán.
     /// GET /api/payments/vnpay/return
     ///
-    /// Xử lý IPN (idempotent) rồi redirect về React frontend.
-    /// frontendBase ưu tiên biến môi trường FRONTEND_URL, fallback về localhost:3000.
+    /// Xử lý callback (idempotent, có khóa) rồi redirect về frontend. `status` trên URL chỉ để hiển thị:
+    /// chữ ký sai / không thấy đơn / sai số tiền đều redirect với status=failed.
+    /// FE vẫn nên gọi /subscription-status hoặc /history để xác nhận kết quả thật.
+    ///
+    /// Frontend base lấy từ Frontend:Url (config) hoặc biến môi trường FRONTEND_URL;
+    /// chỉ fallback localhost khi chạy Development.
     /// </summary>
     [HttpGet("vnpay/return")]
     public async Task<IActionResult> VnpayReturn([FromQuery] VnpayIpnDTO ipn)
     {
-        await _paymentService.HandleVnpayIpnAsync(ipn);
+        var frontendBase = ResolveFrontendBase();
+        if (frontendBase == null)
+        {
+            _logger.LogError("VNPay Return: thiếu cấu hình Frontend:Url / FRONTEND_URL");
+            return StatusCode(500, new { message = "Thiếu cấu hình Frontend URL." });
+        }
 
-        var status    = ipn.vnp_ResponseCode == "00" ? "success" : "failed";
         var orderCode = ipn.vnp_TxnRef;
+        string status;
 
-        var frontendBase = Environment.GetEnvironmentVariable("FRONTEND_URL")
-                           ?? "http://localhost:5173";
+        try
+        {
+            var result = await _paymentService.HandleVnpayIpnAsync(ipn, GetVnpayQuery());
 
-        var redirectUrl = $"{frontendBase.TrimEnd('/')}/payment/result?status={status}&orderCode={orderCode}";
+            var trusted = result is PaymentCallbackResult.Confirmed
+                or PaymentCallbackResult.AlreadyConfirmed
+                or PaymentCallbackResult.Busy;
+
+            status = trusted && ipn.vnp_ResponseCode == "00" && ipn.vnp_TransactionStatus == "00"
+                ? "success"
+                : "failed";
+        }
+        catch (Exception ex)
+        {
+            // Luôn đưa user về FE kể cả khi xử lý lỗi; IPN của VNPay sẽ gửi lại để xử lý.
+            _logger.LogError(ex, "VNPay Return failed for txnRef={TxnRef}", orderCode);
+            status = "failed";
+        }
+
+        var redirectUrl =
+            $"{frontendBase.TrimEnd('/')}/payment/result?status={status}&orderCode={Uri.EscapeDataString(orderCode)}";
 
         _logger.LogInformation("VNPay Return → redirecting to {Url}", redirectUrl);
         return Redirect(redirectUrl);
     }
 
-    // ── Query ─────────────────────────────────────────────────────────────────
+    // ── Bước 2c: SePay IPN (server-to-server) ────────────────────────────────
 
     /// <summary>
-    /// Lịch sử thanh toán của user đang đăng nhập.
-    /// GET /api/payments/history
+    /// SePay gọi endpoint này sau khi thanh toán thành công.
+    /// POST /api/payments/sepay/ipn   (JSON body, header X-Secret-Key)
+    /// KHÔNG dùng [Authorize]. Cấu hình URL này (HTTPS công khai) ở my.sepay.vn → Cổng thanh toán → Cấu hình → IPN.
+    /// SePay cần HTTP 200 để coi là đã nhận.
     /// </summary>
+    [HttpPost("sepay/ipn")]
+    public async Task<IActionResult> SepayIpn([FromBody] SepayIpnDTO ipn)
+    {
+        try
+        {
+            var secret = Request.Headers["X-Secret-Key"].FirstOrDefault();
+            var result = await _paymentService.HandleSepayIpnAsync(ipn, secret);
+
+            return result switch
+            {
+                PaymentCallbackResult.Confirmed
+                    or PaymentCallbackResult.AlreadyConfirmed
+                    or PaymentCallbackResult.Ignored => Ok(new { success = true }),
+                PaymentCallbackResult.InvalidSignature => Unauthorized(
+                    new { success = false, message = "Unauthorized" }),
+                PaymentCallbackResult.Busy => StatusCode(409,
+                    new { success = false, message = "Processing, please retry" }),
+                // OrderNotFound / InvalidAmount: gửi lại cũng không sửa được → 200 để SePay ngừng gửi (đã log để xem tay)
+                _ => Ok(new { success = false })
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "SePay IPN failed");
+            return StatusCode(500, new { success = false, message = "Unknown error" });
+        }
+    }
+
+    // ── Bước 2d: SePay Return URL (trình duyệt) ──────────────────────────────
+
+    /// <summary>
+    /// SePay redirect trình duyệt về đây (success_url / error_url / cancel_url được ký trong form checkout).
+    /// GET /api/payments/sepay/return/{orderCode}/{result}   result: success | error | cancel
+    ///
+    /// KHÔNG nâng gói ở đây: URL này không mang dữ liệu đáng tin (ai cũng gọi giả được).
+    /// Chỉ IPN mới xác nhận thanh toán. Vì IPN có thể đến sau redirect vài giây, với "success"
+    /// ta trả status=pending_confirm → FE poll /subscription-status (hoặc /history) để biết kết quả thật.
+    /// </summary>
+    [HttpGet("sepay/return/{orderCode}/{result}")]
+    public IActionResult SepayReturn(string orderCode, string result)
+    {
+        var frontendBase = ResolveFrontendBase();
+        if (frontendBase == null)
+        {
+            _logger.LogError("SePay Return: thiếu cấu hình Frontend:Url / FRONTEND_URL");
+            return StatusCode(500, new { message = "Thiếu cấu hình Frontend URL." });
+        }
+
+        var status = result switch
+        {
+            "success" => "pending_confirm",
+            "cancel" => "cancelled",
+            _ => "failed"
+        };
+
+        var redirectUrl =
+            $"{frontendBase.TrimEnd('/')}/payment/result?status={status}&orderCode={Uri.EscapeDataString(orderCode)}";
+
+        _logger.LogInformation("SePay Return ({Result}) → redirecting to {Url}", result, redirectUrl);
+        return Redirect(redirectUrl);
+    }
+
+    // ── Query ─────────────────────────────────────────────────────────────────
+
+    /// <summary>GET /api/payments/history</summary>
     [Authorize]
     [HttpGet("history")]
     public async Task<IActionResult> GetHistory()
@@ -138,10 +259,7 @@ public class PaymentController : ControllerBase
         return Ok(history);
     }
 
-    /// <summary>
-    /// Trạng thái subscription hiện tại của user.
-    /// GET /api/payments/subscription-status
-    /// </summary>
+    /// <summary>GET /api/payments/subscription-status</summary>
     [Authorize]
     [HttpGet("subscription-status")]
     public async Task<IActionResult> GetSubscriptionStatus()
@@ -152,7 +270,6 @@ public class PaymentController : ControllerBase
         var status = await _paymentService.GetSubscriptionStatusAsync(userId.Value);
         return Ok(status);
     }
-
 
     // ── Admin: Cấp / Gia hạn Premium ─────────────────────────────────────────
 
@@ -183,10 +300,7 @@ public class PaymentController : ControllerBase
 
     // ── Admin: Thu hồi Premium ────────────────────────────────────────────────
 
-    /// <summary>
-    /// [Admin] Thu hồi Premium của user.
-    /// DELETE /api/payments/admin/subscription/{userId}
-    /// </summary>
+    /// <summary>[Admin] DELETE /api/payments/admin/subscription/{userId}</summary>
     [Authorize(Roles = "Admin")]
     [HttpDelete("admin/subscription/{userId:guid}")]
     public async Task<IActionResult> AdminRevokeSubscription(Guid userId)
@@ -206,13 +320,10 @@ public class PaymentController : ControllerBase
             return StatusCode(500, new { message = "Có lỗi xảy ra. Vui lòng thử lại." });
         }
     }
-    
+
     // ── User: Tự hủy subscription ─────────────────────────────────────────────
 
-    /// <summary>
-    /// User tự hủy gói Premium của chính mình.
-    /// DELETE /api/payments/subscription/me
-    /// </summary>
+    /// <summary>User tự hủy gói Premium của mình. DELETE /api/payments/subscription/me</summary>
     [Authorize]
     [HttpDelete("subscription/me")]
     public async Task<IActionResult> CancelMySubscription()
@@ -236,111 +347,29 @@ public class PaymentController : ControllerBase
         }
     }
 
-    // ── Admin: Doanh thu ──────────────────────────────────────────────────────
-
-    /// <summary>
-    /// [Admin] Tổng quan doanh thu: tổng tiền, MoM growth, active Premium users...
-    /// GET /api/payments/admin/revenue/summary
-    /// </summary>
-    [Authorize(Roles = "Admin")]
-    [HttpGet("admin/revenue/summary")]
-    public async Task<IActionResult> GetRevenueSummary()
-    {
-        try
-        {
-            var summary = await _paymentService.GetRevenueSummaryAsync();
-            return Ok(summary);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "GetRevenueSummary failed");
-            return StatusCode(500, new { message = "Không thể lấy dữ liệu doanh thu." });
-        }
-    }
- 
-    /// <summary>
-    /// [Admin] Biểu đồ doanh thu theo ngày hoặc tháng.
-    ///
-    /// Ví dụ:
-    ///   GET /api/payments/admin/revenue/chart?groupBy=month&amp;year=2024
-    ///   GET /api/payments/admin/revenue/chart?groupBy=day&amp;year=2024&amp;month=5
-    /// </summary>
-    [Authorize(Roles = "Admin")]
-    [HttpGet("admin/revenue/chart")]
-    public async Task<IActionResult> GetRevenueChart(
-        [FromQuery] string groupBy = "month",
-        [FromQuery] int    year    = 0,
-        [FromQuery] int?   month   = null)
-    {
-        if (year == 0) year = DateTime.UtcNow.Year;
- 
-        if (groupBy != "day" && groupBy != "month")
-            return BadRequest(new { message = "groupBy phải là 'day' hoặc 'month'." });
- 
-        if (groupBy == "day" && month == null)
-            return BadRequest(new { message = "Cần truyền month khi groupBy=day." });
- 
-        try
-        {
-            var chart = await _paymentService.GetRevenueChartAsync(groupBy, year, month);
-            return Ok(chart);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "GetRevenueChart failed");
-            return StatusCode(500, new { message = "Không thể lấy dữ liệu biểu đồ." });
-        }
-    }
- 
-    /// <summary>
-    /// [Admin] Doanh thu split theo từng gói (monthly_premium / yearly_premium).
-    ///
-    /// GET /api/payments/admin/revenue/by-plan
-    /// GET /api/payments/admin/revenue/by-plan?from=2024-01-01&amp;to=2024-12-31
-    /// </summary>
-    [Authorize(Roles = "Admin")]
-    [HttpGet("admin/revenue/by-plan")]
-    public async Task<IActionResult> GetRevenueByPlan(
-        [FromQuery] DateTime? from = null,
-        [FromQuery] DateTime? to   = null)
-    {
-        try
-        {
-            var result = await _paymentService.GetRevenueByPlanAsync(from, to);
-            return Ok(result);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "GetRevenueByPlan failed");
-            return StatusCode(500, new { message = "Không thể lấy dữ liệu theo gói." });
-        }
-    }
- 
-    /// <summary>
-    /// [Admin] Danh sách tất cả đơn hàng — filter, search, phân trang.
-    ///
-    /// GET /api/payments/admin/orders
-    /// GET /api/payments/admin/orders?status=success&amp;planId=monthly_premium&amp;page=1&amp;pageSize=20
-    /// GET /api/payments/admin/orders?search=user@email.com
-    /// GET /api/payments/admin/orders?from=2024-05-01&amp;to=2024-05-31
-    /// </summary>
-    [Authorize(Roles = "Admin")]
-    [HttpGet("admin/orders")]
-    public async Task<IActionResult> GetAdminOrders([FromQuery] AdminOrderFilterDTO filter)
-    {
-        try
-        {
-            var result = await _paymentService.GetAdminOrdersAsync(filter);
-            return Ok(result);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "GetAdminOrders failed");
-            return StatusCode(500, new { message = "Không thể lấy danh sách đơn hàng." });
-        }
-    }
-
     // ── Helper ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Toàn bộ tham số vnp_* trên query string gốc, dùng để xác thực chữ ký
+    /// (không phụ thuộc DTO nên VNPay thêm tham số mới vẫn đúng).
+    /// </summary>
+    private Dictionary<string, string> GetVnpayQuery() =>
+        Request.Query
+            .Where(kv => kv.Key.StartsWith("vnp_", StringComparison.Ordinal))
+            .ToDictionary(kv => kv.Key, kv => kv.Value.ToString(), StringComparer.Ordinal);
+
+    /// <summary>
+    /// Frontend base URL từ Frontend:Url (config) hoặc biến môi trường FRONTEND_URL;
+    /// chỉ fallback localhost khi chạy Development. Trả null nếu thiếu cấu hình ở môi trường khác.
+    /// </summary>
+    private string? ResolveFrontendBase()
+    {
+        var frontendBase = _config["Frontend:Url"]
+                           ?? Environment.GetEnvironmentVariable("FRONTEND_URL");
+
+        if (!string.IsNullOrWhiteSpace(frontendBase)) return frontendBase;
+        return _env.IsDevelopment() ? "http://localhost:5173" : null;
+    }
 
     private Guid? GetUserId()
     {

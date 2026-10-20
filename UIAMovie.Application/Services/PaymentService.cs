@@ -1,17 +1,33 @@
 ﻿// UIAMovie.Application/Services/PaymentService.cs
 
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using UIAMovie.Application.Caching;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Application.Interfaces.IRepositories;
 using UIAMovie.Application.Interfaces.IServices;
-using UIAMovie.Application.Services;
 using UIAMovie.Domain.Entities;
 
 namespace UIAMovie.Application.Services;
 
 // ── Interface ─────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Kết quả xử lý callback/IPN của cổng thanh toán (dùng chung cho VNPay và SePay).
+/// Controller ánh xạ sang mã phản hồi riêng của từng cổng.
+/// </summary>
+public enum PaymentCallbackResult
+{
+    Confirmed,        // VNPay 00 / SePay 200
+    OrderNotFound,    // 01
+    AlreadyConfirmed, // 02
+    InvalidAmount,    // 04
+    InvalidSignature, // 97 (VNPay: sai chữ ký; SePay: sai X-Secret-Key)
+    Busy,             // 99 — đang xử lý ở request khác, cổng sẽ gửi lại
+    Ignored           // callback hợp lệ nhưng không cần xử lý (VD SePay TRANSACTION_VOID)
+}
 
 public interface IPaymentService
 {
@@ -19,17 +35,28 @@ public interface IPaymentService
     IEnumerable<SubscriptionPlanDTO> GetSubscriptionPlans();
 
     /// <summary>
-    /// Bước 1 trong flow: User chọn gói → tạo PaymentOrder → trả về URL redirect sang VNPay.
+    /// Bước 1 trong flow: User chọn gói → tạo PaymentOrder → trả về thông tin chuyển sang cổng thanh toán
+    /// (VNPay: URL redirect; SePay: URL + các field để FE POST form).
     /// </summary>
     /// <param name="backendBaseUrl">Base URL của backend (VD: "https://api.yourdomain.com").
-    /// Dùng để tự build ReturnUrl gửi cho VNPay, không cần cấu hình cứng trong appsettings.</param>
+    /// Dùng để tự build ReturnUrl/Callback URL gửi cho cổng, không cần cấu hình cứng trong appsettings.</param>
     Task<PaymentOrderResponseDTO> CreateOrderAsync(Guid userId, CreatePaymentOrderDTO dto, string ipAddress, string backendBaseUrl);
 
     /// <summary>
-    /// Bước 2: VNPay IPN callback (server-to-server).
-    /// Xác thực chữ ký → kiểm tra amount → cập nhật trạng thái → nâng gói nếu thành công → invalidate cache.
+    /// Bước 2: VNPay IPN / Return callback.
+    /// Xác thực chữ ký → khóa theo đơn → kiểm tra amount → cập nhật trạng thái → nâng gói nếu thành công → invalidate cache.
     /// </summary>
-    Task<bool> HandleVnpayIpnAsync(VnpayIpnDTO ipn);
+    /// <param name="ipn">Giá trị đã bind, dùng để đọc dữ liệu.</param>
+    /// <param name="rawQuery">Toàn bộ query string gốc (chỉ các tham số vnp_*), dùng để xác thực chữ ký.</param>
+    Task<PaymentCallbackResult> HandleVnpayIpnAsync(VnpayIpnDTO ipn, IReadOnlyDictionary<string, string> rawQuery);
+
+    /// <summary>
+    /// Bước 2 (SePay): IPN POST JSON từ SePay. Xác thực header X-Secret-Key → lọc loại thông báo
+    /// → dùng chung lõi xác nhận với VNPay (khóa, idempotent, kiểm tra amount, nâng gói).
+    /// KHÔNG gọi hàm này từ return URL của trình duyệt.
+    /// </summary>
+    /// <param name="secretHeader">Giá trị header X-Secret-Key của request.</param>
+    Task<PaymentCallbackResult> HandleSepayIpnAsync(SepayIpnDTO ipn, string? secretHeader);
 
     /// <summary>Lịch sử thanh toán của user.</summary>
     Task<IEnumerable<PaymentHistoryDTO>> GetPaymentHistoryAsync(Guid userId);
@@ -46,13 +73,12 @@ public interface IPaymentService
     /// <summary>User tự hủy Premium của chính mình.</summary>
     Task CancelMySubscriptionAsync(Guid userId);
 
-    Task<RevenueSummaryDTO> GetRevenueSummaryAsync();
-    Task<RevenueChartDTO> GetRevenueChartAsync(string groupBy, int year, int? month = null);
-    Task<List<RevenueByPlanDTO>> GetRevenueByPlanAsync(DateTime? from = null, DateTime? to = null);
-    Task<PaginatedDTO<AdminOrderDTO>> GetAdminOrdersAsync(AdminOrderFilterDTO filter);
+    /// <summary>
+    /// Chuyển đơn Pending quá hạn (+ thời gian ân hạn) sang Expired. Gọi định kỳ bởi PaymentExpiryWorker.
+    /// Báo cáo doanh thu / danh sách đơn admin nằm ở IRevenueService. Trả về số đơn đã đổi.
+    /// </summary>
+    Task<int> ExpireStaleOrdersAsync(CancellationToken ct = default);
 }
-
-
 
 // ── Admin DTOs ────────────────────────────────────────────────────────────────
 
@@ -65,17 +91,28 @@ public class AdminGrantSubscriptionDTO
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
+/// <summary>Giá trị lưu ở PaymentOrder.Provider.</summary>
+public static class PaymentProviders
+{
+    public const string Vnpay = "vnpay";
+    public const string Sepay = "sepay";
+}
+
 public class PaymentService : IPaymentService
 {
     private readonly IRepository<PaymentOrder>      _orderRepo;
+    private readonly IPaymentOrderRepository        _paymentOrders;
     private readonly IRepository<UserSubscription>  _subRepo;
     private readonly IRepository<User>              _userRepo;
     private readonly IVnpayPaymentService           _vnpay;
+    private readonly ISepayPaymentService           _sepay;
     private readonly ICacheService                  _cache;
     private readonly ILogger<PaymentService>        _logger;
 
-    private const string USER_CACHE_KEY = "user:id:{0}";
     private const string SUB_CACHE_KEY  = "subscription:{0}";
+
+    /// <summary>Ân hạn sau ExpiredAt để IPN đến muộn vẫn được xử lý trước khi đơn bị chốt Expired.</summary>
+    private static readonly TimeSpan ExpiryGrace = TimeSpan.FromMinutes(30);
 
     private static readonly List<SubscriptionPlanDTO> Plans = new()
     {
@@ -105,16 +142,20 @@ public class PaymentService : IPaymentService
 
     public PaymentService(
         IRepository<PaymentOrder>     orderRepo,
+        IPaymentOrderRepository       paymentOrders,
         IRepository<UserSubscription> subRepo,
         IRepository<User>             userRepo,
         IVnpayPaymentService          vnpay,
+        ISepayPaymentService          sepay,
         ICacheService                 cache,
         ILogger<PaymentService>       logger)
     {
         _orderRepo = orderRepo;
+        _paymentOrders = paymentOrders;
         _subRepo   = subRepo;
         _userRepo  = userRepo;
         _vnpay     = vnpay;
+        _sepay     = sepay;
         _cache     = cache;
         _logger    = logger;
     }
@@ -125,13 +166,6 @@ public class PaymentService : IPaymentService
 
     // ── Bước 1: Tạo order → redirect URL ─────────────────────────────────────
 
-    /// <summary>
-    /// Flow: User chọn gói Premium
-    ///   → POST /api/payments/create-order
-    ///   → Tạo PaymentOrder (status = pending)
-    ///   → Gọi VNPay lấy paymentUrl
-    ///   → Trả về PaymentOrderResponseDTO (frontend redirect)
-    /// </summary>
     public async Task<PaymentOrderResponseDTO> CreateOrderAsync(
         Guid userId, CreatePaymentOrderDTO dto, string ipAddress, string backendBaseUrl)
     {
@@ -139,16 +173,22 @@ public class PaymentService : IPaymentService
         var plan = Plans.FirstOrDefault(p => p.PlanId == dto.PlanId)
                    ?? throw new ArgumentException($"Gói '{dto.PlanId}' không tồn tại.");
 
-        // 2. Validate provider — chỉ hỗ trợ vnpay
-        var provider = dto.PaymentProvider.ToLower();
-        if (provider != "vnpay")
-            throw new ArgumentException("Provider phải là 'vnpay'.");
+        // 2. Validate provider — hỗ trợ vnpay và sepay
+        var provider = dto.PaymentProvider.ToLowerInvariant();
+        if (provider is not (PaymentProviders.Vnpay or PaymentProviders.Sepay))
+            throw new ArgumentException("Provider phải là 'vnpay' hoặc 'sepay'.");
 
-        // 3. Tạo order code duy nhất: ORD-20240506-A3F7
-        var orderCode = GenerateOrderCode();
-        var expiredAt = DateTime.UtcNow.AddMinutes(15);
+        // 3. Mỗi user chỉ giữ MỘT đơn đang chờ: các đơn Pending còn hạn trước đó được chốt Expired
+        //    (lưu cùng lần SaveChanges với đơn mới). Nếu người dùng thật ra đã trả đơn cũ thì callback
+        //    đến sau vẫn được chấp nhận (xem "thanh toán muộn" trong ConfirmOrderAsync).
+        var now = DateTime.UtcNow;
+        await SupersedePendingOrdersAsync(userId, now);
 
-        // 4. Lưu PaymentOrder vào DB
+        // 4. Tạo order code duy nhất: ORD-20240506-9F3A07C1
+        var orderCode = await GenerateUniqueOrderCodeAsync();
+        var expiredAt = now.AddMinutes(15);
+
+        // 5. Lưu PaymentOrder vào DB
         var order = new PaymentOrder
         {
             OrderCode    = orderCode,
@@ -169,134 +209,239 @@ public class PaymentService : IPaymentService
             "Created PaymentOrder {OrderCode} for user {UserId} — plan={PlanId} provider={Provider}",
             orderCode, userId, plan.PlanId, provider);
 
-        // 5. Gọi VNPay lấy URL
-        var orderInfo       = $"Nâng cấp {plan.Name} - {orderCode}";
-        // Build returnUrl từ backendBaseUrl thay vì cấu hình cứng trong appsettings
-        var backendReturnUrl = $"{backendBaseUrl.TrimEnd('/')}/api/payments/vnpay/return";
-        string paymentUrl;
+        // 6. Gọi cổng thanh toán lấy thông tin chuyển hướng
+        var orderInfo = $"Nâng cấp {plan.Name} - {orderCode}";
+        var baseUrl   = backendBaseUrl.TrimEnd('/');
+
+        var response = new PaymentOrderResponseDTO
+        {
+            OrderId   = order.Id,
+            OrderCode = orderCode,
+            Amount    = plan.PriceVnd,
+            Provider  = provider,
+            ExpiredAt = expiredAt
+        };
 
         try
         {
-            paymentUrl = _vnpay.CreatePaymentUrl(orderCode, plan.PriceVnd, orderInfo, ipAddress, backendReturnUrl);
+            if (provider == PaymentProviders.Vnpay)
+            {
+                response.PaymentUrl = _vnpay.CreatePaymentUrl(
+                    orderCode, plan.PriceVnd, orderInfo, ipAddress, $"{baseUrl}/api/payments/vnpay/return");
+            }
+            else
+            {
+                // Dùng path segment thay vì query để các URL được ký không chứa '&'
+                var returnBase = $"{baseUrl}/api/payments/sepay/return/{orderCode}";
+                var form = _sepay.CreateCheckoutForm(
+                    orderCode, plan.PriceVnd, orderInfo,
+                    successUrl: $"{returnBase}/success",
+                    errorUrl:   $"{returnBase}/error",
+                    cancelUrl:  $"{returnBase}/cancel");
+
+                response.PaymentUrl    = form.Action;
+                response.PaymentMethod = "form_post";
+                response.FormFields    = form.Fields;
+            }
         }
         catch (Exception ex)
         {
             order.Status        = PaymentStatus.Failed;
-            order.FailureReason = $"VNPay gateway error: {ex.Message}";
+            order.FailureReason = $"{provider} gateway error: {ex.Message}";
             _orderRepo.Update(order);
             await _orderRepo.SaveChangesAsync();
 
-            _logger.LogError(ex, "Failed to get payment URL from VNPay for order {OrderCode}", orderCode);
+            _logger.LogError(ex, "Failed to create payment for order {OrderCode} (provider={Provider})",
+                orderCode, provider);
             throw;
         }
 
-        return new PaymentOrderResponseDTO
-        {
-            OrderId    = order.Id,
-            OrderCode  = orderCode,
-            PaymentUrl = paymentUrl,
-            Amount     = plan.PriceVnd,
-            Provider   = provider,
-            ExpiredAt  = expiredAt
-        };
+        return response;
     }
 
-    // ── Bước 2: VNPay IPN ────────────────────────────────────────────────────
+    // ── Bước 2: Callback từ cổng thanh toán ──────────────────────────────────
 
     /// <summary>
-    /// Flow sau khi user thực hiện thanh toán qua VNPay:
-    ///   IPN Callback (server-to-server) → POST /api/payments/vnpay/ipn
-    ///   → Xác thực chữ ký HMAC-SHA512
-    ///   → Kiểm tra amount khớp (VNPay gửi *100)
-    ///   → Tìm order theo vnp_TxnRef (= OrderCode)
-    ///   → Cập nhật status (success / failed)
-    ///   → Nếu success: nâng SubscriptionType → Invalidate User Cache
-    ///
-    /// LƯU Ý: ReturnUrl (GET /api/payments/vnpay/return) chỉ dùng để redirect
-    /// browser về frontend — KHÔNG xử lý upgrade subscription ở đó.
+    /// Cả IPN (VNPay → server) và Return (trình duyệt → server) đều gọi hàm này,
+    /// nên nó phải idempotent (xem ConfirmOrderAsync).
     /// </summary>
-    public async Task<bool> HandleVnpayIpnAsync(VnpayIpnDTO ipn)
+    public async Task<PaymentCallbackResult> HandleVnpayIpnAsync(
+        VnpayIpnDTO ipn, IReadOnlyDictionary<string, string> rawQuery)
     {
         _logger.LogInformation("VNPay IPN received: txnRef={TxnRef} responseCode={Code}",
             ipn.vnp_TxnRef, ipn.vnp_ResponseCode);
 
-        // 1. Xác thực chữ ký
-        if (!_vnpay.VerifySignature(ipn))
+        // Xác thực chữ ký từ query string gốc
+        if (!_vnpay.VerifySignature(rawQuery))
         {
             _logger.LogWarning("VNPay IPN signature invalid for order {TxnRef}", ipn.vnp_TxnRef);
-            return false;
+            return PaymentCallbackResult.InvalidSignature;
         }
 
-        // 2. Tìm order
-        var orders = await _orderRepo.FindAsync(o => o.OrderCode == ipn.vnp_TxnRef);
+        return await ConfirmOrderAsync(new ConfirmRequest(
+            Provider:       PaymentProviders.Vnpay,
+            OrderCode:      ipn.vnp_TxnRef,
+            // VNPay gửi vnp_Amount đã nhân 100; không chia hết cho 100 → -1 để chắc chắn bị coi là sai số tiền
+            AmountVnd:      ipn.vnp_Amount % 100 == 0 ? ipn.vnp_Amount / 100 : -1,
+            // VNPay yêu cầu CẢ ResponseCode và TransactionStatus đều là "00"
+            GatewaySuccess: ipn.vnp_ResponseCode == "00" && ipn.vnp_TransactionStatus == "00",
+            GatewayTransId: ipn.vnp_TransactionNo,
+            RawCallback:    JsonSerializer.Serialize(ipn),
+            FailureReason:  $"VNPay ResponseCode={ipn.vnp_ResponseCode}, TransactionStatus={ipn.vnp_TransactionStatus}"));
+    }
+
+    public async Task<PaymentCallbackResult> HandleSepayIpnAsync(SepayIpnDTO ipn, string? secretHeader)
+    {
+        // SePay IPN không có chữ ký, chỉ có header X-Secret-Key. Xác thực TRƯỚC khi chạm vào khóa/DB
+        // để kẻ lạ không thể khóa mã đơn hay dò đơn.
+        if (!_sepay.VerifyIpnSecret(secretHeader))
+        {
+            _logger.LogWarning("SePay IPN rejected: invalid X-Secret-Key");
+            return PaymentCallbackResult.InvalidSignature;
+        }
+
+        var invoice = ipn.Order?.InvoiceNumber;
+        _logger.LogInformation("SePay IPN received: type={Type} invoice={Invoice}", ipn.NotificationType, invoice);
+
+        if (ipn.NotificationType != "ORDER_PAID")
+        {
+            // TRANSACTION_VOID: chưa tự thu hồi gói, chỉ log để admin xem xét thủ công
+            _logger.LogWarning("SePay IPN {Type} for {Invoice} — cần xem xét thủ công",
+                ipn.NotificationType, invoice);
+            return PaymentCallbackResult.Ignored;
+        }
+
+        if (ipn.Order is null || ipn.Transaction is null || string.IsNullOrWhiteSpace(ipn.Order.InvoiceNumber))
+        {
+            _logger.LogWarning("SePay IPN ORDER_PAID thiếu order/transaction/invoice");
+            return PaymentCallbackResult.OrderNotFound;
+        }
+
+        // Trạng thái lạ → bỏ qua, KHÔNG đánh Failed (tránh chặn một lần thanh toán hợp lệ đến sau)
+        if (ipn.Order.Status != "CAPTURED" || ipn.Transaction.Status != "APPROVED")
+        {
+            _logger.LogWarning("SePay IPN ORDER_PAID nhưng order_status={OrderStatus} transaction_status={TxStatus} ({Invoice})",
+                ipn.Order.Status, ipn.Transaction.Status, invoice);
+            return PaymentCallbackResult.Ignored;
+        }
+
+        var amount = ipn.Order.Amount; // VND, không nhân 100; "50000.00" đã được đọc thành decimal
+        return await ConfirmOrderAsync(new ConfirmRequest(
+            Provider:       PaymentProviders.Sepay,
+            OrderCode:      ipn.Order.InvoiceNumber,
+            AmountVnd:      amount == decimal.Truncate(amount) ? (long)amount : -1,
+            GatewaySuccess: true,
+            GatewayTransId: ipn.Transaction.TransactionId,
+            RawCallback:    JsonSerializer.Serialize(ipn),
+            FailureReason:  string.Empty));
+    }
+
+    private sealed record ConfirmRequest(
+        string  Provider,
+        string  OrderCode,
+        long    AmountVnd,        // VND thật (đã quy đổi); âm = không hợp lệ
+        bool    GatewaySuccess,
+        string? GatewayTransId,
+        string  RawCallback,
+        string  FailureReason);
+
+    /// <summary>
+    /// Lõi xác nhận dùng chung cho mọi cổng: khóa nguyên tử theo mã đơn → tìm đơn (đúng provider)
+    /// → idempotent → kiểm tra amount → cập nhật trạng thái → nâng gói → invalidate cache.
+    /// </summary>
+    private async Task<PaymentCallbackResult> ConfirmOrderAsync(ConfirmRequest r)
+    {
+        // Trình duyệt và cổng thường tới gần như cùng lúc. INCR nguyên tử làm khóa: chỉ một request
+        // được xử lý, tránh cộng ngày hai lần. Khóa tự hết sau 30 giây.
+        if (await _cache.IncrementAsync($"payment:ipn:{r.OrderCode}", TimeSpan.FromSeconds(30)) > 1)
+        {
+            _logger.LogInformation("{Provider}: order {OrderCode} is being processed elsewhere",
+                r.Provider, r.OrderCode);
+            return PaymentCallbackResult.Busy;
+        }
+
+        var orders = await _orderRepo.FindAsync(o => o.OrderCode == r.OrderCode);
         var order  = orders.FirstOrDefault();
-        if (order == null)
+
+        // Đơn của cổng này mới được xác nhận qua endpoint của cổng này
+        // (đơn VNPay không thể bị "xác nhận" bằng IPN giả của SePay và ngược lại).
+        if (order == null || !string.Equals(order.Provider, r.Provider, StringComparison.OrdinalIgnoreCase))
         {
-            _logger.LogWarning("VNPay IPN: order not found {TxnRef}", ipn.vnp_TxnRef);
-            return false;
+            _logger.LogWarning("{Provider}: order not found (or provider mismatch) {OrderCode}",
+                r.Provider, r.OrderCode);
+            return PaymentCallbackResult.OrderNotFound;
         }
 
-        // 3. Idempotent — tránh xử lý 2 lần
-        if (order.Status != PaymentStatus.Pending)
+        // Thanh toán MUỘN: đơn đã bị chốt Expired (worker, hoặc bị thay bằng đơn mới) nhưng cổng báo
+        // thành công → tiền đã bị trừ nên vẫn phải cấp gói. Chỉ áp dụng cho callback THÀNH CÔNG;
+        // callback thất bại cho đơn Expired vẫn bị bỏ qua.
+        var isLateSuccess = order.Status == PaymentStatus.Expired && r.GatewaySuccess;
+        if (isLateSuccess)
         {
-            _logger.LogInformation("VNPay IPN: order {OrderCode} already processed ({Status})",
-                order.OrderCode, order.Status);
-            return true;
+            _logger.LogWarning("{Provider}: late payment for expired order {OrderCode} — confirming",
+                r.Provider, order.OrderCode);
+            order.FailureReason = null;
         }
 
-        // 4. Kiểm tra amount khớp
-        // VNPay gửi vnp_Amount đã nhân 100 so với VND thật
-        var actualAmount = ipn.vnp_Amount / 100;
-        if (actualAmount != order.Amount)
+        // Idempotent — tránh xử lý 2 lần
+        if (order.Status != PaymentStatus.Pending && !isLateSuccess)
         {
-            _logger.LogWarning(
-                "VNPay IPN amount mismatch: expected={Expected} got={Got} (raw={Raw}) for order {OrderCode}",
-                order.Amount, actualAmount, ipn.vnp_Amount, order.OrderCode);
+            _logger.LogInformation("{Provider}: order {OrderCode} already processed ({Status})",
+                r.Provider, order.OrderCode, order.Status);
+            return PaymentCallbackResult.AlreadyConfirmed;
+        }
+
+        // Kiểm tra số tiền khớp
+        if (r.AmountVnd != order.Amount)
+        {
+            _logger.LogWarning("{Provider} amount mismatch: expected={Expected} got={Got} for order {OrderCode}",
+                r.Provider, order.Amount, r.AmountVnd, order.OrderCode);
 
             order.Status        = PaymentStatus.Failed;
-            order.FailureReason = $"Amount mismatch: expected {order.Amount}, got {actualAmount}";
-            order.RawCallback   = JsonSerializer.Serialize(ipn);
+            order.FailureReason = $"Amount mismatch: expected {order.Amount}, got {r.AmountVnd}";
+            order.RawCallback   = r.RawCallback;
             _orderRepo.Update(order);
             await _orderRepo.SaveChangesAsync();
-            return false;
+            return PaymentCallbackResult.InvalidAmount;
         }
 
-        // 5. Lưu raw callback
-        order.RawCallback   = JsonSerializer.Serialize(ipn);
-        order.GatewayTransId = ipn.vnp_TransactionNo;
+        order.RawCallback    = r.RawCallback;
+        order.GatewayTransId = r.GatewayTransId;
 
-        // 6. Cập nhật trạng thái
-        bool success = ipn.vnp_ResponseCode == "00"; // VNPay: "00" = thành công
-        if (success)
+        string? upgradedEmail = null;
+        if (r.GatewaySuccess)
         {
             order.Status  = PaymentStatus.Success;
             order.PaidAt  = DateTime.UtcNow;
-            await UpgradeSubscriptionAsync(order);
+            upgradedEmail = await UpgradeSubscriptionAsync(order); // chỉ gom thay đổi, chưa lưu
         }
         else
         {
             order.Status        = PaymentStatus.Failed;
-            order.FailureReason = $"VNPay ResponseCode={ipn.vnp_ResponseCode}";
+            order.FailureReason = r.FailureReason;
         }
 
+        // Các repository dùng chung một MovieDbContext (scoped) nên MỘT lần SaveChanges lưu nguyên tử
+        // cả đơn hàng, gói và user.
         _orderRepo.Update(order);
         await _orderRepo.SaveChangesAsync();
 
-        _logger.LogInformation("VNPay IPN processed: order={OrderCode} success={Success}",
-            order.OrderCode, success);
+        if (r.GatewaySuccess)
+            await InvalidateUserCacheAsync(order.UserId, upgradedEmail);
 
-        return true;
+        _logger.LogInformation("{Provider} callback processed: order={OrderCode} success={Success}",
+            r.Provider, order.OrderCode, r.GatewaySuccess);
+
+        return PaymentCallbackResult.Confirmed;
     }
 
     // ── Subscription upgrade ──────────────────────────────────────────────────
 
     /// <summary>
-    /// Thanh toán thành công:
-    ///   1. Upsert UserSubscription (cộng thêm ngày nếu đang còn Premium)
-    ///   2. Cập nhật User.SubscriptionType = "Premium"
-    ///   3. Invalidate user cache
+    /// Thanh toán thành công: upsert UserSubscription (cộng thêm ngày nếu đang còn Premium)
+    /// và đồng bộ User.SubscriptionType. Chỉ gom thay đổi, việc lưu DB do caller làm.
     /// </summary>
-    private async Task UpgradeSubscriptionAsync(PaymentOrder order)
+    private async Task<string?> UpgradeSubscriptionAsync(PaymentOrder order)
     {
         var subs = await _subRepo.FindAsync(s => s.UserId == order.UserId);
         var sub  = subs.FirstOrDefault();
@@ -324,39 +469,40 @@ public class PaymentService : IPaymentService
         }
         else
         {
+            sub.StartedAt          = ResolveStart(sub, now);
             sub.SubscriptionType   = SubscriptionTypes.Premium;
-            sub.StartedAt          = sub.StartedAt ?? now;
             sub.ExpiredAt          = newExpiry;
             sub.LastPaymentOrderId = order.Id;
             sub.UpdatedAt          = now;
             _subRepo.Update(sub);
         }
 
-        await _subRepo.SaveChangesAsync();
-
-        // Đồng bộ User.SubscriptionType
+        // User đã được theo dõi nên không gọi Update(user):
+        // Update ghi đè mọi cột (kể cả IsActive nếu admin vừa khóa user).
         var user = await _userRepo.GetByIdAsync(order.UserId);
         if (user != null)
         {
             user.SubscriptionType = SubscriptionTypes.Premium;
             user.UpdatedAt        = now;
-            _userRepo.Update(user);
-            await _userRepo.SaveChangesAsync();
         }
-
-        // Invalidate cache
-        await InvalidateUserCacheAsync(order.UserId, user?.Email);
 
         _logger.LogInformation(
             "Upgraded user {UserId} to Premium until {Expiry} (order={OrderCode})",
             order.UserId, newExpiry, order.OrderCode);
+
+        return user?.Email;
     }
+
+    /// <summary>Gói còn hạn giữ ngày kích hoạt cũ; gói đã hết hạn thì bắt đầu lại từ bây giờ.</summary>
+    private static DateTime ResolveStart(UserSubscription sub, DateTime now) =>
+        sub.ExpiredAt is { } e && e > now && sub.StartedAt is { } started ? started : now;
 
     // ── Query helpers ─────────────────────────────────────────────────────────
 
     public async Task<IEnumerable<PaymentHistoryDTO>> GetPaymentHistoryAsync(Guid userId)
     {
         var orders = await _orderRepo.FindAsync(o => o.UserId == userId);
+        var nowUtc = DateTime.UtcNow;
 
         return orders
             .OrderByDescending(o => o.CreatedAt)
@@ -367,7 +513,9 @@ public class PaymentService : IPaymentService
                 PlanName      = o.PlanName,
                 Amount        = o.Amount,
                 Provider      = o.Provider,
-                Status        = o.Status,
+                // Đơn Pending quá hạn hiển thị là "expired" (chỉ là cách hiển thị, DB không đổi
+                // nên callback đến muộn vẫn được xử lý như cũ).
+                Status        = EffectiveStatus(o, nowUtc),
                 FailureReason = o.FailureReason,
                 CreatedAt     = o.CreatedAt,
                 PaidAt        = o.PaidAt
@@ -401,22 +549,26 @@ public class PaymentService : IPaymentService
         }, TimeSpan.FromMinutes(10));
     }
 
-
     // ── Admin: Cấp / Thu hồi Premium ─────────────────────────────────────────
 
     /// <summary>
     /// [Admin] Cấp hoặc gia hạn Premium thủ công.
-    /// Upsert UserSubscription + đồng bộ User.SubscriptionType + invalidate cache.
+    /// Upsert UserSubscription + đồng bộ User.SubscriptionType trong MỘT lần SaveChanges
+    /// (các repository dùng chung một DbContext), tránh trạng thái nửa vời nếu bước sau lỗi.
     /// </summary>
     public async Task AdminGrantSubscriptionAsync(AdminGrantSubscriptionDTO dto)
     {
-        var plan = Plans.FirstOrDefault(p => p.PlanId == dto.PlanId)
-                   ?? throw new ArgumentException($"Gói '{dto.PlanId}' không tồn tại.");
+        _ = Plans.FirstOrDefault(p => p.PlanId == dto.PlanId)
+            ?? throw new ArgumentException($"Gói '{dto.PlanId}' không tồn tại.");
 
         var user = await _userRepo.GetByIdAsync(dto.UserId)
                    ?? throw new ArgumentException("Không tìm thấy user.");
 
-        var now  = DateTime.UtcNow;
+        var now        = DateTime.UtcNow;
+        var expiredUtc = dto.ExpiredAt.ToUniversalTime();
+        if (expiredUtc <= now)
+            throw new ArgumentException("Ngày hết hạn phải ở tương lai.");
+
         var subs = await _subRepo.FindAsync(s => s.UserId == dto.UserId);
         var sub  = subs.FirstOrDefault();
 
@@ -427,56 +579,48 @@ public class PaymentService : IPaymentService
                 UserId           = dto.UserId,
                 SubscriptionType = SubscriptionTypes.Premium,
                 StartedAt        = now,
-                ExpiredAt        = dto.ExpiredAt.ToUniversalTime(),
+                ExpiredAt        = expiredUtc,
                 UpdatedAt        = now
             };
             await _subRepo.AddAsync(sub);
         }
         else
         {
+            sub.StartedAt        = ResolveStart(sub, now);
             sub.SubscriptionType = SubscriptionTypes.Premium;
-            sub.ExpiredAt        = dto.ExpiredAt.ToUniversalTime();
+            sub.ExpiredAt        = expiredUtc;
             sub.UpdatedAt        = now;
             _subRepo.Update(sub);
         }
 
-        await _subRepo.SaveChangesAsync();
-
-        // Đồng bộ User.SubscriptionType
+        // user đã được theo dõi → không cần Update(user)
         user.SubscriptionType = SubscriptionTypes.Premium;
         user.UpdatedAt        = now;
-        _userRepo.Update(user);
-        await _userRepo.SaveChangesAsync();
+
+        await _subRepo.SaveChangesAsync();
 
         await InvalidateUserCacheAsync(dto.UserId, user.Email);
 
         _logger.LogInformation(
             "[Admin] Granted Premium to user {UserId} until {Expiry} (plan={PlanId})",
-            dto.UserId, dto.ExpiredAt, dto.PlanId);
+            dto.UserId, expiredUtc, dto.PlanId);
     }
 
     /// <summary>
-    /// [Admin] Thu hồi Premium của user:
-    ///   - Xóa UserSubscription nếu có
-    ///   - Reset User.SubscriptionType = null
-    ///   - Invalidate cache
+    /// [Admin] Thu hồi Premium của user: xóa UserSubscription, reset User.SubscriptionType = Free, invalidate cache.
     /// </summary>
     public async Task AdminRevokeSubscriptionAsync(Guid userId)
     {
         var user = await _userRepo.GetByIdAsync(userId)
                    ?? throw new ArgumentException("Không tìm thấy user.");
 
-        var subs = await _subRepo.FindAsync(s => s.UserId == userId);
+        var subs = (await _subRepo.FindAsync(s => s.UserId == userId)).ToList();
         foreach (var sub in subs)
             _subRepo.Remove(sub);
 
-        if (subs.Any())
-            await _subRepo.SaveChangesAsync();
-
-        // Reset subscription trên User — dùng "free" vì SubscriptionType là non-nullable string
         user.SubscriptionType = SubscriptionTypes.Free;
         user.UpdatedAt        = DateTime.UtcNow;
-        _userRepo.Update(user);
+
         await _userRepo.SaveChangesAsync();
 
         await InvalidateUserCacheAsync(userId, user.Email);
@@ -485,10 +629,7 @@ public class PaymentService : IPaymentService
     }
 
     /// <summary>
-    /// User tự hủy Premium của chính mình:
-    ///   - Chỉ cho phép khi đang có Premium còn hạn
-    ///   - Xóa UserSubscription, reset User.SubscriptionType = Free
-    ///   - Invalidate cache
+    /// User tự hủy Premium của chính mình (chỉ khi đang có Premium còn hạn).
     /// Tách riêng khỏi AdminRevokeSubscriptionAsync để logic/log/quyền không dùng chung.
     /// </summary>
     public async Task CancelMySubscriptionAsync(Guid userId)
@@ -506,11 +647,10 @@ public class PaymentService : IPaymentService
 
         foreach (var sub in subs)
             _subRepo.Remove(sub);
-        await _subRepo.SaveChangesAsync();
 
         user.SubscriptionType = SubscriptionTypes.Free;
         user.UpdatedAt        = now;
-        _userRepo.Update(user);
+
         await _userRepo.SaveChangesAsync();
 
         await InvalidateUserCacheAsync(userId, user.Email);
@@ -520,254 +660,75 @@ public class PaymentService : IPaymentService
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    /// <summary>ORD-20240506-A3F7 — ngắn, dễ tra cứu, đủ random.</summary>
+    /// <summary>
+    /// ORD-20241006-9F3A07C1 — 8 ký tự hex ngẫu nhiên mật mã (~4,3 tỷ giá trị/ngày) thay vì 4 ký tự
+    /// (65.536/ngày, dễ trùng sau vài trăm đơn).
+    /// </summary>
     private static string GenerateOrderCode()
     {
         var date   = DateTime.UtcNow.ToString("yyyyMMdd");
-        var suffix = Guid.NewGuid().ToString("N")[..4].ToUpper();
+        var suffix = Convert.ToHexString(RandomNumberGenerator.GetBytes(4));
         return $"ORD-{date}-{suffix}";
+    }
+
+    /// <summary>Sinh mã và kiểm tra chưa tồn tại. Vẫn nên có unique index ở DB làm chốt cuối.</summary>
+    private async Task<string> GenerateUniqueOrderCodeAsync()
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var code = GenerateOrderCode();
+            if (!(await _orderRepo.FindAsync(o => o.OrderCode == code)).Any())
+                return code;
+        }
+        throw new InvalidOperationException("Không thể tạo mã đơn duy nhất. Vui lòng thử lại.");
+    }
+
+    /// <summary>
+    /// Chốt Expired các đơn Pending còn hạn của user (khi họ tạo đơn mới). Chỉ gom thay đổi,
+    /// caller lưu cùng đơn mới. Đơn Pending đã quá hạn để worker xử lý.
+    /// </summary>
+    private async Task SupersedePendingOrdersAsync(Guid userId, DateTime nowUtc)
+    {
+        var open = (await _orderRepo.FindAsync(o =>
+            o.UserId == userId && o.Status == PaymentStatus.Pending && o.ExpiredAt > nowUtc)).ToList();
+
+        foreach (var o in open)
+        {
+            o.Status        = PaymentStatus.Expired;
+            o.FailureReason = "Thay bằng đơn mới";
+            _orderRepo.Update(o);
+        }
+
+        if (open.Count > 0)
+            _logger.LogInformation("Superseded {Count} open pending order(s) of user {UserId}", open.Count, userId);
     }
 
     private async Task InvalidateUserCacheAsync(Guid userId, string? email)
     {
-        await _cache.RemoveAsync(string.Format(USER_CACHE_KEY, userId));
+        await _cache.RemoveAsync(UserCacheKeys.ById(userId));
         await _cache.RemoveAsync(string.Format(SUB_CACHE_KEY, userId));
 
-        // Xóa thêm cache key của SubscriptionChecker (dùng key riêng ":isPremium")
-        // để tránh trường hợp user vừa thanh toán xong nhưng content vẫn bị chặn
+        // Key riêng của SubscriptionChecker, tránh user vừa thanh toán xong mà content vẫn bị chặn
         await _cache.RemoveAsync($"subscription:{userId}:isPremium");
 
         if (!string.IsNullOrEmpty(email))
-            await _cache.RemoveAsync($"user:email:{email.ToLower()}");
+            await _cache.RemoveAsync(UserCacheKeys.ByEmail(email));
     }
-    
-     /// <summary>
-    /// Tổng hợp số liệu cho Dashboard admin:
-    ///   - Tổng doanh thu / đơn hàng toàn thời gian
-    ///   - Doanh thu tháng này vs tháng trước + MoM growth
-    ///   - Số user Premium đang active + sắp hết hạn
-    /// </summary>
-    public async Task<RevenueSummaryDTO> GetRevenueSummaryAsync()
-    {
-        var allOrders = await _orderRepo.FindAsync(_ => true);
-        var allSubs   = await _subRepo.FindAsync(_ => true);
- 
-        var now       = DateTime.UtcNow;
-        var thisMonth = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var lastMonth = thisMonth.AddMonths(-1);
- 
-        var successOrders  = allOrders.Where(o => o.Status == PaymentStatus.Success).ToList();
-        var failedOrders   = allOrders.Where(o => o.Status is PaymentStatus.Failed or PaymentStatus.Expired).ToList();
-        var pendingOrders  = allOrders.Where(o => o.Status == PaymentStatus.Pending).ToList();
- 
-        var totalRevenue   = successOrders.Sum(o => o.Amount);
-        var totalOrders    = allOrders.Count();
- 
-        var currentMonthOrders  = successOrders.Where(o => o.PaidAt >= thisMonth).ToList();
-        var lastMonthOrders     = successOrders.Where(o => o.PaidAt >= lastMonth && o.PaidAt < thisMonth).ToList();
- 
-        var currentMonthRevenue = currentMonthOrders.Sum(o => o.Amount);
-        var lastMonthRevenue    = lastMonthOrders.Sum(o => o.Amount);
- 
-        double momGrowth = lastMonthRevenue == 0
-            ? (currentMonthRevenue > 0 ? 100.0 : 0.0)
-            : Math.Round((double)(currentMonthRevenue - lastMonthRevenue) / lastMonthRevenue * 100, 1);
- 
-        double successRate = totalOrders == 0
-            ? 0
-            : Math.Round((double)successOrders.Count / totalOrders * 100, 1);
- 
-        var activePremium   = allSubs.Count(s => s.SubscriptionType == SubscriptionTypes.Premium && s.ExpiredAt > now);
-        var expiringIn7Days = allSubs.Count(s =>
-            s.SubscriptionType == SubscriptionTypes.Premium
-            && s.ExpiredAt > now
-            && s.ExpiredAt <= now.AddDays(7));
- 
-        return new RevenueSummaryDTO
-        {
-            TotalRevenue           = totalRevenue,
-            TotalOrders            = totalOrders,
-            SuccessOrders          = successOrders.Count,
-            FailedOrders           = failedOrders.Count,
-            PendingOrders          = pendingOrders.Count,
-            SuccessRate            = successRate,
-            CurrentMonthRevenue    = currentMonthRevenue,
-            CurrentMonthOrders     = currentMonthOrders.Count,
-            LastMonthRevenue       = lastMonthRevenue,
-            MonthOverMonthGrowth   = momGrowth,
-            ActivePremiumUsers     = activePremium,
-            ExpiringIn7Days        = expiringIn7Days
-        };
-    }
- 
-    // ── [Admin] Revenue Chart ─────────────────────────────────────────────────
- 
+
     /// <summary>
-    /// Dữ liệu biểu đồ doanh thu:
-    ///   groupBy="month" + year=2024        → 12 điểm Jan–Dec 2024
-    ///   groupBy="day"   + year=2024&month=5 → từng ngày trong tháng 5/2024
+    /// Đơn Pending đã quá ExpiredAt coi là Expired khi THỐNG KÊ / LIỆT KÊ cho admin.
+    /// Chỉ là cách hiển thị: DB không bị đổi nên IPN đến muộn vẫn xử lý được như cũ.
     /// </summary>
-    public async Task<RevenueChartDTO> GetRevenueChartAsync(string groupBy, int year, int? month = null)
+    private static string EffectiveStatus(PaymentOrder o, DateTime nowUtc) =>
+        o.Status == PaymentStatus.Pending && o.ExpiredAt <= nowUtc ? PaymentStatus.Expired : o.Status;
+
+    // ── Hết hạn đơn Pending ───────────────────────────────────────────────────
+
+    public async Task<int> ExpireStaleOrdersAsync(CancellationToken ct = default)
     {
-        var successOrders = await _orderRepo.FindAsync(
-            o => o.Status == PaymentStatus.Success && o.PaidAt.HasValue);
- 
-        var filtered = successOrders.Where(o => o.PaidAt!.Value.Year == year);
- 
-        List<RevenueDataPointDTO> dataPoints;
- 
-        if (groupBy == "day" && month.HasValue)
-        {
-            // Từng ngày trong tháng
-            filtered = filtered.Where(o => o.PaidAt!.Value.Month == month.Value);
-            var daysInMonth = DateTime.DaysInMonth(year, month.Value);
- 
-            dataPoints = Enumerable.Range(1, daysInMonth).Select(day =>
-            {
-                var dayOrders = filtered.Where(o => o.PaidAt!.Value.Day == day).ToList();
-                return new RevenueDataPointDTO
-                {
-                    Label   = $"{year}-{month.Value:D2}-{day:D2}",
-                    Revenue = dayOrders.Sum(o => o.Amount),
-                    Orders  = dayOrders.Count
-                };
-            }).ToList();
-        }
-        else
-        {
-            // Từng tháng trong năm (default)
-            dataPoints = Enumerable.Range(1, 12).Select(m =>
-            {
-                var monthOrders = filtered.Where(o => o.PaidAt!.Value.Month == m).ToList();
-                return new RevenueDataPointDTO
-                {
-                    Label   = $"{year}-{m:D2}",
-                    Revenue = monthOrders.Sum(o => o.Amount),
-                    Orders  = monthOrders.Count
-                };
-            }).ToList();
-        }
- 
-        return new RevenueChartDTO
-        {
-            GroupBy      = groupBy,
-            DataPoints   = dataPoints,
-            TotalRevenue = dataPoints.Sum(d => d.Revenue),
-            TotalOrders  = dataPoints.Sum(d => d.Orders)
-        };
-    }
- 
-    // ── [Admin] Revenue By Plan ───────────────────────────────────────────────
- 
-    /// <summary>
-    /// Phân tích doanh thu theo từng gói (monthly vs yearly).
-    /// from/to = null → toàn thời gian.
-    /// </summary>
-    public async Task<List<RevenueByPlanDTO>> GetRevenueByPlanAsync(DateTime? from = null, DateTime? to = null)
-    {
-        var successOrders = await _orderRepo.FindAsync(o => o.Status == PaymentStatus.Success);
- 
-        if (from.HasValue) successOrders = successOrders.Where(o => o.PaidAt >= from.Value);
-        if (to.HasValue)   successOrders = successOrders.Where(o => o.PaidAt <= to.Value);
- 
-        var total = successOrders.Sum(o => o.Amount);
- 
-        var grouped = successOrders
-            .GroupBy(o => new { o.PlanId, o.PlanName })
-            .Select(g => new RevenueByPlanDTO
-            {
-                PlanId       = g.Key.PlanId,
-                PlanName     = g.Key.PlanName,
-                Revenue      = g.Sum(o => o.Amount),
-                Orders       = g.Count(),
-                RevenueShare = total == 0 ? 0 : Math.Round((double)g.Sum(o => o.Amount) / total * 100, 1)
-            })
-            .OrderByDescending(x => x.Revenue)
-            .ToList();
- 
-        return grouped;
-    }
- 
-    // ── [Admin] Danh sách đơn hàng có filter ─────────────────────────────────
- 
-    /// <summary>
-    /// Lấy danh sách đơn hàng với filter linh hoạt:
-    ///   - Lọc theo status, planId, provider, khoảng ngày
-    ///   - Search theo OrderCode hoặc email user
-    ///   - Phân trang
-    ///
-    /// LƯU Ý: join với User để lấy email — nếu IRepository không hỗ trợ
-    /// Include/Join, hãy inject DbContext trực tiếp hoặc tạo IPaymentRepository riêng.
-    /// Code dưới đây minh hoạ với FindAsync + in-memory join (phù hợp dataset nhỏ).
-    /// Production nên dùng IQueryable để push filter xuống DB.
-    /// </summary>
-    public async Task<PaginatedDTO<AdminOrderDTO>> GetAdminOrdersAsync(AdminOrderFilterDTO filter)
-    {
-        var allOrders = await _orderRepo.FindAsync(_ => true);
-        var allUsers  = await _userRepo.FindAsync(_ => true);
- 
-        // Build email lookup: userId → email
-        var emailMap = allUsers.ToDictionary(u => u.Id, u => u.Email ?? string.Empty);
- 
-        // Apply filters
-        var query = allOrders.AsEnumerable();
- 
-        if (!string.IsNullOrWhiteSpace(filter.Status))
-            query = query.Where(o => o.Status == filter.Status);
- 
-        if (!string.IsNullOrWhiteSpace(filter.PlanId))
-            query = query.Where(o => o.PlanId == filter.PlanId);
- 
-        if (!string.IsNullOrWhiteSpace(filter.Provider))
-            query = query.Where(o => o.Provider == filter.Provider);
- 
-        if (filter.From.HasValue)
-            query = query.Where(o => o.CreatedAt >= filter.From.Value);
- 
-        if (filter.To.HasValue)
-            query = query.Where(o => o.CreatedAt <= filter.To.Value);
- 
-        if (!string.IsNullOrWhiteSpace(filter.Search))
-        {
-            var kw = filter.Search.Trim().ToLower();
-            query = query.Where(o =>
-                o.OrderCode.ToLower().Contains(kw)
-                || (emailMap.TryGetValue(o.UserId, out var email) && email.ToLower().Contains(kw)));
-        }
- 
-        // Count trước khi phân trang
-        var ordered    = query.OrderByDescending(o => o.CreatedAt).ToList();
-        var totalCount = ordered.Count;
- 
-        // Phân trang
-        var pageSize = Math.Max(1, Math.Min(filter.PageSize, 100));
-        var page     = Math.Max(1, filter.Page);
-        var items    = ordered
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .Select(o => new AdminOrderDTO
-            {
-                Id             = o.Id,
-                OrderCode      = o.OrderCode,
-                UserId         = o.UserId,
-                UserEmail      = emailMap.TryGetValue(o.UserId, out var em) ? em : string.Empty,
-                PlanName       = o.PlanName,
-                Amount         = o.Amount,
-                Provider       = o.Provider,
-                Status         = o.Status,
-                FailureReason  = o.FailureReason,
-                GatewayTransId = o.GatewayTransId,
-                CreatedAt      = o.CreatedAt,
-                PaidAt         = o.PaidAt
-            })
-            .ToList();
- 
-        return new PaginatedDTO<AdminOrderDTO>
-        {
-            Items      = items,
-            TotalCount = totalCount,
-            PageNumber = page,
-            PageSize   = pageSize
-        };
+        var n = await _paymentOrders.ExpireStalePendingAsync(DateTime.UtcNow - ExpiryGrace, ct);
+        if (n > 0)
+            _logger.LogInformation("Expired {Count} stale pending orders", n);
+        return n;
     }
 }

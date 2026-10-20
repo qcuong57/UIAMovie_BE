@@ -28,9 +28,11 @@ public class MovieDbContext : DbContext
     public DbSet<MovieDirector> MovieDirectors { get; set; }
 
     public DbSet<Favorite> Favorites { get; set; }
+
     public DbSet<WatchHistory> WatchHistories { get; set; }
+
     // ── View counting (chuẩn Netflix) — tách biệt với WatchHistory ──
-    public DbSet<MovieViewSession>  MovieViewSessions  { get; set; }
+    public DbSet<MovieViewSession> MovieViewSessions { get; set; }
     public DbSet<TvShowViewSession> TvShowViewSessions { get; set; }
     public DbSet<RatingReview> RatingReviews { get; set; }
     public DbSet<ReviewReply> ReviewReplies { get; set; }
@@ -397,9 +399,9 @@ public class MovieDbContext : DbContext
             entity.HasKey(s => s.Id);
 
             entity.HasOne(s => s.Movie)
-                  .WithMany()                       // hoặc .WithMany(m => m.MovieViewSessions)
-                  .HasForeignKey(s => s.MovieId)
-                  .OnDelete(DeleteBehavior.Cascade);
+                .WithMany() // hoặc .WithMany(m => m.MovieViewSessions)
+                .HasForeignKey(s => s.MovieId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             entity.Property(s => s.GuestId).HasMaxLength(64);
 
@@ -410,23 +412,23 @@ public class MovieDbContext : DbContext
 
             // Postgres coi NULL != NULL trong unique index → tách 2 partial unique index
             entity.HasIndex(s => new { s.UserId, s.MovieId, s.ViewDate })
-                  .IsUnique()
-                  .HasFilter("\"UserId\" IS NOT NULL")
-                  .HasDatabaseName("UX_MovieViewSessions_User_Movie_Date");
+                .IsUnique()
+                .HasFilter("\"UserId\" IS NOT NULL")
+                .HasDatabaseName("UX_MovieViewSessions_User_Movie_Date");
 
             entity.HasIndex(s => new { s.GuestId, s.MovieId, s.ViewDate })
-                  .IsUnique()
-                  .HasFilter("\"GuestId\" IS NOT NULL")
-                  .HasDatabaseName("UX_MovieViewSessions_Guest_Movie_Date");
+                .IsUnique()
+                .HasFilter("\"GuestId\" IS NOT NULL")
+                .HasDatabaseName("UX_MovieViewSessions_Guest_Movie_Date");
 
             // Phục vụ trending: lọc IsCountedAsView + LastHeartbeatAt, group theo MovieId
             entity.HasIndex(s => new { s.MovieId, s.LastHeartbeatAt })
-                  .HasFilter("\"IsCountedAsView\" = TRUE")
-                  .HasDatabaseName("IX_MovieViewSessions_Counted_Movie_Heartbeat");
+                .HasFilter("\"IsCountedAsView\" = TRUE")
+                .HasDatabaseName("IX_MovieViewSessions_Counted_Movie_Heartbeat");
             // Trending + thống kê admin: lọc theo ViewDate, chỉ session hợp lệ, group theo MovieId
             entity.HasIndex(s => new { s.ViewDate, s.MovieId })
-                  .HasFilter("\"IsCountedAsView\" = TRUE")
-                  .HasDatabaseName("IX_MovieViewSessions_Counted_ViewDate_Movie");
+                .HasFilter("\"IsCountedAsView\" = TRUE")
+                .HasDatabaseName("IX_MovieViewSessions_Counted_ViewDate_Movie");
         });
 
         modelBuilder.Entity<TvShowViewSession>(entity =>
@@ -434,9 +436,9 @@ public class MovieDbContext : DbContext
             entity.HasKey(s => s.Id);
 
             entity.HasOne(s => s.TvShow)
-                  .WithMany()
-                  .HasForeignKey(s => s.TvShowId)
-                  .OnDelete(DeleteBehavior.Cascade);
+                .WithMany()
+                .HasForeignKey(s => s.TvShowId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             entity.Property(s => s.GuestId).HasMaxLength(64);
 
@@ -445,21 +447,21 @@ public class MovieDbContext : DbContext
                 "(\"UserId\" IS NOT NULL AND \"GuestId\" IS NULL) OR (\"UserId\" IS NULL AND \"GuestId\" IS NOT NULL)"));
 
             entity.HasIndex(s => new { s.UserId, s.TvShowId, s.ViewDate })
-                  .IsUnique()
-                  .HasFilter("\"UserId\" IS NOT NULL")
-                  .HasDatabaseName("UX_TvShowViewSessions_User_Show_Date");
+                .IsUnique()
+                .HasFilter("\"UserId\" IS NOT NULL")
+                .HasDatabaseName("UX_TvShowViewSessions_User_Show_Date");
 
             entity.HasIndex(s => new { s.GuestId, s.TvShowId, s.ViewDate })
-                  .IsUnique()
-                  .HasFilter("\"GuestId\" IS NOT NULL")
-                  .HasDatabaseName("UX_TvShowViewSessions_Guest_Show_Date");
+                .IsUnique()
+                .HasFilter("\"GuestId\" IS NOT NULL")
+                .HasDatabaseName("UX_TvShowViewSessions_Guest_Show_Date");
 
             entity.HasIndex(s => new { s.TvShowId, s.LastHeartbeatAt })
-                  .HasFilter("\"IsCountedAsView\" = TRUE")
-                  .HasDatabaseName("IX_TvShowViewSessions_Counted_Show_Heartbeat");
+                .HasFilter("\"IsCountedAsView\" = TRUE")
+                .HasDatabaseName("IX_TvShowViewSessions_Counted_Show_Heartbeat");
             entity.HasIndex(s => new { s.ViewDate, s.TvShowId })
-                  .HasFilter("\"IsCountedAsView\" = TRUE")
-                  .HasDatabaseName("IX_TvShowViewSessions_Counted_ViewDate_Show");
+                .HasFilter("\"IsCountedAsView\" = TRUE")
+                .HasDatabaseName("IX_TvShowViewSessions_Counted_ViewDate_Show");
         });
 
         // ── RatingReview ──────────────────────────────────────────────────────
@@ -513,7 +515,9 @@ public class MovieDbContext : DbContext
         modelBuilder.Entity<UserSubscription>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.HasIndex(e => e.UserId);
+            // Mỗi user đúng MỘT dòng gói (code luôn dùng FirstOrDefault theo UserId).
+            // Trước khi migrate: xóa dòng trùng, xem README (Roadmap / Database).
+            entity.HasIndex(e => e.UserId).IsUnique();
 
             entity.HasOne(e => e.User)
                 .WithMany()
@@ -530,7 +534,12 @@ public class MovieDbContext : DbContext
         {
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.OrderCode).IsUnique();
-            entity.HasIndex(e => e.UserId);
+
+            // Phục vụ PaymentExpiryWorker, thay thế đơn Pending khi tạo đơn mới, và báo cáo doanh thu
+            entity.HasIndex(e => new { e.UserId, e.Status }); // thay cho index UserId đơn lẻ
+            entity.HasIndex(e => new { e.Status, e.ExpiredAt });
+            entity.HasIndex(e => e.PaidAt);
+            entity.HasIndex(e => e.CreatedAt);
 
             entity.HasOne(e => e.User)
                 .WithMany()

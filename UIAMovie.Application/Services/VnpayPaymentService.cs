@@ -4,7 +4,6 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Options;
-using UIAMovie.Application.DTOs;
 
 namespace UIAMovie.Application.Services;
 
@@ -14,6 +13,11 @@ public class VnpayOptions
     public string HashSecret { get; set; } = string.Empty;
     public string BaseUrl { get; set; } = "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html";
     public string ReturnUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Không còn gửi sang VNPay: IPN URL được cấu hình trong merchant portal, không nhận qua tham số.
+    /// Giữ lại để không làm vỡ appsettings hiện có.
+    /// </summary>
     public string IpnUrl { get; set; } = string.Empty;
 }
 
@@ -23,7 +27,11 @@ public interface IVnpayPaymentService
     string CreatePaymentUrl(string orderCode, long amount, string orderInfo, string ipAddress,
         string? returnUrl = null);
 
-    bool VerifySignature(VnpayIpnDTO ipn);
+    /// <summary>
+    /// Xác thực chữ ký từ TOÀN BỘ query string gốc VNPay gửi về (không qua DTO),
+    /// nên VNPay có thêm tham số mới (vnp_PromotionCode...) thì chữ ký vẫn đúng.
+    /// </summary>
+    bool VerifySignature(IReadOnlyDictionary<string, string> rawQuery);
 }
 
 public class VnpayPaymentService : IVnpayPaymentService
@@ -32,11 +40,15 @@ public class VnpayPaymentService : IVnpayPaymentService
 
     public VnpayPaymentService(IOptions<VnpayOptions> opts) => _opts = opts.Value;
 
+    /// <summary>VNPay yêu cầu giờ GMT+7. Việt Nam không có DST nên cộng cố định 7 giờ, chạy đúng trên mọi OS/múi giờ server.</summary>
+    private static DateTime VietnamNow() => DateTime.UtcNow.AddHours(7);
+
     public string CreatePaymentUrl(string orderCode, long amount, string orderInfo, string ipAddress,
         string? returnUrl = null)
     {
-        // Ưu tiên returnUrl truyền vào (từ frontend), fallback về config
         var effectiveReturnUrl = !string.IsNullOrWhiteSpace(returnUrl) ? returnUrl : _opts.ReturnUrl;
+
+        var now = VietnamNow();
 
         var vnpParams = new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
@@ -44,7 +56,7 @@ public class VnpayPaymentService : IVnpayPaymentService
             ["vnp_Command"] = "pay",
             ["vnp_TmnCode"] = _opts.TmnCode,
             ["vnp_Amount"] = (amount * 100).ToString(),
-            ["vnp_CreateDate"] = DateTime.Now.ToString("yyyyMMddHHmmss"),
+            ["vnp_CreateDate"] = now.ToString("yyyyMMddHHmmss"),
             ["vnp_CurrCode"] = "VND",
             ["vnp_IpAddr"] = ipAddress,
             ["vnp_Locale"] = "vn",
@@ -52,15 +64,8 @@ public class VnpayPaymentService : IVnpayPaymentService
             ["vnp_OrderType"] = "other",
             ["vnp_ReturnUrl"] = effectiveReturnUrl,
             ["vnp_TxnRef"] = orderCode,
-            ["vnp_ExpireDate"] = DateTime.Now.AddMinutes(15).ToString("yyyyMMddHHmmss"),
+            ["vnp_ExpireDate"] = now.AddMinutes(15).ToString("yyyyMMddHHmmss"),
         };
-
-        // Chỉ thêm IpnUrl nếu là URL thật (không phải placeholder)
-        if (!string.IsNullOrEmpty(_opts.IpnUrl)
-            && !_opts.IpnUrl.Contains("your-domain.com"))
-        {
-            vnpParams["vnp_IpnUrl"] = _opts.IpnUrl;
-        }
 
         // VNPay chuẩn: hash dùng WebUtility.UrlEncode (space → '+', giống PHP urlencode)
         var hashData = BuildHashString(vnpParams);
@@ -71,35 +76,30 @@ public class VnpayPaymentService : IVnpayPaymentService
         return $"{_opts.BaseUrl}?{urlQuery}&vnp_SecureHash={secureHash}";
     }
 
-    public bool VerifySignature(VnpayIpnDTO ipn)
+    public bool VerifySignature(IReadOnlyDictionary<string, string> rawQuery)
     {
-        var vnpParams = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        if (!rawQuery.TryGetValue("vnp_SecureHash", out var receivedHash)
+            || string.IsNullOrWhiteSpace(receivedHash))
+            return false;
 
-        void Add(string key, string? value)
+        var vnpParams = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in rawQuery)
         {
-            if (!string.IsNullOrEmpty(value)) vnpParams[key] = value;
+            if (!key.StartsWith("vnp_", StringComparison.Ordinal)) continue;
+            if (key is "vnp_SecureHash" or "vnp_SecureHashType") continue;
+            if (string.IsNullOrEmpty(value)) continue;
+            vnpParams[key] = value;
         }
 
-        Add("vnp_TmnCode", ipn.vnp_TmnCode);
-        Add("vnp_Amount", ipn.vnp_Amount.ToString());
-        Add("vnp_BankCode", ipn.vnp_BankCode);
-        Add("vnp_BankTranNo", ipn.vnp_BankTranNo);
-        Add("vnp_CardType", ipn.vnp_CardType);
-        Add("vnp_PayDate", ipn.vnp_PayDate);
-        Add("vnp_OrderInfo", ipn.vnp_OrderInfo);
-        Add("vnp_TransactionNo", ipn.vnp_TransactionNo);
-        Add("vnp_ResponseCode", ipn.vnp_ResponseCode);
-        Add("vnp_TransactionStatus", ipn.vnp_TransactionStatus);
-        Add("vnp_TxnRef", ipn.vnp_TxnRef);
+        var computed = ComputeHmacSha512(BuildHashString(vnpParams), _opts.HashSecret);
 
-        var hashData = BuildHashString(vnpParams);
-        var computedHash = ComputeHmacSha512(hashData, _opts.HashSecret);
-        return string.Equals(computedHash, ipn.vnp_SecureHash, StringComparison.OrdinalIgnoreCase);
+        var a = Encoding.ASCII.GetBytes(computed);
+        var b = Encoding.ASCII.GetBytes(receivedHash.Trim().ToLowerInvariant());
+        return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
     }
 
     /// <summary>
     /// Chuỗi để tính HMAC — dùng WebUtility.UrlEncode giống PHP urlencode (chuẩn VNPay).
-    /// space → '+', ký tự đặc biệt → %XX
     /// </summary>
     private static string BuildHashString(SortedDictionary<string, string> dict)
     {
@@ -115,9 +115,7 @@ public class VnpayPaymentService : IVnpayPaymentService
         return sb.ToString();
     }
 
-    /// <summary>
-    /// Chuỗi để ghép vào URL redirect — dùng Uri.EscapeDataString (RFC 3986).
-    /// </summary>
+    /// <summary>Chuỗi ghép vào URL redirect — dùng Uri.EscapeDataString (RFC 3986).</summary>
     private static string BuildUrlString(SortedDictionary<string, string> dict)
     {
         var sb = new StringBuilder();
@@ -136,6 +134,6 @@ public class VnpayPaymentService : IVnpayPaymentService
     {
         using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(key));
         var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(data));
-        return Convert.ToHexString(hash).ToLower();
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 }

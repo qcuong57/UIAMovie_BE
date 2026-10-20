@@ -51,9 +51,13 @@ public class UserController : ControllerBase
     public async Task<IActionResult> UpdateUser(Guid id, [FromBody] UpdateUserDTO dto)
     {
         var (success, message) = await _userService.UpdateUserAsync(id, dto);
-        return success
-            ? Ok(new ApiResponseDTO<object> { Message = message })
-            : NotFound(new ApiErrorResponseDTO { Message = message, StatusCode = 404 });
+        if (success)
+            return Ok(new ApiResponseDTO<object> { Message = message });
+
+        // Lỗi validate (tên trùng, sai định dạng, loại gói...) là 400, chỉ "không tìm thấy" mới là 404.
+        return message == "Không tìm thấy user"
+            ? NotFound(new ApiErrorResponseDTO { Message = message, StatusCode = 404 })
+            : BadRequest(new ApiErrorResponseDTO { Message = message, StatusCode = 400 });
     }
 
     /// <summary>[Admin] Thay đổi role của user (User ↔ Admin)</summary>
@@ -61,6 +65,10 @@ public class UserController : ControllerBase
     [Authorize(Roles = Roles.Admin)]
     public async Task<IActionResult> UpdateRole(Guid id, [FromBody] UpdateRoleDTO dto)
     {
+        // Không cho admin tự đổi role của chính mình (tránh admin cuối cùng tự hạ quyền)
+        if (id == GetUserId())
+            return BadRequest(new ApiErrorResponseDTO { Message = "Không thể tự đổi role của mình", StatusCode = 400 });
+
         var (success, message) = await _userService.UpdateUserRoleAsync(id, dto.Role);
         return success
             ? Ok(new ApiResponseDTO<object> { Message = message })
@@ -126,6 +134,9 @@ public class UserController : ControllerBase
     [HttpPut("me")]
     public async Task<IActionResult> UpdateMe([FromBody] UpdateUserDTO dto)
     {
+        // Gói thành viên chỉ do admin / luồng thanh toán đặt; user không được tự nâng gói.
+        dto.SubscriptionType = null;
+
         var (success, message) = await _userService.UpdateUserAsync(GetUserId(), dto);
         return success
             ? Ok(new ApiResponseDTO<object> { Message = message })
@@ -144,7 +155,12 @@ public class UserController : ControllerBase
 
     // ─── Helper ──────────────────────────────────────────────────────────────
 
-    private Guid GetUserId() =>
-        Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-            ?? Guid.Empty.ToString());
+    private Guid GetUserId()
+    {
+        var claim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (!Guid.TryParse(claim, out var userId))
+            throw new UnauthorizedAccessException("Không xác định được người dùng từ token");
+
+        return userId;
+    }
 }

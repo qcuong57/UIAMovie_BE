@@ -11,11 +11,26 @@ namespace UIAMovie.Infrastructure.Security;
 
 public class JwtTokenGenerator : IJwtTokenGenerator
 {
+    private const int DefaultAccessTokenMinutes = 15;
+    private const int MaxAccessTokenMinutes = 60;
+
     private readonly IConfiguration _configuration;
 
     public JwtTokenGenerator(IConfiguration configuration)
     {
         _configuration = configuration;
+    }
+
+    // Jwt:AccessTokenMinutes: mặc định 15 phút, tối đa 60 phút (giá trị lớn hơn bị cắt xuống 60).
+    public TimeSpan AccessTokenLifetime
+    {
+        get
+        {
+            var minutes = int.TryParse(_configuration["Jwt:AccessTokenMinutes"], out var m) && m > 0
+                ? m
+                : DefaultAccessTokenMinutes;
+            return TimeSpan.FromMinutes(Math.Min(minutes, MaxAccessTokenMinutes));
+        }
     }
 
     public string GenerateAccessToken(Guid userId, string email, string role)
@@ -37,7 +52,8 @@ public class JwtTokenGenerator : IJwtTokenGenerator
         var tokenDescriptor = new SecurityTokenDescriptor
         {
             Subject            = new ClaimsIdentity(claims),
-            Expires            = DateTime.UtcNow.AddMinutes(30), // 30 phút an toàn
+            IssuedAt           = DateTime.UtcNow, // claim iat: so với mốc thu hồi token (TokenRevocation)
+            Expires            = DateTime.UtcNow.Add(AccessTokenLifetime),
             Issuer             = issuer,
             Audience           = audience,
             SigningCredentials = new SigningCredentials(
