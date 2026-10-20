@@ -5,7 +5,10 @@
 
 namespace UIAMovie.Application.DTOs;
 
-/// <summary>Toàn bộ số liệu thời gian tính theo giờ Việt Nam (GMT+7), tiền là VND thật.</summary>
+/// <summary>
+/// Toàn bộ số liệu thời gian tính theo giờ Việt Nam (GMT+7), tiền là VND thật.
+/// Doanh thu là số GỘP khách đã trả qua cổng: chưa trừ phí cổng thanh toán hay hoàn tiền.
+/// </summary>
 public class RevenueSummaryDTO
 {
     // Tổng toàn thời gian
@@ -16,7 +19,10 @@ public class RevenueSummaryDTO
     public int FailedOrders { get; set; }    // cổng báo lỗi / sai số tiền
     public int ExpiredOrders { get; set; }   // bỏ dở, quá hạn (tách riêng khỏi Failed)
 
-    /// <summary>Success / (Success + Failed + Expired). Không tính đơn Pending vì chưa có kết quả.</summary>
+    /// <summary>Đơn bị thay bằng đơn mới. Có trong TotalOrders nhưng KHÔNG tính vào SuccessRate.</summary>
+    public int CancelledOrders { get; set; }
+
+    /// <summary>Success / (Success + Failed + Expired). Không tính Pending (chưa có kết quả) và Cancelled (bị thay thế).</summary>
     public double SuccessRate { get; set; }
     public long AverageOrderValue { get; set; }
 
@@ -96,7 +102,7 @@ public class AdminOrderDTO
     public long Amount { get; set; }
     public string Provider { get; set; } = string.Empty;
 
-    /// <summary>Trạng thái HIỆU LỰC: Pending quá hạn hiển thị là "expired".</summary>
+    /// <summary>Trạng thái HIỆU LỰC: Pending quá hạn hiển thị là "expired". Giá trị: pending | success | failed | expired | cancelled.</summary>
     public string Status { get; set; } = string.Empty;
     public string? FailureReason { get; set; }
     public string? GatewayTransId { get; set; }

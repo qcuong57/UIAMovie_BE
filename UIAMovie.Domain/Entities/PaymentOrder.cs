@@ -28,10 +28,10 @@ public class PaymentOrder
     /// <summary>Số tiền VND</summary>
     public long Amount { get; set; }
 
-    /// <summary>Hiện chỉ hỗ trợ "vnpay"</summary>
+    /// <summary>"vnpay" | "sepay"</summary>
     public string Provider { get; set; } = string.Empty;
 
-    /// <summary>"pending" | "success" | "failed" | "expired"</summary>
+    /// <summary>"pending" | "success" | "failed" | "expired" | "cancelled"</summary>
     public string Status { get; set; } = PaymentStatus.Pending;
 
     public string? FailureReason { get; set; }
@@ -75,6 +75,14 @@ public static class PaymentStatus
     public const string Success = "success";
     public const string Failed = "failed";
     public const string Expired = "expired";
+
+    /// <summary>
+    /// Đơn bị thay bằng đơn mới (user chọn lại gói khi đơn cũ còn chờ). Không phải thất bại hay bỏ dở
+    /// nên KHÔNG tính vào tỉ lệ thành công. Callback thành công đến muộn vẫn được xác nhận.
+    /// </summary>
+    public const string Cancelled = "cancelled";
+
+    public static readonly IReadOnlyList<string> All = new[] { Pending, Success, Failed, Expired, Cancelled };
 }
 
 public static class SubscriptionTypes

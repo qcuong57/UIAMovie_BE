@@ -153,6 +153,11 @@ builder.Services.AddScoped<IViewStatsService, ViewStatsService>();
 builder.Services.AddScoped<IPaymentOrderRepository, PaymentOrderRepository>();
 builder.Services.AddScoped<IRevenueService, RevenueService>();
 builder.Services.AddHostedService<PaymentExpiryWorker>();
+
+// Email biên nhận thanh toán (hàng đợi nền, gửi SMTP bằng section "Email")
+builder.Services.AddSingleton<PaymentReceiptEmailNotifier>();
+builder.Services.AddSingleton<IPaymentReceiptNotifier>(sp => sp.GetRequiredService<PaymentReceiptEmailNotifier>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PaymentReceiptEmailNotifier>());
 builder.Services.Configure<SepayOptions>(builder.Configuration.GetSection("Sepay"));
 builder.Services.AddScoped<ISepayPaymentService, SepayPaymentService>();
 builder.Services.AddSingleton<IClock, VnClock>(); // "hôm nay" theo giờ VN cho ViewDate/thống kê/trending

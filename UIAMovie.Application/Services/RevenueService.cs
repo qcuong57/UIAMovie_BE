@@ -74,6 +74,7 @@ public class RevenueService : IRevenueService
         var failed  = T(PaymentStatus.Failed);
         var expired = T(PaymentStatus.Expired);
         var pending = T(PaymentStatus.Pending);
+        var cancelled = T(PaymentStatus.Cancelled);
 
         var thisMonth = paid.Where(p => p.PaidAtUtc >= monthStartUtc).ToList();
         var lastMonth = paid.Where(p => p.PaidAtUtc < monthStartUtc).ToList();
@@ -82,6 +83,7 @@ public class RevenueService : IRevenueService
         var thisMonthRevenue = thisMonth.Sum(p => p.Amount);
         var lastMonthRevenue = lastMonth.Sum(p => p.Amount);
 
+        // Cancelled (bị thay bằng đơn mới) không phải thất bại/bỏ dở → không nằm trong mẫu số tỉ lệ thành công.
         var finalized = success.Count + failed.Count + expired.Count;
 
         return new RevenueSummaryDTO
@@ -92,6 +94,7 @@ public class RevenueService : IRevenueService
             PendingOrders        = pending.Count,
             FailedOrders         = failed.Count,
             ExpiredOrders        = expired.Count,
+            CancelledOrders      = cancelled.Count,
             SuccessRate          = finalized == 0 ? 0 : Math.Round((double)success.Count / finalized * 100, 1),
             AverageOrderValue    = success.Count == 0 ? 0 : success.Amount / success.Count,
 
@@ -188,7 +191,7 @@ public class RevenueService : IRevenueService
         var pageSize = Math.Clamp(filter.PageSize, 1, 100);
         var page     = Math.Max(1, filter.Page);
 
-        var query = new OrderQuery(filter.Status, filter.PlanId, filter.Provider,
+        var query = new OrderQuery(NormalizeStatus(filter.Status), filter.PlanId, filter.Provider,
             fromUtc, toUtc, filter.Search, FilterByPaidAt: false, NowUtc: DateTime.UtcNow);
 
         var (items, total) = await _orders.SearchOrdersAsync(query, (page - 1) * pageSize, pageSize, ct);
@@ -209,7 +212,7 @@ public class RevenueService : IRevenueService
         ValidateRange(filter.From, filter.To);
         var (fromUtc, toUtc) = ToUtcRange(filter.From, filter.To);
 
-        var status = string.IsNullOrWhiteSpace(filter.Status) ? PaymentStatus.Success : filter.Status.Trim();
+        var status = NormalizeStatus(filter.Status) ?? PaymentStatus.Success;
 
         // Đơn đã thanh toán → lọc theo NGÀY THANH TOÁN (mốc ghi nhận doanh thu); loại khác → ngày tạo.
         var query = new OrderQuery(status, filter.PlanId, filter.Provider, fromUtc, toUtc,
@@ -236,6 +239,16 @@ public class RevenueService : IRevenueService
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>Rỗng → null (không lọc). Giá trị lạ → 400 thay vì trả danh sách rỗng gây hiểu nhầm.</summary>
+    private static string? NormalizeStatus(string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status)) return null;
+        var s = status.Trim().ToLowerInvariant();
+        if (!PaymentStatus.All.Contains(s))
+            throw new ArgumentException($"status không hợp lệ: '{status.Trim()}'.");
+        return s;
+    }
 
     private static void ValidateRange(DateTime? from, DateTime? to)
     {

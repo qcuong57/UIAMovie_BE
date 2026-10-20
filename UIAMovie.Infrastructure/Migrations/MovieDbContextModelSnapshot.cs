@@ -1429,7 +1429,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$UHGKd4izQIHf4s2BaSBE3OrFx9Eqvh.ScNlHNUcYV8QZseeOZi72W",
+                            PasswordHash = "$2a$11$KmcGhecGUZg2tA5ouPcqUO0ZmTVLYfxgFWoBqv.JQnd8WQqNZJd4.",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),

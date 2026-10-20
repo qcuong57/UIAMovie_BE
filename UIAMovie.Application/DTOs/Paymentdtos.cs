@@ -65,7 +65,7 @@ public class PaymentHistoryDTO
     public string PlanName { get; set; } = string.Empty;
     public long Amount { get; set; }
     public string Provider { get; set; } = string.Empty; // "vnpay" | "sepay"
-    public string Status { get; set; } = string.Empty; // "pending" | "success" | "failed" | "expired"
+    public string Status { get; set; } = string.Empty; // "pending" | "success" | "failed" | "expired" | "cancelled"
     public string? FailureReason { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? PaidAt { get; set; }

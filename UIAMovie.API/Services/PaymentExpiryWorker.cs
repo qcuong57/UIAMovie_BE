@@ -1,5 +1,4 @@
-﻿// UIAMovie.API/Services/PaymentExpiryWorker.cs
-
+﻿
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -8,8 +7,8 @@ using UIAMovie.Application.Services;
 namespace UIAMovie.API.Services;
 
 /// <summary>
-/// Định kỳ chuyển đơn Pending quá hạn (+ thời gian ân hạn) sang Expired.
-/// KHÔNG xóa dữ liệu. Dùng UPDATE có điều kiện nên chạy trùng giữa nhiều instance vẫn an toàn.
+/// Định kỳ xử lý các đơn thanh toán Pending đã quá hạn.
+/// Việc chuyển trạng thái phải được thực hiện nguyên tử ở database.
 /// </summary>
 public sealed class PaymentExpiryWorker : BackgroundService
 {
@@ -18,33 +17,56 @@ public sealed class PaymentExpiryWorker : BackgroundService
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<PaymentExpiryWorker> _logger;
 
-    public PaymentExpiryWorker(IServiceScopeFactory scopes, ILogger<PaymentExpiryWorker> logger)
+    public PaymentExpiryWorker(
+        IServiceScopeFactory scopes,
+        ILogger<PaymentExpiryWorker> logger)
     {
         _scopes = scopes;
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(
+        CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            var startedAt = DateTimeOffset.UtcNow;
+
             try
             {
-                using var scope = _scopes.CreateScope();
-                var payments = scope.ServiceProvider.GetRequiredService<IPaymentService>();
+                await using var scope = _scopes.CreateAsyncScope();
+
+                var payments = scope.ServiceProvider
+                    .GetRequiredService<IPaymentService>();
+
                 await payments.ExpireStaleOrdersAsync(stoppingToken);
+
+                _logger.LogDebug(
+                    "Payment expiry scan completed in {ElapsedMs} ms",
+                    (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds);
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            catch (OperationCanceledException)
+                when (stoppingToken.IsCancellationRequested)
             {
                 break;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "PaymentExpiryWorker failed");
+                _logger.LogError(
+                    ex,
+                    "Payment expiry scan failed at {StartedAtUtc}",
+                    startedAt);
             }
 
-            try { await Task.Delay(Interval, stoppingToken); }
-            catch (OperationCanceledException) { break; }
+            try
+            {
+                await Task.Delay(Interval, stoppingToken);
+            }
+            catch (OperationCanceledException)
+                when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
         }
     }
 }
