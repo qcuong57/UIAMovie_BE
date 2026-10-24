@@ -11,10 +11,12 @@
 //   - Mọi write (create/update/delete slot) → invalidate cache theo contentType liên quan.
 
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Application.Interfaces.IRepositories;
 using UIAMovie.Application.Interfaces.IServices;
+using UIAMovie.Application.Options;
 using UIAMovie.Domain.Entities;
 
 namespace UIAMovie.Application.Services;
@@ -25,19 +27,29 @@ public class AdService : IAdService
     private readonly ICloudinaryService _cloudinary;
     private readonly ICacheService _cache;
     private readonly ILogger<AdService> _logger;
+    private readonly AdScheduleOptions _scheduleOptions;
 
     private static readonly TimeSpan AdCacheTtl = TimeSpan.FromMinutes(5);
+
+    private const string ScheduleSettingsKey = "ads:schedule-settings";
+
+    // Player chỉ phát 2 loại: phim lẻ và TẬP phim. TvShow là phạm vi "cả bộ" (áp cho mọi tập của bộ đó).
+    private static readonly AdContentType[] PlayableTypes = { AdContentType.Movie, AdContentType.Episode };
+    private const int MaxDurationSeconds = 24 * 3600; // chặn giá trị bậy từ endpoint public
+    private static readonly TimeSpan ScheduleSettingsTtl = TimeSpan.FromDays(365);
 
     public AdService(
         IAdRepository adRepo,
         ICloudinaryService cloudinary,
         ICacheService cache,
-        ILogger<AdService> logger)
+        ILogger<AdService> logger,
+        IOptions<AdScheduleOptions> scheduleOptions)
     {
         _adRepo = adRepo;
         _cloudinary = cloudinary;
         _cache = cache;
         _logger = logger;
+        _scheduleOptions = scheduleOptions.Value;
     }
 
     // ── Ad CRUD ───────────────────────────────────────────────────────────────
@@ -174,7 +186,10 @@ public class AdService : IAdService
         var ad = await _adRepo.GetByIdWithSlotsAsync(id);
         if (ad == null) return false;
 
-        // Invalidate trước khi xóa
+        // Xóa DB trước: nếu lỗi thì file Cloudinary vẫn còn, ad không bị "mất video"
+        await _adRepo.DeleteAsync(id);
+
+        // Invalidate SAU khi xóa, tránh request chen giữa nạp lại cache có ad cũ
         await InvalidateGlobalCacheAsync();
 
         if (!string.IsNullOrEmpty(ad.CloudinaryPublicId))
@@ -202,7 +217,6 @@ public class AdService : IAdService
             }
         }
 
-        await _adRepo.DeleteAsync(id);
         return true;
     }
 
@@ -324,14 +338,50 @@ public class AdService : IAdService
 
     public async Task<ContentAdsDTO> GetAdsForContentAsync(
         AdContentType contentType,
-        Guid contentId)
+        Guid contentId,
+        int? durationSeconds = null,
+        Guid? parentId = null)
+    {
+        var duration = Math.Clamp(durationSeconds ?? 0, 0, MaxDurationSeconds);
+        var (plan, hasOverride) = await ResolveScheduledAdsAsync(contentType, contentId, parentId);
+
+        // Cấu hình do admin chỉnh (cache) → nếu chưa có thì dùng appsettings "Ads:Schedule".
+        var settings = await GetScheduleSettingsAsync();
+
+        // Override do admin chọn tay → luôn tôn trọng. Random chỉ áp cho content dùng global slots.
+        if (hasOverride || settings.Mode != AdScheduleMode.Random)
+            return plan;
+
+        // Lịch random KHÔNG cache: mỗi lượt xem một lịch khác nhau (pool vẫn lấy từ cache global).
+        return RandomAdPlanner.Plan(plan, duration, settings, Random.Shared);
+    }
+
+    /// <summary>Lịch cố định (global slots + override) — có cache. HasOverride = content có override riêng.</summary>
+    private async Task<(ContentAdsDTO Plan, bool HasOverride)> ResolveScheduledAdsAsync(
+        AdContentType contentType,
+        Guid contentId,
+        Guid? parentId = null)
     {
         // 1. Kiểm tra content-specific override trước
         //    Nếu content có override ở bất kỳ position nào → cache per (type, id)
         //    Nếu không → cache theo contentType (share giữa tất cả content cùng loại)
 
-        var overrides = await _adRepo.GetOverridesByContentAsync(contentType, contentId);
-        var overrideList = overrides.ToList();
+        var overrideList = (await _adRepo.GetOverridesByContentAsync(contentType, contentId)).ToList();
+
+        // Tập phim không có override riêng → dùng override của CẢ BỘ (TvShow) nếu có.
+        // Cache theo nguồn override (TvShow, parentId) để xóa override của bộ là xóa luôn cache các tập.
+        var sourceType = contentType;
+        var sourceId = contentId;
+        if (overrideList.Count == 0 && contentType == AdContentType.Episode && parentId is { } showId && showId != Guid.Empty)
+        {
+            var showOverrides = (await _adRepo.GetOverridesByContentAsync(AdContentType.TvShow, showId)).ToList();
+            if (showOverrides.Count > 0)
+            {
+                overrideList = showOverrides;
+                sourceType = AdContentType.TvShow;
+                sourceId = showId;
+            }
+        }
 
         if (overrideList.Count == 0)
         {
@@ -353,36 +403,168 @@ public class AdService : IAdService
                     MidRoll = cached.MidRoll,
                     PostRoll = cached.PostRoll
                 };
-                return patched;
+                return (patched, false);
             }
 
-            var globalSlots = await _adRepo.GetActiveGlobalSlotsAsync(contentType);
-            var result = BuildContentAdsDTO(contentType, contentId, globalSlots.ToList(),
+            var globalSlots = await LoadGlobalSlotsAsync(contentType);
+            var result = BuildContentAdsDTO(contentType, contentId, globalSlots,
                 new List<AdContentOverride>());
 
             // Cache với contentId = Guid.Empty (placeholder) để dùng chung
-            var cacheResult = BuildContentAdsDTO(contentType, Guid.Empty, globalSlots.ToList(),
+            var cacheResult = BuildContentAdsDTO(contentType, Guid.Empty, globalSlots,
                 new List<AdContentOverride>());
             await _cache.SetAsync(globalCacheKey, cacheResult, AdCacheTtl);
 
-            return result;
+            return (result, false);
         }
         else
         {
-            // Có override → cache per (type, id)
-            var contentCacheKey = BuildContentCacheKey(contentType, contentId);
+            // Có override → cache per nguồn override (tập hoặc cả bộ)
+            var contentCacheKey = BuildContentCacheKey(sourceType, sourceId);
             var cached = await _cache.GetAsync<ContentAdsDTO>(contentCacheKey);
-            if (cached != null) return cached;
+            if (cached != null) return (WithContent(cached, contentType, contentId), true);
 
-            var globalSlots = await _adRepo.GetActiveGlobalSlotsAsync(contentType);
-            var result = BuildContentAdsDTO(contentType, contentId, globalSlots.ToList(), overrideList);
+            var globalSlots = await LoadGlobalSlotsAsync(contentType);
+            var result = BuildContentAdsDTO(contentType, contentId, globalSlots, overrideList);
 
             await _cache.SetAsync(contentCacheKey, result, AdCacheTtl);
-            return result;
+            return (result, true);
         }
     }
 
+    // ── Schedule settings (Admin chỉnh được chế độ Fixed / Random) ───────────
+
+    /// <summary>Giá trị admin đã lưu; chưa lưu lần nào thì dùng mặc định từ appsettings.</summary>
+    public async Task<AdScheduleOptions> GetScheduleSettingsAsync()
+    {
+        var saved = await _cache.GetAsync<AdScheduleOptions>(ScheduleSettingsKey);
+        return (saved ?? _scheduleOptions).Normalized();
+    }
+
+    public async Task<AdScheduleOptions> UpdateScheduleSettingsAsync(AdScheduleOptions dto)
+    {
+        var normalized = dto.Normalized();
+        await _cache.SetAsync(ScheduleSettingsKey, normalized, ScheduleSettingsTtl);
+        return normalized;
+    }
+
+    /// <summary>Xóa cấu hình admin đã lưu → quay về mặc định trong appsettings.</summary>
+    public async Task<AdScheduleOptions> ResetScheduleSettingsAsync()
+    {
+        await _cache.RemoveAsync(ScheduleSettingsKey);
+        return _scheduleOptions.Normalized();
+    }
+
+    /// <summary>
+    /// Xem thử một lượt xem với cấu hình đang soạn (chưa lưu) hoặc đã lưu. Không ghi gì.
+    ///   Random → chạy RandomAdPlanner trên kho quảng cáo (pool) hiện có.
+    ///   Fixed  → trả đúng lịch cố định từ Global Slot.
+    /// ContentType = null → "tất cả hình thức" (Phim lẻ + Tập phim).
+    /// </summary>
+    public async Task<SchedulePreviewResultDTO> PreviewScheduleAsync(SchedulePreviewRequestDTO request)
+    {
+        var options = (request.Options ?? await GetScheduleSettingsAsync()).Normalized();
+        var duration = Math.Clamp(request.DurationSeconds, 0, MaxDurationSeconds);
+
+        var types = request.ContentType is { } one
+            ? new[] { one == AdContentType.TvShow ? AdContentType.Episode : one }
+            : PlayableTypes;
+
+        var merged = new ContentAdsDTO { ContentType = types[0], ContentId = Guid.Empty };
+        foreach (var t in types)
+        {
+            var (fixedPlan, _) = await ResolveScheduledAdsAsync(t, Guid.Empty);
+            merged.PreRoll.AddRange(fixedPlan.PreRoll);
+            merged.MidRoll.AddRange(fixedPlan.MidRoll);
+            merged.PostRoll.AddRange(fixedPlan.PostRoll);
+        }
+        // Slot áp "tất cả" xuất hiện ở cả hai loại → gộp theo SlotId
+        merged.PreRoll = merged.PreRoll.DistinctBy(a => a.SlotId).ToList();
+        merged.MidRoll = merged.MidRoll.DistinctBy(a => a.SlotId).OrderBy(a => a.MidRollOffsetSeconds).ToList();
+        merged.PostRoll = merged.PostRoll.DistinctBy(a => a.SlotId).ToList();
+
+        var pool = merged.PreRoll.Concat(merged.MidRoll).Concat(merged.PostRoll)
+            .Where(a => !string.IsNullOrEmpty(a.VideoUrl))
+            .DistinctBy(a => a.AdId)
+            .Select(a => new PoolAdDTO { AdId = a.AdId, Title = a.Title, DurationSeconds = a.DurationSeconds })
+            .ToList();
+
+        var schedule = options.Mode == AdScheduleMode.Random
+            ? RandomAdPlanner.Plan(merged, duration, options, Random.Shared)
+            : merged;
+
+        return new SchedulePreviewResultDTO
+        {
+            Mode = options.Mode,
+            DurationSeconds = duration,
+            Pool = pool,
+            Schedule = schedule
+        };
+    }
+
+    // ── Thứ tự hiển thị tiếp theo (Admin) ─────────────────────────────────────
+
+    /// <summary>
+    /// max(DisplayOrder) + 1 trong số các lịch CÙNG vị trí có thể phát chung với nhau; chưa có thì 0.
+    ///   Override (contentType + contentId): chỉ xét override của content đó.
+    ///   Global: phạm vi null = xét cả Movie / Episode / TvShow; Movie = Movie; Episode / TvShow = Episode + TvShow.
+    /// </summary>
+    public async Task<int> GetNextDisplayOrderAsync(
+        AdPosition position, AdContentType? appliesTo, AdContentType? contentType, Guid? contentId)
+    {
+        IEnumerable<int> orders;
+
+        if (contentType.HasValue && contentId.HasValue)
+        {
+            var overrides = await _adRepo.GetOverridesByContentAsync(contentType.Value, contentId.Value);
+            orders = overrides.Where(o => o.Position == position).Select(o => o.DisplayOrder);
+        }
+        else
+        {
+            var scopes = appliesTo switch
+            {
+                null => new[] { AdContentType.Movie, AdContentType.Episode, AdContentType.TvShow },
+                AdContentType.Movie => new[] { AdContentType.Movie },
+                _ => new[] { AdContentType.Episode, AdContentType.TvShow }
+            };
+
+            var all = new List<GlobalAdSlot>();
+            foreach (var s in scopes)
+                all.AddRange(await _adRepo.GetActiveGlobalSlotsAsync(s));
+
+            orders = all.Where(s => s.Position == position).Select(s => s.DisplayOrder);
+        }
+
+        var list = orders.ToList();
+        return list.Count == 0 ? 0 : list.Max() + 1;
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Global slot áp dụng cho 1 loại content. Tập phim (Episode) nhận thêm các slot phạm vi TvShow
+    /// ("mọi tập của bộ"), vì player chỉ bao giờ hỏi quảng cáo theo Movie hoặc Episode.
+    /// </summary>
+    private async Task<List<GlobalAdSlot>> LoadGlobalSlotsAsync(AdContentType contentType)
+    {
+        var slots = (await _adRepo.GetActiveGlobalSlotsAsync(contentType)).ToList();
+        if (contentType == AdContentType.Episode)
+        {
+            var known = slots.Select(s => s.Id).ToHashSet();
+            slots.AddRange((await _adRepo.GetActiveGlobalSlotsAsync(AdContentType.TvShow))
+                .Where(s => known.Add(s.Id)));
+        }
+        return slots;
+    }
+
+    private static ContentAdsDTO WithContent(ContentAdsDTO src, AdContentType type, Guid id) => new()
+    {
+        ContentType = type,
+        ContentId = id,
+        PreRoll = src.PreRoll,
+        MidRoll = src.MidRoll,
+        PostRoll = src.PostRoll
+    };
 
     /// <summary>
     /// Merge global slots + content overrides.
@@ -521,6 +703,9 @@ public class AdService : IAdService
         else
         {
             await _cache.RemoveAsync(BuildGlobalCacheKey(appliesTo.Value));
+            // Phạm vi TvShow được gộp vào cache của Episode
+            if (appliesTo.Value == AdContentType.TvShow)
+                await _cache.RemoveAsync(BuildGlobalCacheKey(AdContentType.Episode));
         }
     }
 

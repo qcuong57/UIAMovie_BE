@@ -1,6 +1,7 @@
 ﻿// UIAMovie.Application/Interfaces/IAdService.cs
 
 using UIAMovie.Application.DTOs;
+using UIAMovie.Application.Options;
 using UIAMovie.Domain.Entities;
 
 namespace UIAMovie.Application.Interfaces.IServices;
@@ -11,9 +12,9 @@ public interface IAdService
 
     Task<AdDTO?> GetAdByIdAsync(Guid id);
     Task<(IEnumerable<AdDTO> Items, int Total)> GetAdsAsync(FilterAdsDTO filter);
-    Task<Guid>  CreateAdAsync(CreateAdDTO dto);
-    Task<bool>  UpdateAdAsync(Guid id, UpdateAdDTO dto);
-    Task<bool>  DeleteAdAsync(Guid id);
+    Task<Guid> CreateAdAsync(CreateAdDTO dto);
+    Task<bool> UpdateAdAsync(Guid id, UpdateAdDTO dto);
+    Task<bool> DeleteAdAsync(Guid id);
 
     // ── Global Slots (Admin) ──────────────────────────────────────────────────
 
@@ -34,10 +35,10 @@ public interface IAdService
     /// POST /api/ads/{adId}/overrides
     /// </summary>
     Task<Guid> CreateOverrideAsync(Guid adId, CreateOverrideDTO dto);
+
     Task<bool> DeleteOverrideAsync(Guid overrideId);
 
     // ── Player API ────────────────────────────────────────────────────────────
-
     /// <summary>
     /// Trả về tất cả ads cần phát cho 1 content, grouped by position.
     /// Player gọi trước khi bắt đầu xem.
@@ -51,7 +52,10 @@ public interface IAdService
     /// Kết quả được cache Redis 5 phút per contentType (vì global ads không
     /// thay đổi theo contentId, cache key dùng contentType để share giữa các content).
     /// </summary>
-    Task<ContentAdsDTO> GetAdsForContentAsync(
-        AdContentType contentType,
-        Guid          contentId);
+    Task<ContentAdsDTO> GetAdsForContentAsync(AdContentType contentType, Guid contentId, int? durationSeconds = null, Guid? parentId = null);
+    Task<AdScheduleOptions> GetScheduleSettingsAsync();
+    Task<AdScheduleOptions> UpdateScheduleSettingsAsync(AdScheduleOptions dto);
+    Task<AdScheduleOptions> ResetScheduleSettingsAsync();
+    Task<SchedulePreviewResultDTO> PreviewScheduleAsync(SchedulePreviewRequestDTO request);
+    Task<int> GetNextDisplayOrderAsync(AdPosition position, AdContentType? appliesTo, AdContentType? contentType, Guid? contentId);
 }

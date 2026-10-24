@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Application.Interfaces.IServices;
+using UIAMovie.Application.Options;
 using UIAMovie.Domain.Entities;
 
 namespace UIAMovie.Controllers;
@@ -119,6 +120,7 @@ public class AdsController : ControllerBase
             return Ok(new { overrideId });
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     /// <summary>Xóa content-specific override.</summary>
@@ -130,20 +132,96 @@ public class AdsController : ControllerBase
         return ok ? NoContent() : NotFound();
     }
 
-    // ── Player API (authenticated users) ─────────────────────────────────────
+    /// <summary>
+    /// Số thứ tự hiển thị tiếp theo cho cùng vị trí + phạm vi (để form admin tự nhảy số).
+    /// Global: position (+ appliesTo). Override: position + contentType + contentId.
+    /// </summary>
+    [HttpGet("next-display-order")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> GetNextDisplayOrder(
+        [FromQuery] AdPosition position,
+        [FromQuery] AdContentType? appliesTo = null,
+        [FromQuery] AdContentType? contentType = null,
+        [FromQuery] Guid? contentId = null)
+    {
+        if (!Enum.IsDefined(position))
+            return BadRequest(new { error = "Vị trí không hợp lệ." });
+        var next = await _adService.GetNextDisplayOrderAsync(position, appliesTo, contentType, contentId);
+        return Ok(new { next });
+    }
+
+    // ── Schedule settings (Admin) ─────────────────────────────────────────────
+
+    /// <summary>Cấu hình lập lịch: Fixed (slot admin đặt) hoặc Random (kiểu YouTube).</summary>
+    [HttpGet("schedule-settings")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> GetScheduleSettings()
+        => Ok(await _adService.GetScheduleSettingsAsync());
+
+    [HttpPut("schedule-settings")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> UpdateScheduleSettings([FromBody] AdScheduleOptions dto)
+    {
+        if (dto == null) return BadRequest(new { error = "Thiếu cấu hình." });
+        if (!Enum.IsDefined(dto.Mode))
+            return BadRequest(new { error = "Chế độ không hợp lệ (Fixed | Random)." });
+        if (dto.PostRollChance < 0 || dto.PostRollChance > 1)
+            return BadRequest(new { error = "PostRollChance phải trong khoảng 0–1." });
+        if (dto.JitterRatio < 0 || dto.JitterRatio > 1)
+            return BadRequest(new { error = "JitterRatio phải trong khoảng 0–1." });
+        if (dto.MidRollIntervalRatio < 0)
+            return BadRequest(new { error = "MidRollIntervalRatio không được âm." });
+        if (dto.MaxMidRolls < 0 || dto.MinDurationForMidRollSeconds < 0)
+            return BadRequest(new { error = "Số lượng / số giây không được âm." });
+        if (dto.MinMidRollGapRatio < 0 || dto.MinMidRollGapRatio > 1 || dto.EndGuardRatio < 0 || dto.EndGuardRatio > 1)
+            return BadRequest(new { error = "MinMidRollGapRatio và EndGuardRatio phải trong khoảng 0–1." });
+        if (dto.PreRollWeights == null || dto.PreRollWeights.Length == 0 || dto.PreRollWeights.Any(w => w < 0))
+            return BadRequest(new { error = "PreRollWeights phải có phần tử và không âm." });
+        if (dto.Mode == AdScheduleMode.Random && dto.PreRollWeights.Sum() <= 0)
+            return BadRequest(new { error = "Tổng trọng số pre-roll phải lớn hơn 0." });
+
+        return Ok(await _adService.UpdateScheduleSettingsAsync(dto));
+    }
+
+    /// <summary>Quay về cấu hình mặc định (appsettings) — xóa phần admin đã lưu.</summary>
+    [HttpDelete("schedule-settings")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> ResetScheduleSettings()
+        => Ok(await _adService.ResetScheduleSettingsAsync());
 
     /// <summary>
-    /// Player gọi endpoint này trước khi bắt đầu phát video.
+    /// Xem thử 1 lượt xem (không lưu gì): Random → lịch ngẫu nhiên mẫu, Fixed → lịch cố định.
+    /// contentType = null → tất cả hình thức.
+    /// </summary>
+    [HttpPost("schedule-preview")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> PreviewSchedule([FromBody] SchedulePreviewRequestDTO dto)
+    {
+        if (dto == null) return BadRequest(new { error = "Thiếu dữ liệu." });
+        if (dto.ContentType is { } ct && !Enum.IsDefined(ct))
+            return BadRequest(new { error = "Loại nội dung không hợp lệ." });
+        if (dto.DurationSeconds < 0)
+            return BadRequest(new { error = "Thời lượng không được âm." });
+        return Ok(await _adService.PreviewScheduleAsync(dto));
+    }
+
+    // ── Player API (public) ─────────────────────────────────────
+
+    /// <summary>
+    /// Player gọi endpoint này trước khi bắt đầu phát video (cho phép cả khách chưa đăng nhập).
     /// Trả về tất cả ads grouped by position (PreRoll / MidRoll / PostRoll).
     /// Merge logic: override per-content có ưu tiên hơn global slots.
     /// </summary>
     [HttpGet("content/{contentType}/{contentId:guid}")]
     [AllowAnonymous]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)] // lịch random: không để browser/CDN cache
     public async Task<IActionResult> GetAdsForContent(
         AdContentType contentType,
-        Guid          contentId)
+        Guid          contentId,
+        [FromQuery] int? durationSeconds = null,
+        [FromQuery] Guid? parentId = null)   // Episode: id của bộ (TvShow) để áp override của cả bộ
     {
-        var result = await _adService.GetAdsForContentAsync(contentType, contentId);
+        var result = await _adService.GetAdsForContentAsync(contentType, contentId, durationSeconds, parentId);
         return Ok(result);
     }
 }

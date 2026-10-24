@@ -1,6 +1,6 @@
 # UIAMovie — Movie & TV Streaming Platform (REST API)
 
-A RESTful API backend for a Netflix-style streaming platform, built with ASP.NET Core. It covers account security (email OTP, 2FA, rotating refresh tokens in HttpOnly cookies), movie and TV catalogue management with TMDB import, Cloudinary video hosting, Premium subscriptions paid through VNPay or SePay (with an admin revenue dashboard and Excel export), real-time notifications over SignalR, an AI movie assistant, and Redis caching.
+A RESTful API backend for a Netflix-style streaming platform, built with ASP.NET Core. It covers account security (email OTP, 2FA, rotating refresh tokens in HttpOnly cookies), movie and TV catalogue management with TMDB import, Cloudinary video hosting, Premium subscriptions paid through VNPay or SePay (with an admin revenue dashboard and Excel export), ad serving with a YouTube-style random scheduler, real-time notifications over SignalR, an AI movie assistant, and Redis caching.
 
 The React frontend (Vite, deployed on Vercel) lives in a separate repository and talks to this API over HTTPS.
 
@@ -14,6 +14,7 @@ The React frontend (Vite, deployed on Vercel) lives in a separate repository and
 - [Authentication Flow](#authentication-flow)
 - [Token Revocation](#token-revocation)
 - [Payments (VNPay & SePay)](#payments-vnpay--sepay)
+- [Advertising & Ad Scheduling](#advertising--ad-scheduling)
 - [API Endpoints](#api-endpoints)
 - [Security Hardening](#security-hardening)
 - [Installation & Setup](#installation--setup)
@@ -71,7 +72,7 @@ The React frontend (Vite, deployed on Vercel) lives in a separate repository and
 - `Premium` can only be set through payment or `admin/grant-subscription`, so every Premium user has a `UserSubscription` row (what `SubscriptionChecker` reads)
 - Admin tools to grant or revoke subscriptions, plus a revenue dashboard (summary, chart, by-plan, order list) whose dates are computed in **Vietnam time (GMT+7)** and filtered in the database, and an **Excel export** (3 sheets) with an audit log line
 - Watch history with progress, heartbeat-based view tracking and view statistics
-- Advertisements module
+- **Advertisements** for Free users: pre-roll / mid-roll / post-roll, either **Fixed** (the slots an admin attached) or **Random** (YouTube-style schedule built per view, front-loaded). Admins switch the mode and tune every parameter at runtime and can preview a sample schedule (see [Advertising & Ad Scheduling](#advertising--ad-scheduling))
 
 ### Social & Realtime
 - Reviews and ratings (1–10) with statistics and moderation
@@ -305,6 +306,61 @@ Implemented by `RevenueService` (Application) and `AdminRevenueController` + `Re
 
 ---
 
+## Advertising & Ad Scheduling
+
+Implemented by `AdService` + `RandomAdPlanner` (Application), `AdScheduleOptions` (Application/Options) and `AdsController` (API). Only Free users receive ads; the player asks for a schedule before playback starts.
+
+### Scheduling modes
+
+| Mode | Behaviour |
+|---|---|
+| `Fixed` (default) | Plays exactly the admin's **Global Slots** and per-content **Overrides** (an Override at a position replaces the Global Slots at that position) |
+| `Random` | Builds a **new schedule for every view** from the ads attached to Global Slots. Content that has an Override (its own, or its show's) keeps its hand-made schedule |
+
+### Content scopes
+
+The player asks for ads by `Movie` or `Episode` only. `TvShow` therefore means **the whole show**:
+
+- A Global Slot with `appliesTo = TvShow` applies to **every episode**; `appliesTo = null` means all formats (movies + episodes)
+- An Override of type `TvShow` applies to every episode of that show; an episode's own Override wins over its show's. The player passes the show id as `?parentId=` and the cache key follows the override's source, so removing a show override refreshes all its episodes
+
+### Random algorithm (`RandomAdPlanner`, pure logic — no DB, cache or DI)
+
+1. **Pool** — the distinct ads (with a video URL) found in the merged Global Slots for the content type. An ad only needs to be attached to *any* Global Slot to enter the pool.
+2. **Pre-roll (front-loaded)** — the number of opening ads is drawn from `PreRollWeights` (index *i* = weight of "*i* ads"). Default `{5, 40, 40, 15}` → 0 ads 5 %, 1 ad 40 %, 2 ads 40 %, 3 ads 15 %. The count is capped at the pool size so a single ad is never repeated back-to-back.
+3. **Mid-roll (everything is a percentage of the video's own duration)** — mid-roll *k* sits near `k × MidRollIntervalRatio` (0.2 → 20 %, 40 %, 60 %, 80 %), moved by a random ± `JitterRatio × interval`. A 2-minute video and a 2-hour video get the same proportions:
+   - never closer than `MinMidRollGapRatio` of the duration to the previous mid-roll (or to the start)
+   - none inside the last `EndGuardRatio` of the video, and at most `MaxMidRolls`
+   - offsets are rounded **up** to whole seconds and kept strictly increasing
+   - optional `MinDurationForMidRollSeconds` (default 0 = off) drops mid-rolls for very short videos
+   - none when `durationSeconds` is 0 / missing (client values are clamped to 0–24 h)
+4. **Post-roll** — appears with probability `PostRollChance`.
+5. **Ad picking** — a shuffle-bag over the pool: every ad is used once before any repeats, and the same ad is never picked twice in a row. Every placement gets its **own `SlotId`** because the frontend uses it as the "already played" key for mid-rolls.
+
+The random plan is never cached (each view differs); only the pool (global slots) comes from the cache. `GET /ads/content/...` answers `Cache-Control: no-store`.
+
+### Settings (editable by Admin)
+
+`AdScheduleOptions` is bound from `Ads:Schedule` (defaults below). An admin can override it at runtime through `PUT /api/ads/schedule-settings`; the override is stored in the cache service under `ads:schedule-settings` (TTL 365 days) and falls back to appsettings when absent. Every read and write goes through `Normalized()`, which clamps values (≤ 6 pre-roll weights each 0–1000 and a positive sum, ratio 0–1, jitter 0–0.9, gap ≥ 30 s, max mid-rolls 0–20, post-roll chance 0–1).
+
+> **Persistence note:** with an in-memory cache the override is lost on restart (appsettings applies again). With Redis (Upstash) it survives restarts. To make it durable regardless of the cache, store the options in a table.
+
+### Duration is required for mid-rolls
+
+The player must call `GET /api/ads/content/{contentType}/{contentId}?durationSeconds=<seconds>` (episodes also send `&parentId=<showId>`). The service passes it to the planner; without it Random mode produces pre-/post-roll only.
+
+### Admin preview
+
+`POST /api/ads/schedule-preview` uses the options in the request body (unsaved values) or the saved ones. `contentType` omitted / `null` = **all formats** (movies + episodes). In `Random` mode it runs the real planner; in `Fixed` mode it returns the fixed schedule. The response is `{ mode, durationSeconds, pool: [{ adId, title, durationSeconds }], schedule: { preRoll, midRoll, postRoll } }` — `pool` is the list of ads the scheduler may draw from (empty = nothing will play). Nothing is stored.
+
+```http
+POST /api/ads/schedule-preview
+Authorization: Bearer <admin-access-token>
+Content-Type: application/json
+
+{ "contentType": "Movie", "durationSeconds": 7200, "options": { "mode": "Random", "midRollIntervalRatio": 0.2 } }
+```
+
 ---
 
 ## API Endpoints
@@ -405,9 +461,29 @@ Implemented by `RevenueService` (Application) and `AdminRevenueController` + `Re
 | GET | `/check/{movieId}` | User | Check whether the movie was reviewed |
 | DELETE | `/admin/{reviewId}` | Admin | Remove any review |
 
+### Ads — `/api/ads`
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| GET | `/content/{contentType}/{contentId}?durationSeconds=&parentId=` | Public | Player: ads grouped as `preRoll` / `midRoll` / `postRoll` for one view. Fixed or Random per the current mode; `no-store` |
+| GET | `/` | Admin | Paged ad list (filters) |
+| GET | `/{id}` | Admin | Ad detail with its global slots |
+| POST | `/` | Admin | Create an ad (`multipart/form-data`: video upload or external URL, brand image) |
+| PUT | `/{id}` | Admin | Update an ad / replace the video |
+| DELETE | `/{id}` | Admin | Delete an ad and its Cloudinary files |
+| POST | `/{adId}/global-slots` | Admin | Attach an ad to all content or one content type at a position |
+| PATCH | `/global-slots/{slotId}` | Admin | Change position / scope / active state |
+| DELETE | `/global-slots/{slotId}` | Admin | Delete a global slot |
+| POST | `/{adId}/overrides` | Admin | Per-content override (replaces global slots at that position; always Fixed) |
+| DELETE | `/overrides/{overrideId}` | Admin | Delete an override |
+| GET | `/schedule-settings` | Admin | Current scheduling mode and parameters |
+| DELETE | `/schedule-settings` | Admin | Drop the saved override and return to the `appsettings` defaults |
+| PUT | `/schedule-settings` | Admin | Save mode and parameters (clamped by `Normalized()`) |
+| POST | `/schedule-preview` | Admin | Sample schedule (+ ad pool) for a format (or all) + duration, using unsaved or saved options; stores nothing |
+
 ### Other modules
 
-TV shows, seasons / episodes, subtitles, playback, view tracking (heartbeat), ads, notifications, the AI assistant (`/api/ai/chat`) and the SignalR hub (`/hubs/notifications`) follow the same conventions. Run the API in Development and open Swagger for the full, current list.
+TV shows, seasons / episodes, subtitles, playback, view tracking (heartbeat), notifications, the AI assistant (`/api/ai/chat`) and the SignalR hub (`/hubs/notifications`) follow the same conventions. Run the API in Development and open Swagger for the full, current list.
 
 ---
 
@@ -427,6 +503,7 @@ TV shows, seasons / episodes, subtitles, playback, view tracking (heartbeat), ad
 | Payment redirect | `status` on the return URL is informational; the frontend must confirm through `/subscription-status` or `/history` |
 | SePay IPN | No signature, so `X-Secret-Key` is verified before any lock / DB access, `order_status` / `transaction_status` are checked, the amount is compared with the order and the order's provider must be `sepay` |
 | Revenue export | Admin only, audit-logged (who / range / status / rows), formula-injection guard on text cells, hard cap of 50,000 rows |
+| Ad scheduling | Settings and preview are Admin-only; every value is clamped by `AdScheduleOptions.Normalized()`; the public schedule endpoint sends `Cache-Control: no-store` so a random plan is never shared between viewers |
 | Rate limiting | `auth-strict` 10/min/IP · `auth-refresh` 60/min/IP · `ai` 20/min/user (5/min/IP for guests) · `playback` 30/min · `heartbeat` 20/min/user, 240/min/IP |
 | Proxy headers | `X-Forwarded-*` is trusted only from private networks, so clients cannot spoof their IP |
 | Response headers | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, HSTS and a strict API CSP (non-Development). The UI's CSP is configured in the frontend's `vercel.json` |
@@ -527,6 +604,19 @@ Swagger is available in Development at `/swagger`. A health message is served at
     "TmnCode": "",
     "HashSecret": "",
     "BaseUrl": "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html"
+  },
+  "Ads": {
+    "Schedule": {
+      "Mode": "Fixed",
+      "PreRollWeights": [5, 40, 40, 15],
+      "MidRollIntervalRatio": 0.2,
+      "JitterRatio": 0.25,
+      "MinMidRollGapRatio": 0.1,
+      "EndGuardRatio": 0.1,
+      "MinDurationForMidRollSeconds": 0,
+      "MaxMidRolls": 6,
+      "PostRollChance": 0.5
+    }
   }
 }
 ```
@@ -548,6 +638,12 @@ Swagger is available in Development at `/swagger`. A health message is served at
 | `Email:*` | SMTP settings |
 | `Cloudinary:*` | Cloudinary credentials |
 | `Tmdb:ApiKey` | TMDB v3 key |
+| `Ads:Schedule:Mode` | `Fixed` (default) or `Random`. Admins can override it at runtime from the admin UI |
+| `Ads:Schedule:PreRollWeights` | Weight of "0, 1, 2, … opening ads" (max 6 entries). Default `[5,40,40,15]` favours more ads at the start |
+| `Ads:Schedule:MidRollIntervalRatio` / `JitterRatio` | One mid-roll per this fraction of the duration (0.2 = every 20 %), ± jitter fraction |
+| `Ads:Schedule:MinMidRollGapRatio` / `EndGuardRatio` | Minimum gap between mid-rolls and the guard zone at the end, both as a fraction of the video duration (0.1 = 10 %) |
+| `Ads:Schedule:MinDurationForMidRollSeconds` | Optional floor in seconds below which a video gets no mid-roll; `0` (default) = every video is split by percentage |
+| `Ads:Schedule:MaxMidRolls` / `PostRollChance` | Upper bound on mid-rolls (≤ 20) and probability (0–1) of a post-roll |
 
 ---
 
@@ -594,6 +690,25 @@ Content-Type: application/json
 ```
 For `"vnpay"` redirect the browser to the returned `paymentUrl`; for `"sepay"` (`paymentMethod: "form_post"`) POST a form to `paymentUrl` with `formFields` in the returned order. After payment the user lands on `{Frontend}/payment/result?status=…&orderCode=…`; confirm with `GET /api/payments/subscription-status`.
 
+### 6. Configure ad scheduling
+```http
+GET /api/ads/schedule-settings
+Authorization: Bearer <admin-access-token>
+
+PUT /api/ads/schedule-settings
+Authorization: Bearer <admin-access-token>
+Content-Type: application/json
+
+{ "mode": "Random", "preRollWeights": [5, 40, 40, 15], "midRollIntervalRatio": 0.2, "jitterRatio": 0.25,
+  "minMidRollGapSeconds": 300, "endGuardSeconds": 120, "minDurationForMidRollSeconds": 480,
+  "maxMidRolls": 6, "postRollChance": 0.5 }
+```
+Attach at least one active ad to a Global Slot (`POST /api/ads/{adId}/global-slots`) — in Random mode those slots form the ad pool. Then check a schedule:
+```http
+GET /api/ads/content/Movie/{movieId}?durationSeconds=7200
+```
+Each call returns a different plan; Fixed mode returns the same one. If `midRoll` is empty, check that `durationSeconds` is present and large enough.
+
 ---
 
 ## Deployment
@@ -639,8 +754,9 @@ UIAMovie/
 │   ├── DTOs/
 │   ├── Interfaces/                # Service and repository contracts
 │   ├── Mappings/                  # UserMapper (shared User → UserDTO)
+│   ├── Options/                   # AdScheduleOptions (Fixed / Random ad scheduling)
 │   ├── Security/                  # PasswordPolicy, TokenRevocationService (policy, no libraries)
-│   ├── Services/                  # AuthService, UserService, PaymentService, RevenueService (+ VnTime), VnpayPaymentService, SubscriptionChecker, ...
+│   ├── Services/                  # AuthService, UserService, PaymentService, RevenueService (+ VnTime), VnpayPaymentService, AdService, RandomAdPlanner, SubscriptionChecker, ...
 │   └── Validators/                # FluentValidation rules
 │
 ├── UIAMovie.Domain/               # Entities and constants (PaymentOrder, UserSubscription, Roles)
@@ -676,6 +792,12 @@ UIAMovie/
 - [ ] Same-domain `/api` proxy, then `SameSite=Lax` for the refresh cookie
 - [ ] Distributed rate limiting and TOTP replay protection (Redis) for multi-instance deployments
 - [ ] Content-Security-Policy for the React app in `vercel.json` (start with `Report-Only`)
+
+**Ads**
+- [ ] Persist the schedule settings in a database table instead of the cache (survives cache eviction / restarts)
+- [ ] Unit tests for `RandomAdPlanner` (fixed-seed `Random`): pre-roll cap by pool size, mid-roll bounds and spacing, no adjacent repeats, `durationSeconds = 0`
+- [ ] Endpoint to list a content's (or show's) Overrides (the admin UI can only list Global Slots)
+- [ ] Frequency capping per user / per ad and basic impression / skip statistics
 
 **Platform & product**
 - [ ] **Protected video delivery** — Cloudinary `authenticated` type + signed HLS URLs, `DeliveryType` column, re-upload of existing videos (current signed links do not expire on the Free plan)
