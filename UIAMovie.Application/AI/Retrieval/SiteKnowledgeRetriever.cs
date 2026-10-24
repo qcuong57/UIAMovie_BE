@@ -12,10 +12,10 @@ public class SiteKnowledgeRetriever : ISiteKnowledgeRetriever
         _paymentService = paymentService;
     }
 
-    public Task<string> GetSiteKnowledgeAsync(string message)
+    public async Task<string> GetSiteKnowledgeAsync(string message)
     {
-        var plans = _paymentService.GetSubscriptionPlans().ToList();
-        var context = MoviePrompts.SelectSiteKnowledge(message, plans);
-        return Task.FromResult(context);
+        // null = không gắn với user nào: chatbot chỉ cần danh sách gói đang bán, không cần kiểm tra điều kiện mua
+        var plans = (await _paymentService.GetSubscriptionPlansAsync(null)).ToList();
+        return MoviePrompts.SelectSiteKnowledge(message, plans);
     }
 }

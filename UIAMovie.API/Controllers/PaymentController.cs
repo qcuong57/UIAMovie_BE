@@ -33,22 +33,28 @@ public class PaymentController : ControllerBase
 
     // ── Plans ─────────────────────────────────────────────────────────────────
 
-    /// <summary>GET /api/payments/plans</summary>
+    /// <summary>
+    /// GET /api/payments/plans — các gói đang bán (cấu hình bởi admin).
+    /// Không bắt buộc đăng nhập; nếu request có token hợp lệ thì mỗi gói kèm isEligible / ineligibleReason
+    /// (đã dùng thử, sai domain email, ...) để FE ẩn hoặc làm mờ nút mua.
+    /// </summary>
     [HttpGet("plans")]
-    public IActionResult GetPlans()
+    public async Task<IActionResult> GetPlans()
     {
-        var plans = _paymentService.GetSubscriptionPlans();
+        var plans = await _paymentService.GetSubscriptionPlansAsync(GetUserId());
         return Ok(plans);
     }
 
     // ── Bước 1: Tạo order ─────────────────────────────────────────────────────
 
     /// <summary>
-    /// User chọn gói → tạo PaymentOrder → trả về thông tin chuyển sang cổng thanh toán.
+    /// User chọn gói → kiểm tra điều kiện → tạo PaymentOrder → trả về thông tin chuyển sang cổng thanh toán.
     /// POST /api/payments/create-order
     /// Body: { "planId": "monthly_premium", "paymentProvider": "vnpay" | "sepay" }
-    /// Response.paymentMethod = "redirect" → location.href = paymentUrl
+    /// Response.paymentMethod = "redirect"  → location.href = paymentUrl
     /// Response.paymentMethod = "form_post" → POST form tới paymentUrl với formFields
+    /// Response.paymentMethod = "none"      → gói miễn phí/dùng thử đã kích hoạt xong, KHÔNG redirect
+    /// 400 + { message } khi gói không tồn tại / ngừng bán / user không đủ điều kiện.
     /// </summary>
     [Authorize]
     [HttpPost("create-order")]
@@ -259,7 +265,7 @@ public class PaymentController : ControllerBase
         return Ok(history);
     }
 
-    /// <summary>GET /api/payments/subscription-status</summary>
+    /// <summary>GET /api/payments/subscription-status — kèm planId/planName của gói đang dùng (null nếu admin cấp tay)</summary>
     [Authorize]
     [HttpGet("subscription-status")]
     public async Task<IActionResult> GetSubscriptionStatus()
@@ -276,7 +282,7 @@ public class PaymentController : ControllerBase
     /// <summary>
     /// [Admin] Cấp hoặc gia hạn Premium cho user bất kỳ.
     /// POST /api/payments/admin/grant-subscription
-    /// Body: { "userId": "...", "planId": "monthly_premium"|"yearly_premium", "expiredAt": "2026-12-31T00:00:00Z" }
+    /// Body: { "userId": "...", "planId": "&lt;mã gói bất kỳ trong SubscriptionPlans&gt;", "expiredAt": "2026-12-31T00:00:00Z" }
     /// </summary>
     [Authorize(Roles = "Admin")]
     [HttpPost("admin/grant-subscription")]

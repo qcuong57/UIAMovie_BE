@@ -9,12 +9,17 @@ namespace UIAMovie.Infrastructure.Data.Repositories;
 
 public class PaymentOrderRepository : IPaymentOrderRepository
 {
+    /// <summary>Provider của đơn dùng thử / gói 0đ (trùng PaymentProviders.Free ở Application).</summary>
+    private const string FreeProvider = "free";
+
     private readonly MovieDbContext _db;
 
     public PaymentOrderRepository(MovieDbContext db) => _db = db;
 
     public async Task<List<StatusTotal>> GetStatusTotalsAsync(DateTime nowUtc, CancellationToken ct = default) =>
         await _db.Set<PaymentOrder>().AsNoTracking()
+            // Đơn dùng thử (0đ) không đi qua cổng nên không tính vào thống kê thanh toán / tỉ lệ thành công
+            .Where(o => o.Provider != FreeProvider)
             // Pending đã quá hạn được gộp vào Expired ngay trong SQL (CASE WHEN)
             .GroupBy(o => o.Status == PaymentStatus.Pending && o.ExpiredAt <= nowUtc
                 ? PaymentStatus.Expired
@@ -25,8 +30,9 @@ public class PaymentOrderRepository : IPaymentOrderRepository
     public async Task<List<PaidOrderPoint>> GetPaidAsync(
         DateTime? fromUtc, DateTime? toUtcExclusive, CancellationToken ct = default)
     {
+        // Amount > 0: chỉ đơn có tiền thật; lượt dùng thử không kéo số đơn / giá trị trung bình xuống
         var q = _db.Set<PaymentOrder>().AsNoTracking()
-            .Where(o => o.Status == PaymentStatus.Success && o.PaidAt != null);
+            .Where(o => o.Status == PaymentStatus.Success && o.PaidAt != null && o.Amount > 0);
 
         if (fromUtc.HasValue) q = q.Where(o => o.PaidAt >= fromUtc.Value);
         if (toUtcExclusive.HasValue) q = q.Where(o => o.PaidAt < toUtcExclusive.Value);
@@ -57,6 +63,7 @@ public class PaymentOrderRepository : IPaymentOrderRepository
                 .SetProperty(o => o.FailureReason, "Hết hạn thanh toán"), ct);
 
     // ── Query dùng chung cho list + export ────────────────────────────────────
+    // Danh sách và export VẪN gồm đơn "free" (lọc bằng provider=free) để admin tra cứu lượt dùng thử.
 
     private IQueryable<AdminOrderDTO> BuildQuery(OrderQuery f)
     {

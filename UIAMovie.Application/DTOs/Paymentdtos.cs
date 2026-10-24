@@ -7,17 +7,82 @@ namespace UIAMovie.Application.DTOs;
 
 // ── Subscription Plans ────────────────────────────────────────────────────────
 
-/// <summary>Gói subscription hiển thị cho user chọn</summary>
+/// <summary>Gói subscription hiển thị cho user chọn (đọc từ bảng SubscriptionPlans).</summary>
 public class SubscriptionPlanDTO
 {
-    public string PlanId { get; set; } = string.Empty; // "monthly_premium", "yearly_premium"
-    public string Name { get; set; } = string.Empty; // "Premium Tháng", "Premium Năm"
+    public string PlanId { get; set; } = string.Empty; // "monthly_premium", "student_monthly", "trial_7d"...
+    public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
-    public long PriceVnd { get; set; } // 69000, 599000
+    public long PriceVnd { get; set; } // 0 = miễn phí / dùng thử
+    public long? OriginalPriceVnd { get; set; } // giá gốc để gạch ngang
     public string PriceDisplay { get; set; } = string.Empty; // "69.000đ/tháng"
-    public int DurationDays { get; set; } // 30, 365
+    public int DurationDays { get; set; }
     public bool IsMostPopular { get; set; }
     public List<string> Features { get; set; } = new();
+
+    public bool IsTrial { get; set; }
+
+    /// <summary>Domain email được phép (gói sinh viên...). Rỗng = ai cũng mua được.</summary>
+    public List<string> AllowedEmailDomains { get; set; } = new();
+
+    /// <summary>Hạn chót của ưu đãi (UTC), null nếu không giới hạn.</summary>
+    public DateTime? EndsAt { get; set; }
+
+    /// <summary>
+    /// Chỉ có ý nghĩa khi request có đăng nhập; ẩn danh luôn true (server vẫn chặn ở create-order).
+    /// </summary>
+    public bool IsEligible { get; set; } = true;
+
+    public string? IneligibleReason { get; set; }
+}
+
+// ── Admin: quản lý gói ────────────────────────────────────────────────────────
+
+public class AdminPlanDTO
+{
+    public Guid Id { get; set; }
+    public string PlanId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public long PriceVnd { get; set; }
+    public long? OriginalPriceVnd { get; set; }
+    public int DurationDays { get; set; }
+    public bool IsMostPopular { get; set; }
+    public bool IsActive { get; set; }
+    public int SortOrder { get; set; }
+    public List<string> Features { get; set; } = new();
+    public bool IsTrial { get; set; }
+    public int? MaxPerUser { get; set; }
+    public string? AllowedEmailDomains { get; set; }
+    public DateTime? StartsAt { get; set; }
+    public DateTime? EndsAt { get; set; }
+}
+
+/// <summary>Tạo mới / cập nhật gói.</summary>
+public class UpsertPlanDTO
+{
+    /// <summary>Chỉ dùng khi tạo mới; bị bỏ qua khi cập nhật.</summary>
+    public string PlanId { get; set; } = string.Empty;
+
+    [Required] public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public long PriceVnd { get; set; }
+    public long? OriginalPriceVnd { get; set; }
+    public int DurationDays { get; set; }
+    public bool IsMostPopular { get; set; }
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+    public List<string> Features { get; set; } = new();
+    public bool IsTrial { get; set; }
+    public int? MaxPerUser { get; set; }
+    public string? AllowedEmailDomains { get; set; }
+    public DateTime? StartsAt { get; set; }
+    public DateTime? EndsAt { get; set; }
+}
+
+public class SetPlanActiveDTO
+{
+    public bool IsActive { get; set; }
 }
 
 // ── Payment Order ─────────────────────────────────────────────────────────────
@@ -25,9 +90,11 @@ public class SubscriptionPlanDTO
 /// <summary>Request tạo payment order</summary>
 public class CreatePaymentOrderDTO
 {
-    [Required] public string PlanId { get; set; } = string.Empty; // "monthly_premium" | "yearly_premium"
+    /// <summary>Mã gói trong bảng SubscriptionPlans.</summary>
+    [Required]
+    public string PlanId { get; set; } = string.Empty;
 
-    /// <summary>"vnpay" | "sepay"</summary>
+    /// <summary>"vnpay" | "sepay". Bị bỏ qua với gói miễn phí.</summary>
     [Required]
     public string PaymentProvider { get; set; } = "vnpay";
 
@@ -40,17 +107,20 @@ public class PaymentOrderResponseDTO
 {
     public Guid OrderId { get; set; }
     public string OrderCode { get; set; } = string.Empty; // "ORD-20240506-XXXX"
+
     /// <summary>
     /// VNPay: URL redirect (location.href).
     /// SePay: URL action của form (POST) — FE phải submit form với <see cref="FormFields"/>.
+    /// Gói miễn phí: rỗng.
     /// </summary>
     public string PaymentUrl { get; set; } = string.Empty;
 
-    /// <summary>"redirect" (VNPay) | "form_post" (SePay)</summary>
+    /// <summary>"redirect" (VNPay) | "form_post" (SePay) | "none" (gói miễn phí, đã kích hoạt xong)</summary>
     public string PaymentMethod { get; set; } = "redirect";
 
     /// <summary>Chỉ có khi PaymentMethod = "form_post". FE tạo input hidden theo ĐÚNG thứ tự này.</summary>
     public Dictionary<string, string>? FormFields { get; set; }
+
     public long Amount { get; set; } // VND
     public string Provider { get; set; } = string.Empty;
     public DateTime ExpiredAt { get; set; } // Hết hạn sau 15 phút
@@ -64,7 +134,7 @@ public class PaymentHistoryDTO
     public string OrderCode { get; set; } = string.Empty;
     public string PlanName { get; set; } = string.Empty;
     public long Amount { get; set; }
-    public string Provider { get; set; } = string.Empty; // "vnpay" | "sepay"
+    public string Provider { get; set; } = string.Empty; // "vnpay" | "sepay" | "free"
     public string Status { get; set; } = string.Empty; // "pending" | "success" | "failed" | "expired" | "cancelled"
     public string? FailureReason { get; set; }
     public DateTime CreatedAt { get; set; }
@@ -80,6 +150,11 @@ public class SubscriptionStatusDTO
     public DateTime? ExpiredAt { get; set; }
     public int? DaysRemaining { get; set; }
     public bool IsExpiringSoon { get; set; } // true nếu còn <= 7 ngày
+
+    /// <summary>Gói đã kích hoạt lần gần nhất (từ đơn thanh toán). Null nếu admin cấp tay hoặc không còn Premium.</summary>
+    public string? PlanId { get; set; }
+
+    public string? PlanName { get; set; }
 }
 
 // ── VNPay IPN / Return ────────────────────────────────────────────────────────
@@ -124,16 +199,20 @@ public class VnpayIpnDTO
 public class SepayIpnDTO
 {
     /// <summary>"ORDER_PAID" | "TRANSACTION_VOID"</summary>
-    [JsonPropertyName("notification_type")] public string NotificationType { get; set; } = string.Empty;
-    [JsonPropertyName("order")]             public SepayIpnOrder? Order { get; set; }
-    [JsonPropertyName("transaction")]       public SepayIpnTransaction? Transaction { get; set; }
+    [JsonPropertyName("notification_type")]
+    public string NotificationType { get; set; } = string.Empty;
+
+    [JsonPropertyName("order")] public SepayIpnOrder? Order { get; set; }
+    [JsonPropertyName("transaction")] public SepayIpnTransaction? Transaction { get; set; }
 }
 
 public class SepayIpnOrder
 {
-    [JsonPropertyName("order_id")]             public string OrderId { get; set; } = string.Empty;
-    [JsonPropertyName("order_status")]         public string Status { get; set; } = string.Empty;        // "CAPTURED"
-    [JsonPropertyName("order_invoice_number")] public string InvoiceNumber { get; set; } = string.Empty; // = OrderCode của mình
+    [JsonPropertyName("order_id")] public string OrderId { get; set; } = string.Empty;
+    [JsonPropertyName("order_status")] public string Status { get; set; } = string.Empty; // "CAPTURED"
+
+    [JsonPropertyName("order_invoice_number")]
+    public string InvoiceNumber { get; set; } = string.Empty; // = OrderCode của mình
 
     /// <summary>VND thật, không nhân 100. SePay gửi dạng chuỗi "50000.00".</summary>
     [JsonPropertyName("order_amount")]
@@ -143,8 +222,10 @@ public class SepayIpnOrder
 
 public class SepayIpnTransaction
 {
-    [JsonPropertyName("transaction_id")]     public string TransactionId { get; set; } = string.Empty;
-    [JsonPropertyName("transaction_status")] public string Status { get; set; } = string.Empty;          // "APPROVED"
+    [JsonPropertyName("transaction_id")] public string TransactionId { get; set; } = string.Empty;
+
+    [JsonPropertyName("transaction_status")]
+    public string Status { get; set; } = string.Empty; // "APPROVED"
 }
 
 // ── Content Access ────────────────────────────────────────────────────────────

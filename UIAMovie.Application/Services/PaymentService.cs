@@ -31,12 +31,15 @@ public enum PaymentCallbackResult
 
 public interface IPaymentService
 {
-    /// <summary>Trả danh sách gói subscription để user chọn.</summary>
-    IEnumerable<SubscriptionPlanDTO> GetSubscriptionPlans();
-
     /// <summary>
-    /// Bước 1 trong flow: User chọn gói → tạo PaymentOrder → trả về thông tin chuyển sang cổng thanh toán
+    /// Danh sách gói đang bán. Nếu có userId thì mỗi gói kèm IsEligible / IneligibleReason
+    /// (đã dùng thử, sai domain email, ...). Ẩn danh: IsEligible luôn true, create-order vẫn kiểm tra lại.
+    /// </summary>
+    Task<IEnumerable<SubscriptionPlanDTO>> GetSubscriptionPlansAsync(Guid? userId);
+    /// <summary>
+    /// Bước 1 trong flow: User chọn gói → kiểm tra điều kiện → tạo PaymentOrder → trả về thông tin chuyển sang cổng thanh toán
     /// (VNPay: URL redirect; SePay: URL + các field để FE POST form).
+    /// Gói 0đ (dùng thử): kích hoạt ngay, trả PaymentMethod = "none".
     /// </summary>
     /// <param name="backendBaseUrl">Base URL của backend (VD: "https://api.yourdomain.com").
     /// Dùng để tự build ReturnUrl/Callback URL gửi cho cổng, không cần cấu hình cứng trong appsettings.</param>
@@ -86,7 +89,7 @@ public interface IPaymentService
 public class AdminGrantSubscriptionDTO
 {
     public Guid UserId { get; set; }
-    public string PlanId { get; set; } = string.Empty; // "monthly_premium" | "yearly_premium"
+    public string PlanId { get; set; } = string.Empty; // mã gói bất kỳ trong bảng SubscriptionPlans
     public DateTime ExpiredAt { get; set; }
 }
 
@@ -97,6 +100,9 @@ public static class PaymentProviders
 {
     public const string Vnpay = "vnpay";
     public const string Sepay = "sepay";
+
+    /// <summary>Gói 0đ (dùng thử): kích hoạt thẳng ở server, không qua cổng nào.</summary>
+    public const string Free = "free";
 }
 
 public class PaymentService : IPaymentService
@@ -107,6 +113,7 @@ public class PaymentService : IPaymentService
     private readonly IRepository<User> _userRepo;
     private readonly IVnpayPaymentService _vnpay;
     private readonly ISepayPaymentService _sepay;
+    private readonly ISubscriptionPlanService _plans;
     private readonly ICacheService _cache;
     private readonly IPaymentReceiptNotifier _receipts;
     private readonly ILogger<PaymentService> _logger;
@@ -116,32 +123,6 @@ public class PaymentService : IPaymentService
     /// <summary>Ân hạn sau ExpiredAt để IPN đến muộn vẫn được xử lý trước khi đơn bị chốt Expired.</summary>
     private static readonly TimeSpan ExpiryGrace = TimeSpan.FromMinutes(30);
 
-    private static readonly List<SubscriptionPlanDTO> Plans = new()
-    {
-        new SubscriptionPlanDTO
-        {
-            PlanId = "monthly_premium",
-            Name = "Premium Tháng",
-            Description = "Xem không giới hạn trong 30 ngày",
-            PriceVnd = 69_000,
-            PriceDisplay = "69.000đ/tháng",
-            DurationDays = 30,
-            IsMostPopular = false,
-            Features = new() { "Full HD / 4K", "Không quảng cáo", "Tải về xem offline" }
-        },
-        new SubscriptionPlanDTO
-        {
-            PlanId = "yearly_premium",
-            Name = "Premium Năm",
-            Description = "Tiết kiệm hơn 28% so với gói tháng",
-            PriceVnd = 599_000,
-            PriceDisplay = "599.000đ/năm",
-            DurationDays = 365,
-            IsMostPopular = true,
-            Features = new() { "Full HD / 4K", "Không quảng cáo", "Tải về xem offline", "Ưu tiên hỗ trợ" }
-        }
-    };
-
     public PaymentService(
         IRepository<PaymentOrder> orderRepo,
         IPaymentOrderRepository paymentOrders,
@@ -149,6 +130,7 @@ public class PaymentService : IPaymentService
         IRepository<User> userRepo,
         IVnpayPaymentService vnpay,
         ISepayPaymentService sepay,
+        ISubscriptionPlanService plans,
         ICacheService cache,
         IPaymentReceiptNotifier receipts,
         ILogger<PaymentService> logger)
@@ -159,6 +141,7 @@ public class PaymentService : IPaymentService
         _userRepo = userRepo;
         _vnpay = vnpay;
         _sepay = sepay;
+        _plans = plans;
         _cache = cache;
         _receipts = receipts;
         _logger = logger;
@@ -166,33 +149,101 @@ public class PaymentService : IPaymentService
 
     // ── Plans ─────────────────────────────────────────────────────────────────
 
-    public IEnumerable<SubscriptionPlanDTO> GetSubscriptionPlans() => Plans;
+    public async Task<IEnumerable<SubscriptionPlanDTO>> GetSubscriptionPlansAsync(Guid? userId)
+    {
+        var now = DateTime.UtcNow;
+        var plans = await _plans.GetOnSalePlansAsync();
+        var ctx = userId is { } uid ? await LoadEligibilityContextAsync(uid) : null;
+
+        return plans.Select(p =>
+        {
+            var dto = SubscriptionPlanMapper.ToPublicDto(p);
+            if (ctx != null)
+            {
+                var reason = CheckEligibility(p, ctx, now);
+                dto.IsEligible = reason == null;
+                dto.IneligibleReason = reason;
+            }
+
+            return dto;
+        }).ToList();
+    }
+
+    // ── Điều kiện mua gói ─────────────────────────────────────────────────────
+
+    private sealed record EligibilityContext(User? User, bool HasActivePremium, Dictionary<string, int> SuccessCounts);
+
+    private async Task<EligibilityContext> LoadEligibilityContextAsync(Guid userId)
+    {
+        var now = DateTime.UtcNow;
+        var user = await _userRepo.GetByIdAsync(userId);
+        var sub = (await _subRepo.FindAsync(s => s.UserId == userId)).FirstOrDefault();
+        var active = sub?.SubscriptionType == SubscriptionTypes.Premium && sub.ExpiredAt > now;
+
+        var paid = await _orderRepo.FindAsync(o => o.UserId == userId && o.Status == PaymentStatus.Success);
+        var counts = paid.GroupBy(o => o.PlanId).ToDictionary(g => g.Key, g => g.Count());
+
+        return new EligibilityContext(user, active, counts);
+    }
+
+    /// <summary>Trả lý do không đủ điều kiện, hoặc null nếu mua được.</summary>
+    private static string? CheckEligibility(SubscriptionPlan plan, EligibilityContext c, DateTime nowUtc)
+    {
+        if (!SubscriptionPlanService.IsOnSale(plan, nowUtc))
+            return "Gói này hiện không còn được bán.";
+
+        if (plan.MaxPerUser is { } max && c.SuccessCounts.GetValueOrDefault(plan.PlanId) >= max)
+            return plan.IsTrial ? "Bạn đã dùng thử gói này rồi." : "Bạn đã dùng hết số lần được mua gói này.";
+
+        if (plan.IsTrial && c.HasActivePremium)
+            return "Dùng thử chỉ áp dụng khi bạn chưa có gói Premium đang hoạt động.";
+
+        var domains = SubscriptionPlanMapper.SplitDomains(plan.AllowedEmailDomains);
+        if (domains.Count > 0)
+        {
+            var email = c.User?.Email ?? string.Empty;
+            var at = email.LastIndexOf('@');
+            var host = at >= 0 ? email[(at + 1)..].ToLowerInvariant() : string.Empty;
+            var ok = domains.Any(d => host == d || host.EndsWith("." + d));
+            if (!ok) return $"Gói này chỉ dành cho email thuộc: {string.Join(", ", domains)}.";
+        }
+
+        return null;
+    }
 
     // ── Bước 1: Tạo order → redirect URL ─────────────────────────────────────
 
     public async Task<PaymentOrderResponseDTO> CreateOrderAsync(
         Guid userId, CreatePaymentOrderDTO dto, string ipAddress, string backendBaseUrl)
     {
-        // 1. Validate plan
-        var plan = Plans.FirstOrDefault(p => p.PlanId == dto.PlanId)
-                   ?? throw new ArgumentException($"Gói '{dto.PlanId}' không tồn tại.");
+        // 1. Lấy gói từ DB + kiểm tra điều kiện (server là nguồn sự thật, không tin FE)
+        var plan = await _plans.FindByPlanIdAsync(dto.PlanId, onlyOnSale: true)
+                   ?? throw new ArgumentException($"Gói '{dto.PlanId}' không tồn tại hoặc đã ngừng bán.");
 
-        // 2. Validate provider — hỗ trợ vnpay và sepay
-        var provider = dto.PaymentProvider.ToLowerInvariant();
+        var now = DateTime.UtcNow;
+        var ctx = await LoadEligibilityContextAsync(userId);
+        if (CheckEligibility(plan, ctx, now) is { } reason)
+            throw new ArgumentException(reason);
+
+        // 1b. Gói 0đ (dùng thử): không qua cổng thanh toán
+        if (plan.PriceVnd == 0)
+            return await ActivateFreePlanAsync(userId, plan);
+
+        // 2. Validate provider — hỗ trợ vnpay và sepay (chỉ cần cho gói trả phí)
+        var provider = (dto.PaymentProvider ?? string.Empty).ToLowerInvariant();
         if (provider is not (PaymentProviders.Vnpay or PaymentProviders.Sepay))
             throw new ArgumentException("Provider phải là 'vnpay' hoặc 'sepay'.");
 
         // 3. Mỗi user chỉ giữ MỘT đơn đang chờ: các đơn Pending còn hạn trước đó chuyển sang Cancelled
         //    (lưu cùng lần SaveChanges với đơn mới). Nếu người dùng thật ra đã trả đơn cũ thì callback
         //    đến sau vẫn được chấp nhận (xem "thanh toán muộn" trong ConfirmOrderAsync).
-        var now = DateTime.UtcNow;
         await SupersedePendingOrdersAsync(userId, now);
 
         // 4. Tạo order code duy nhất: ORD-20240506-9F3A07C1
         var orderCode = await GenerateUniqueOrderCodeAsync();
         var expiredAt = now.AddMinutes(15);
 
-        // 5. Lưu PaymentOrder vào DB
+        // 5. Lưu PaymentOrder vào DB (snapshot tên/giá/số ngày: sửa gói sau này không ảnh hưởng đơn này)
         var order = new PaymentOrder
         {
             OrderCode = orderCode,
@@ -261,6 +312,56 @@ public class PaymentService : IPaymentService
         }
 
         return response;
+    }
+
+    /// <summary>
+    /// Gói 0đ: tạo đơn Success (Provider = "free", Amount = 0) và nâng gói trong MỘT lần SaveChanges.
+    /// Đơn này là bằng chứng "đã dùng thử" cho CheckEligibility (đếm đơn Success theo PlanId).
+    /// </summary>
+    private async Task<PaymentOrderResponseDTO> ActivateFreePlanAsync(Guid userId, SubscriptionPlan plan)
+    {
+        // Chặn bấm đúp / gọi song song: INCR nguyên tử (cùng kiểu khóa với ConfirmOrderAsync).
+        // Kiểm tra điều kiện ở trên chạy TRƯỚC khóa, nên request thứ hai hoặc thấy đơn đã lưu (bị chặn
+        // bởi MaxPerUser) hoặc thấy khóa này.
+        if (await _cache.IncrementAsync($"payment:free:{userId}:{plan.PlanId}", TimeSpan.FromSeconds(30)) > 1)
+            throw new ArgumentException("Yêu cầu đang được xử lý, vui lòng đợi giây lát.");
+
+        var now = DateTime.UtcNow;
+        var order = new PaymentOrder
+        {
+            OrderCode = await GenerateUniqueOrderCodeAsync(),
+            UserId = userId,
+            PlanId = plan.PlanId,
+            PlanName = plan.Name,
+            DurationDays = plan.DurationDays,
+            Amount = 0,
+            Provider = PaymentProviders.Free,
+            Status = PaymentStatus.Success,
+            PaidAt = now,
+            ExpiredAt = now
+        };
+
+        await _orderRepo.AddAsync(order);
+        var upgraded = await UpgradeSubscriptionAsync(order); // chỉ gom thay đổi
+        await _orderRepo.SaveChangesAsync(); // một lần lưu: đơn + gói + user
+
+        await InvalidateUserCacheAsync(userId, upgraded.Email);
+        await QueueReceiptEmailAsync(order, upgraded); // gửi mail xác nhận kích hoạt (không ném lỗi)
+
+        _logger.LogInformation(
+            "Activated free plan {PlanId} for user {UserId} (order={OrderCode}) until {Expiry}",
+            plan.PlanId, userId, order.OrderCode, upgraded.NewExpiry);
+
+        return new PaymentOrderResponseDTO
+        {
+            OrderId = order.Id,
+            OrderCode = order.OrderCode,
+            PaymentUrl = string.Empty,
+            PaymentMethod = "none", // FE: không redirect, chuyển thẳng tới trang kết quả
+            Amount = 0,
+            Provider = PaymentProviders.Free,
+            ExpiredAt = now
+        };
     }
 
     // ── Bước 2: Callback từ cổng thanh toán ──────────────────────────────────
@@ -354,6 +455,7 @@ public class PaymentService : IPaymentService
     /// <summary>
     /// Lõi xác nhận dùng chung cho mọi cổng: khóa nguyên tử theo mã đơn → tìm đơn (đúng provider)
     /// → idempotent → kiểm tra amount → cập nhật trạng thái → nâng gói → invalidate cache.
+    /// Đơn "free" không bao giờ đi qua đây (Provider không khớp với bất kỳ cổng nào → OrderNotFound).
     /// </summary>
     private async Task<PaymentCallbackResult> ConfirmOrderAsync(ConfirmRequest r)
     {
@@ -435,7 +537,7 @@ public class PaymentService : IPaymentService
         if (r.GatewaySuccess && upgraded != null)
         {
             await InvalidateUserCacheAsync(order.UserId, upgraded.Email);
-            QueueReceiptEmail(order, upgraded);
+            await QueueReceiptEmailAsync(order, upgraded);
         }
 
         _logger.LogInformation("{Provider} callback processed: order={OrderCode} success={Success}",
@@ -521,9 +623,9 @@ public class PaymentService : IPaymentService
 
     /// <summary>
     /// Đã SaveChanges thành công mới tới đây. Chỉ đẩy một "snapshot" bất biến vào hàng đợi nền;
-    /// lỗi gửi mail tuyệt đối không được làm hỏng việc kích hoạt gói (cổng đã thu tiền).
+    /// lỗi gửi mail (kể cả lỗi tra cứu gói) tuyệt đối không được làm hỏng việc kích hoạt gói (cổng đã thu tiền).
     /// </summary>
-    private void QueueReceiptEmail(PaymentOrder order, UpgradeResult up)
+    private async Task QueueReceiptEmailAsync(PaymentOrder order, UpgradeResult up)
     {
         if (string.IsNullOrWhiteSpace(up.Email))
         {
@@ -533,7 +635,9 @@ public class PaymentService : IPaymentService
 
         try
         {
-            var features = Plans.FirstOrDefault(p => p.PlanId == order.PlanId)?.Features ?? new List<string>();
+            // Quyền lợi lấy từ gói hiện tại trong DB (kể cả gói đã tắt bán); không có thì để trống
+            var plan = await _plans.FindByPlanIdAsync(order.PlanId, onlyOnSale: false);
+            var features = plan?.GetFeatures() ?? new List<string>();
 
             _receipts.Enqueue(new PaymentReceiptEmailModel(
                 ToEmail: up.Email!,
@@ -600,13 +704,24 @@ public class PaymentService : IPaymentService
                 ? (int?)Math.Ceiling((sub!.ExpiredAt!.Value - now).TotalDays)
                 : null;
 
+            // Gói đang dùng: lấy từ đơn đã kích hoạt gần nhất (admin cấp tay → LastPaymentOrderId = null → không có gói)
+            string? planId = null, planName = null;
+            if (isPremium && sub!.LastPaymentOrderId is { } orderId)
+            {
+                var lastOrder = await _orderRepo.GetByIdAsync(orderId);
+                planId = lastOrder?.PlanId;
+                planName = lastOrder?.PlanName;
+            }
+
             return new SubscriptionStatusDTO
             {
                 SubscriptionType = isPremium ? SubscriptionTypes.Premium : SubscriptionTypes.Free,
                 IsPremium = isPremium,
                 ExpiredAt = sub?.ExpiredAt,
                 DaysRemaining = daysLeft,
-                IsExpiringSoon = isPremium && daysLeft <= 7
+                IsExpiringSoon = isPremium && daysLeft <= 7,
+                PlanId = planId,
+                PlanName = planName
             };
         }, TimeSpan.FromMinutes(10));
     }
@@ -617,10 +732,11 @@ public class PaymentService : IPaymentService
     /// [Admin] Cấp hoặc gia hạn Premium thủ công.
     /// Upsert UserSubscription + đồng bộ User.SubscriptionType trong MỘT lần SaveChanges
     /// (các repository dùng chung một DbContext), tránh trạng thái nửa vời nếu bước sau lỗi.
+    /// Gói chỉ cần tồn tại (kể cả đã tắt bán, vd gói dùng thử cấp tặng).
     /// </summary>
     public async Task AdminGrantSubscriptionAsync(AdminGrantSubscriptionDTO dto)
     {
-        _ = Plans.FirstOrDefault(p => p.PlanId == dto.PlanId)
+        _ = await _plans.FindByPlanIdAsync(dto.PlanId, onlyOnSale: false)
             ?? throw new ArgumentException($"Gói '{dto.PlanId}' không tồn tại.");
 
         var user = await _userRepo.GetByIdAsync(dto.UserId)
@@ -642,6 +758,7 @@ public class PaymentService : IPaymentService
                 SubscriptionType = SubscriptionTypes.Premium,
                 StartedAt = now,
                 ExpiredAt = expiredUtc,
+                LastPaymentOrderId = null,
                 UpdatedAt = now
             };
             await _subRepo.AddAsync(sub);
@@ -651,6 +768,8 @@ public class PaymentService : IPaymentService
             sub.StartedAt = ResolveStart(sub, now);
             sub.SubscriptionType = SubscriptionTypes.Premium;
             sub.ExpiredAt = expiredUtc;
+            // Cấp tay không gắn với đơn nào: xóa liên kết cũ để trạng thái không hiển thị sai gói
+            sub.LastPaymentOrderId = null;
             sub.UpdatedAt = now;
             _subRepo.Update(sub);
         }
@@ -693,6 +812,8 @@ public class PaymentService : IPaymentService
     /// <summary>
     /// User tự hủy Premium của chính mình (chỉ khi đang có Premium còn hạn).
     /// Tách riêng khỏi AdminRevokeSubscriptionAsync để logic/log/quyền không dùng chung.
+    /// Lưu ý: người đang dùng thử cũng hủy được, nhưng vẫn KHÔNG dùng thử lại được
+    /// (đơn dùng thử đã tính vào MaxPerUser).
     /// </summary>
     public async Task CancelMySubscriptionAsync(Guid userId)
     {

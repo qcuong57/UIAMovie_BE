@@ -113,6 +113,7 @@ builder.Services.AddHttpClient();
 builder.Services.AddScoped<ITmdbService, TmdbService>();
 builder.Services.AddScoped<IRatingReviewService, RatingReviewService>();
 builder.Services.AddScoped<IGenreService, GenreService>();
+builder.Services.AddScoped<ISubscriptionPlanService, SubscriptionPlanService>();
 
 
 // AI

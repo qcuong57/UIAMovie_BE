@@ -1006,6 +1006,115 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.ToTable("Seasons");
                 });
 
+            modelBuilder.Entity("UIAMovie.Domain.Entities.SubscriptionPlan", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AllowedEmailDomains")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("DurationDays")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("EndsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FeaturesJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsMostPopular")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsTrial")
+                        .HasColumnType("boolean");
+
+                    b.Property<int?>("MaxPerUser")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<long?>("OriginalPriceVnd")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("PlanId")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<long>("PriceVnd")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("StartsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PlanId")
+                        .IsUnique();
+
+                    b.HasIndex("IsActive", "SortOrder");
+
+                    b.ToTable("SubscriptionPlans");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("00000000-0000-0000-0000-0000000000a1"),
+                            CreatedAt = new DateTime(2026, 10, 24, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Description = "Xem không giới hạn trong 30 ngày",
+                            DurationDays = 30,
+                            FeaturesJson = "[\"Full HD / 4K\",\"Không quảng cáo\",\"Tải về xem offline\"]",
+                            IsActive = true,
+                            IsMostPopular = false,
+                            IsTrial = false,
+                            Name = "Premium Tháng",
+                            PlanId = "monthly_premium",
+                            PriceVnd = 69000L,
+                            SortOrder = 1,
+                            UpdatedAt = new DateTime(2026, 10, 24, 0, 0, 0, 0, DateTimeKind.Utc)
+                        },
+                        new
+                        {
+                            Id = new Guid("00000000-0000-0000-0000-0000000000a2"),
+                            CreatedAt = new DateTime(2026, 10, 24, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Description = "Tiết kiệm hơn 28% so với gói tháng",
+                            DurationDays = 365,
+                            FeaturesJson = "[\"Full HD / 4K\",\"Không quảng cáo\",\"Tải về xem offline\",\"Ưu tiên hỗ trợ\"]",
+                            IsActive = true,
+                            IsMostPopular = true,
+                            IsTrial = false,
+                            Name = "Premium Năm",
+                            PlanId = "yearly_premium",
+                            PriceVnd = 599000L,
+                            SortOrder = 2,
+                            UpdatedAt = new DateTime(2026, 10, 24, 0, 0, 0, 0, DateTimeKind.Utc)
+                        });
+                });
+
             modelBuilder.Entity("UIAMovie.Domain.Entities.TvShow", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1429,7 +1538,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$KmcGhecGUZg2tA5ouPcqUO0ZmTVLYfxgFWoBqv.JQnd8WQqNZJd4.",
+                            PasswordHash = "$2a$11$0XYQ08Vhaw9sNMXfK68a..mBfLL9tSBqE.i4pYX7GgRntzGsFkePe",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),

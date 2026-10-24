@@ -49,7 +49,7 @@ public class MovieDbContext : DbContext
 
     public DbSet<UserSubscription> UserSubscriptions { get; set; }
     public DbSet<PaymentOrder> PaymentOrders { get; set; }
-
+    public DbSet<SubscriptionPlan> SubscriptionPlans { get; set; }
     public DbSet<MovieSubtitle> MovieSubtitles { get; set; }
     public DbSet<EpisodeSubtitle> EpisodeSubtitles { get; set; }
 
@@ -529,6 +529,40 @@ public class MovieDbContext : DbContext
                 .IsRequired();
         });
 
+        // trong OnModelCreating, trước "Seed Admin"
+        modelBuilder.Entity<SubscriptionPlan>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.PlanId).IsUnique();
+            entity.HasIndex(e => new { e.IsActive, e.SortOrder });
+
+            entity.Property(e => e.PlanId).HasMaxLength(50).IsRequired();
+            entity.Property(e => e.Name).HasMaxLength(100).IsRequired();
+            entity.Property(e => e.Description).HasMaxLength(500);
+            entity.Property(e => e.AllowedEmailDomains).HasMaxLength(500);
+
+            // Seed 2 gói cũ để dữ liệu đang chạy không đổi (PlanId khớp các đơn cũ)
+            var seedAt = new DateTime(2026, 10, 24, 0, 0, 0, DateTimeKind.Utc);
+            entity.HasData(
+                new SubscriptionPlan
+                {
+                    Id = Guid.Parse("00000000-0000-0000-0000-0000000000a1"),
+                    PlanId = "monthly_premium", Name = "Premium Tháng",
+                    Description = "Xem không giới hạn trong 30 ngày",
+                    PriceVnd = 69_000, DurationDays = 30, SortOrder = 1,
+                    FeaturesJson = "[\"Full HD / 4K\",\"Không quảng cáo\",\"Tải về xem offline\"]",
+                    CreatedAt = seedAt, UpdatedAt = seedAt
+                },
+                new SubscriptionPlan
+                {
+                    Id = Guid.Parse("00000000-0000-0000-0000-0000000000a2"),
+                    PlanId = "yearly_premium", Name = "Premium Năm",
+                    Description = "Tiết kiệm hơn 28% so với gói tháng",
+                    PriceVnd = 599_000, DurationDays = 365, SortOrder = 2, IsMostPopular = true,
+                    FeaturesJson = "[\"Full HD / 4K\",\"Không quảng cáo\",\"Tải về xem offline\",\"Ưu tiên hỗ trợ\"]",
+                    CreatedAt = seedAt, UpdatedAt = seedAt
+                });
+        });
         // ── PaymentOrder ──────────────────────────────────────────────────────
         modelBuilder.Entity<PaymentOrder>(entity =>
         {
