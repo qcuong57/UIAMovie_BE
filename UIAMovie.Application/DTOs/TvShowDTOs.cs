@@ -326,6 +326,12 @@ public class FilterTvShowsDTO
     /// </summary>
     public bool? IsUpcoming { get; set; }
 
+    /// <summary>
+    /// TRUE = trả CẢ show đã lên sóng lẫn sắp lên sóng (dùng cho trang admin).
+    /// Bỏ qua IsUpcoming. Mặc định false → browse công khai không đổi hành vi.
+    /// </summary>
+    public bool IncludeUpcoming { get; set; } = false;
+
     public string? SortBy { get; set; } = "rating";
     public bool SortDesc { get; set; } = true;
     public int Page { get; set; } = 1;

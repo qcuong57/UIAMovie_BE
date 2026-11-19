@@ -1,40 +1,48 @@
 ﻿using System.Text.Json.Serialization;
-
+namespace UIAMovie.Application.DTOs;
 // ── Existing DTOs ─────────────────────────────────────────────────────────────
 
 public class TmdbMovieDTO
 {
-    [JsonPropertyName("id")]            public int    Id          { get; set; }
-    [JsonPropertyName("title")]         public string Title       { get; set; } = string.Empty;
-    [JsonPropertyName("overview")]      public string Overview    { get; set; } = string.Empty;
-    [JsonPropertyName("release_date")]  public string? ReleaseDate { get; set; }
-    [JsonPropertyName("poster_path")]   public string? PosterPath  { get; set; }
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("title")] public string Title { get; set; } = string.Empty;
+    [JsonPropertyName("overview")] public string Overview { get; set; } = string.Empty;
+    [JsonPropertyName("release_date")] public string? ReleaseDate { get; set; }
+    [JsonPropertyName("poster_path")] public string? PosterPath { get; set; }
     [JsonPropertyName("backdrop_path")] public string? BackdropPath { get; set; }
-    [JsonPropertyName("vote_average")]  public double VoteAverage  { get; set; }
-    [JsonPropertyName("genre_ids")]     public List<int> GenreIds  { get; set; } = new();
+    [JsonPropertyName("vote_average")] public double VoteAverage { get; set; }
+    [JsonPropertyName("genre_ids")] public List<int> GenreIds { get; set; } = new();
+
     /// <summary>Mã quốc gia sản xuất — ISO 3166-1 alpha-2, VD: ["US"], ["KR"]</summary>
-    [JsonPropertyName("origin_country")] public List<string> OriginCountry { get; set; } = new();
-    public string? PosterUrl   { get; set; }
+    [JsonPropertyName("origin_country")]
+    public List<string> OriginCountry { get; set; } = new();
+
+    [JsonPropertyName("original_language")]
+    public string? OriginalLanguage { get; set; }
+
+    [JsonPropertyName("vote_count")] public int VoteCount { get; set; }
+    [JsonPropertyName("popularity")] public double Popularity { get; set; }
+    public string? PosterUrl { get; set; }
     public string? BackdropUrl { get; set; }
 }
 
 public class TmdbMovieDetailDTO : TmdbMovieDTO
 {
-    [JsonPropertyName("runtime")]  public int?    Runtime { get; set; }
-    [JsonPropertyName("imdb_id")] public string? ImdbId  { get; set; }
-    [JsonPropertyName("genres")]   public List<TmdbGenreDTO> Genres { get; set; } = new();
+    [JsonPropertyName("runtime")] public int? Runtime { get; set; }
+    [JsonPropertyName("imdb_id")] public string? ImdbId { get; set; }
+    [JsonPropertyName("genres")] public List<TmdbGenreDTO> Genres { get; set; } = new();
 }
 
 public class TmdbSearchResponseDTO
 {
-    [JsonPropertyName("results")]       public List<TmdbMovieDTO> Results      { get; set; } = new();
-    [JsonPropertyName("total_pages")]   public int                TotalPages   { get; set; }
-    [JsonPropertyName("total_results")] public int                TotalResults { get; set; }
+    [JsonPropertyName("results")] public List<TmdbMovieDTO> Results { get; set; } = new();
+    [JsonPropertyName("total_pages")] public int TotalPages { get; set; }
+    [JsonPropertyName("total_results")] public int TotalResults { get; set; }
 }
 
 public class TmdbGenreDTO
 {
-    [JsonPropertyName("id")]   public int    Id   { get; set; }
+    [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
 }
 
@@ -45,16 +53,16 @@ public class TmdbGenreResponseDTO
 
 public class TmdbVideoItemDTO
 {
-    [JsonPropertyName("key")]  public string Key  { get; set; } = string.Empty;
+    [JsonPropertyName("key")] public string Key { get; set; } = string.Empty;
     [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
     [JsonPropertyName("type")] public string Type { get; set; } = string.Empty;
 }
 
 public class TmdbTrailerDTO
 {
-    public string Key        { get; set; } = string.Empty;
-    public string Name       { get; set; } = string.Empty;
-    public string Type       { get; set; } = string.Empty;
+    public string Key { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
     public string YoutubeUrl { get; set; } = string.Empty;
 }
 
@@ -67,20 +75,20 @@ public class TmdbVideoResponseDTO
 
 public class TmdbCastDTO
 {
-    [JsonPropertyName("id")]           public int     Id          { get; set; }
-    [JsonPropertyName("name")]         public string  Name        { get; set; } = string.Empty;
-    [JsonPropertyName("character")]    public string  Character   { get; set; } = string.Empty;
-    [JsonPropertyName("order")]        public int     Order       { get; set; }
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("character")] public string Character { get; set; } = string.Empty;
+    [JsonPropertyName("order")] public int Order { get; set; }
     [JsonPropertyName("profile_path")] public string? ProfilePath { get; set; }
     public string? ProfileUrl { get; set; }
 }
 
 public class TmdbCrewDTO
 {
-    [JsonPropertyName("id")]           public int     Id          { get; set; }
-    [JsonPropertyName("name")]         public string  Name        { get; set; } = string.Empty;
-    [JsonPropertyName("job")]          public string  Job         { get; set; } = string.Empty;
-    [JsonPropertyName("department")]   public string  Department  { get; set; } = string.Empty;
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("job")] public string Job { get; set; } = string.Empty;
+    [JsonPropertyName("department")] public string Department { get; set; } = string.Empty;
     [JsonPropertyName("profile_path")] public string? ProfilePath { get; set; }
     public string? ProfileUrl { get; set; }
 }
@@ -95,22 +103,22 @@ public class TmdbCreditsResponseDTO
 
 public class TmdbImageDTO
 {
-    [JsonPropertyName("file_path")]    public string  FilePath    { get; set; } = string.Empty;
-    [JsonPropertyName("vote_average")] public double  VoteAverage { get; set; }
+    [JsonPropertyName("file_path")] public string FilePath { get; set; } = string.Empty;
+    [JsonPropertyName("vote_average")] public double VoteAverage { get; set; }
     public string? Url { get; set; }
 }
 
 public class TmdbImagesResponseDTO
 {
     [JsonPropertyName("backdrops")] public List<TmdbImageDTO> Backdrops { get; set; } = new();
-    [JsonPropertyName("posters")]   public List<TmdbImageDTO> Posters   { get; set; } = new();
+    [JsonPropertyName("posters")] public List<TmdbImageDTO> Posters { get; set; } = new();
 }
 
 // ── Person Images ─────────────────────────────────────────────────────────────
 
 public class TmdbPersonProfileDTO
 {
-    [JsonPropertyName("file_path")]    public string FilePath    { get; set; } = string.Empty;
+    [JsonPropertyName("file_path")] public string FilePath { get; set; } = string.Empty;
     [JsonPropertyName("vote_average")] public double VoteAverage { get; set; }
 }
 
@@ -123,16 +131,19 @@ public class TmdbPersonImagesResponseDTO
 
 public class TmdbPersonDetailDTO
 {
-    [JsonPropertyName("id")]                   public int     Id                 { get; set; }
-    [JsonPropertyName("name")]                 public string  Name               { get; set; } = string.Empty;
-    [JsonPropertyName("biography")]            public string? Biography          { get; set; }
-    [JsonPropertyName("birthday")]             public string? Birthday           { get; set; }
-    [JsonPropertyName("deathday")]             public string? Deathday           { get; set; }
-    [JsonPropertyName("place_of_birth")]       public string? PlaceOfBirth       { get; set; }
-    [JsonPropertyName("profile_path")]         public string? ProfilePath        { get; set; }
-    [JsonPropertyName("known_for_department")] public string? KnownForDepartment { get; set; }
-    [JsonPropertyName("gender")]               public int     Gender             { get; set; }
-    [JsonPropertyName("popularity")]           public double  Popularity         { get; set; }
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("biography")] public string? Biography { get; set; }
+    [JsonPropertyName("birthday")] public string? Birthday { get; set; }
+    [JsonPropertyName("deathday")] public string? Deathday { get; set; }
+    [JsonPropertyName("place_of_birth")] public string? PlaceOfBirth { get; set; }
+    [JsonPropertyName("profile_path")] public string? ProfilePath { get; set; }
+
+    [JsonPropertyName("known_for_department")]
+    public string? KnownForDepartment { get; set; }
+
+    [JsonPropertyName("gender")] public int Gender { get; set; }
+    [JsonPropertyName("popularity")] public double Popularity { get; set; }
     public string? ProfileUrl { get; set; }
 }
 
@@ -140,12 +151,12 @@ public class TmdbPersonDetailDTO
 
 public class TmdbFullMovieDTO
 {
-    public TmdbMovieDetailDTO   Detail    { get; set; } = null!;
-    public List<TmdbCastDTO>    Cast      { get; set; } = new();
-    public TmdbCrewDTO?         Director  { get; set; }
-    public List<TmdbImageDTO>   Backdrops { get; set; } = new();
-    public List<TmdbImageDTO>   Posters   { get; set; } = new();
-    public List<TmdbTrailerDTO> Trailers  { get; set; } = new();
+    public TmdbMovieDetailDTO Detail { get; set; } = null!;
+    public List<TmdbCastDTO> Cast { get; set; } = new();
+    public TmdbCrewDTO? Director { get; set; }
+    public List<TmdbImageDTO> Backdrops { get; set; } = new();
+    public List<TmdbImageDTO> Posters { get; set; } = new();
+    public List<TmdbTrailerDTO> Trailers { get; set; } = new();
 
     /// <summary>
     /// Key = TmdbPersonId → danh sách URL ảnh profile.
@@ -173,18 +184,24 @@ public class TmdbFullMovieDTO
 /// </summary>
 public class TmdbTvDTO
 {
-    [JsonPropertyName("id")]             public int    Id           { get; set; }
-    [JsonPropertyName("name")]           public string Name         { get; set; } = string.Empty;
-    [JsonPropertyName("overview")]       public string Overview     { get; set; } = string.Empty;
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("overview")] public string Overview { get; set; } = string.Empty;
     [JsonPropertyName("first_air_date")] public string? FirstAirDate { get; set; }
-    [JsonPropertyName("poster_path")]    public string? PosterPath   { get; set; }
-    [JsonPropertyName("backdrop_path")]  public string? BackdropPath { get; set; }
-    [JsonPropertyName("vote_average")]   public double  VoteAverage  { get; set; }
-    [JsonPropertyName("genre_ids")]      public List<int> GenreIds   { get; set; } = new();
+    [JsonPropertyName("poster_path")] public string? PosterPath { get; set; }
+    [JsonPropertyName("backdrop_path")] public string? BackdropPath { get; set; }
+    [JsonPropertyName("vote_average")] public double VoteAverage { get; set; }
+    [JsonPropertyName("genre_ids")] public List<int> GenreIds { get; set; } = new();
     [JsonPropertyName("origin_country")] public List<string> OriginCountry { get; set; } = new();
 
+    [JsonPropertyName("original_language")]
+    public string? OriginalLanguage { get; set; }
+
+    [JsonPropertyName("vote_count")] public int VoteCount { get; set; }
+    [JsonPropertyName("popularity")] public double Popularity { get; set; }
+
     // Được set sau khi deserialize (BuildImageUrl)
-    public string? PosterUrl   { get; set; }
+    public string? PosterUrl { get; set; }
     public string? BackdropUrl { get; set; }
 }
 
@@ -195,9 +212,9 @@ public class TmdbTvDTO
 /// </summary>
 public class TmdbTvSearchResponseDTO
 {
-    [JsonPropertyName("results")]       public List<TmdbTvDTO> Results      { get; set; } = new();
-    [JsonPropertyName("total_pages")]   public int             TotalPages   { get; set; }
-    [JsonPropertyName("total_results")] public int             TotalResults { get; set; }
+    [JsonPropertyName("results")] public List<TmdbTvDTO> Results { get; set; } = new();
+    [JsonPropertyName("total_pages")] public int TotalPages { get; set; }
+    [JsonPropertyName("total_results")] public int TotalResults { get; set; }
 }
 
 // ── TV Show detail ────────────────────────────────────────────────────────────
@@ -207,21 +224,32 @@ public class TmdbTvSearchResponseDTO
 /// </summary>
 public class TmdbTvDetailDTO : TmdbTvDTO
 {
-    [JsonPropertyName("number_of_seasons")]  public int?   NumberOfSeasons  { get; set; }
-    [JsonPropertyName("number_of_episodes")] public int?   NumberOfEpisodes { get; set; }
+    [JsonPropertyName("number_of_seasons")]
+    public int? NumberOfSeasons { get; set; }
+
+    [JsonPropertyName("number_of_episodes")]
+    public int? NumberOfEpisodes { get; set; }
+
     /// <summary>"Returning Series" | "Ended" | "Canceled" | "In Production"</summary>
-    [JsonPropertyName("status")]             public string? Status          { get; set; }
-    [JsonPropertyName("last_air_date")]      public string? LastAirDate     { get; set; }
+    [JsonPropertyName("status")]
+    public string? Status { get; set; }
+
+    [JsonPropertyName("last_air_date")] public string? LastAirDate { get; set; }
+
     /// <summary>
     /// TMDB trả về mảng (vd: [42, 45]) — ta lấy phần tử đầu tiên làm EpisodeRuntime.
     /// </summary>
-    [JsonPropertyName("episode_run_time")]   public List<int> EpisodeRunTime { get; set; } = new();
-    [JsonPropertyName("genres")]             public List<TmdbGenreDTO>   Genres  { get; set; } = new();
+    [JsonPropertyName("episode_run_time")]
+    public List<int> EpisodeRunTime { get; set; } = new();
+
+    [JsonPropertyName("genres")] public List<TmdbGenreDTO> Genres { get; set; } = new();
+
     /// <summary>
     /// Season summary list — đã có sẵn trong detail response, không cần gọi thêm endpoint.
     /// Không bao gồm episode list; cần gọi /tv/{id}/season/{n} riêng.
     /// </summary>
-    [JsonPropertyName("seasons")]            public List<TmdbSeasonSummaryDTO> Seasons { get; set; } = new();
+    [JsonPropertyName("seasons")]
+    public List<TmdbSeasonSummaryDTO> Seasons { get; set; } = new();
 
     // Computed helper — không map từ JSON
     /// <summary>Lấy runtime đại diện (phần tử đầu tiên của EpisodeRunTime, hoặc null).</summary>
@@ -236,13 +264,13 @@ public class TmdbTvDetailDTO : TmdbTvDTO
 /// </summary>
 public class TmdbSeasonSummaryDTO
 {
-    [JsonPropertyName("id")]             public int    Id           { get; set; }
-    [JsonPropertyName("season_number")]  public int    SeasonNumber { get; set; }
-    [JsonPropertyName("name")]           public string Name         { get; set; } = string.Empty;
-    [JsonPropertyName("overview")]       public string Overview     { get; set; } = string.Empty;
-    [JsonPropertyName("poster_path")]    public string? PosterPath  { get; set; }
-    [JsonPropertyName("air_date")]       public string? AirDate     { get; set; }
-    [JsonPropertyName("episode_count")]  public int    EpisodeCount { get; set; }
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("season_number")] public int SeasonNumber { get; set; }
+    [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("overview")] public string Overview { get; set; } = string.Empty;
+    [JsonPropertyName("poster_path")] public string? PosterPath { get; set; }
+    [JsonPropertyName("air_date")] public string? AirDate { get; set; }
+    [JsonPropertyName("episode_count")] public int EpisodeCount { get; set; }
 
     // Được set sau khi deserialize
     public string? PosterUrl { get; set; }
@@ -254,13 +282,13 @@ public class TmdbSeasonSummaryDTO
 /// </summary>
 public class TmdbSeasonDetailDTO
 {
-    [JsonPropertyName("id")]            public int    Id           { get; set; }
-    [JsonPropertyName("season_number")] public int    SeasonNumber { get; set; }
-    [JsonPropertyName("name")]          public string Name         { get; set; } = string.Empty;
-    [JsonPropertyName("overview")]      public string Overview     { get; set; } = string.Empty;
-    [JsonPropertyName("poster_path")]   public string? PosterPath  { get; set; }
-    [JsonPropertyName("air_date")]      public string? AirDate     { get; set; }
-    [JsonPropertyName("episodes")]      public List<TmdbEpisodeDTO> Episodes { get; set; } = new();
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("season_number")] public int SeasonNumber { get; set; }
+    [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("overview")] public string Overview { get; set; } = string.Empty;
+    [JsonPropertyName("poster_path")] public string? PosterPath { get; set; }
+    [JsonPropertyName("air_date")] public string? AirDate { get; set; }
+    [JsonPropertyName("episodes")] public List<TmdbEpisodeDTO> Episodes { get; set; } = new();
 
     public string? PosterUrl { get; set; }
 }
@@ -272,15 +300,18 @@ public class TmdbSeasonDetailDTO
 /// </summary>
 public class TmdbEpisodeDTO
 {
-    [JsonPropertyName("id")]             public int    Id            { get; set; }
-    [JsonPropertyName("episode_number")] public int    EpisodeNumber { get; set; }
-    [JsonPropertyName("name")]           public string Title         { get; set; } = string.Empty;
-    [JsonPropertyName("overview")]       public string Overview      { get; set; } = string.Empty;
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("episode_number")] public int EpisodeNumber { get; set; }
+    [JsonPropertyName("name")] public string Title { get; set; } = string.Empty;
+    [JsonPropertyName("overview")] public string Overview { get; set; } = string.Empty;
+
     /// <summary>Thumbnail tĩnh của tập — dùng w300 size.</summary>
-    [JsonPropertyName("still_path")]     public string? StillPath    { get; set; }
-    [JsonPropertyName("runtime")]        public int?   Runtime       { get; set; }
-    [JsonPropertyName("vote_average")]   public double VoteAverage   { get; set; }
-    [JsonPropertyName("air_date")]       public string? AirDate      { get; set; }
+    [JsonPropertyName("still_path")]
+    public string? StillPath { get; set; }
+
+    [JsonPropertyName("runtime")] public int? Runtime { get; set; }
+    [JsonPropertyName("vote_average")] public double VoteAverage { get; set; }
+    [JsonPropertyName("air_date")] public string? AirDate { get; set; }
 
     // Được set sau khi deserialize
     public string? StillUrl { get; set; }
@@ -294,11 +325,11 @@ public class TmdbEpisodeDTO
 /// </summary>
 public class TmdbTvCastDTO
 {
-    [JsonPropertyName("id")]           public int                 Id          { get; set; }
-    [JsonPropertyName("name")]         public string              Name        { get; set; } = string.Empty;
-    [JsonPropertyName("order")]        public int                 Order       { get; set; }
-    [JsonPropertyName("profile_path")] public string?             ProfilePath { get; set; }
-    [JsonPropertyName("roles")]        public List<TmdbTvRoleDTO> Roles       { get; set; } = new();
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("order")] public int Order { get; set; }
+    [JsonPropertyName("profile_path")] public string? ProfilePath { get; set; }
+    [JsonPropertyName("roles")] public List<TmdbTvRoleDTO> Roles { get; set; } = new();
 
     // Computed — lấy character từ role đầu tiên
     public string Character => Roles.FirstOrDefault()?.Character ?? string.Empty;
@@ -307,14 +338,14 @@ public class TmdbTvCastDTO
 
 public class TmdbTvRoleDTO
 {
-    [JsonPropertyName("character")]    public string Character   { get; set; } = string.Empty;
-    [JsonPropertyName("episode_count")] public int   EpisodeCount { get; set; }
+    [JsonPropertyName("character")] public string Character { get; set; } = string.Empty;
+    [JsonPropertyName("episode_count")] public int EpisodeCount { get; set; }
 }
 
 public class TmdbTvCreditsResponseDTO
 {
     [JsonPropertyName("cast")] public List<TmdbTvCastDTO> Cast { get; set; } = new();
-    [JsonPropertyName("crew")] public List<TmdbCrewDTO>   Crew { get; set; } = new();
+    [JsonPropertyName("crew")] public List<TmdbCrewDTO> Crew { get; set; } = new();
 }
 
 // ── TV Genre ──────────────────────────────────────────────────────────────────
@@ -333,16 +364,99 @@ public class TmdbTvCreditsResponseDTO
 /// </summary>
 public class TmdbFullTvShowDTO
 {
-    public TmdbTvDetailDTO                   Detail        { get; set; } = null!;
-    public List<TmdbTvCastDTO>               Cast          { get; set; } = new();
-    public TmdbCrewDTO?                      Director      { get; set; }
-    public List<TmdbImageDTO>                Backdrops     { get; set; } = new();
-    public List<TmdbImageDTO>                Posters       { get; set; } = new();
-    public List<TmdbTrailerDTO>              Trailers      { get; set; } = new();
+    public TmdbTvDetailDTO Detail { get; set; } = null!;
+    public List<TmdbTvCastDTO> Cast { get; set; } = new();
+    public TmdbCrewDTO? Director { get; set; }
+    public List<TmdbImageDTO> Backdrops { get; set; } = new();
+    public List<TmdbImageDTO> Posters { get; set; } = new();
+    public List<TmdbTrailerDTO> Trailers { get; set; } = new();
+
     /// <summary>Key = SeasonNumber → full season detail kèm episode list.</summary>
     public Dictionary<int, TmdbSeasonDetailDTO> SeasonDetails { get; set; } = new();
+
     /// <summary>Key = TmdbPersonId → danh sách URL ảnh profile (tối đa 5).</summary>
-    public Dictionary<int, List<string>>         PersonImages  { get; set; } = new();
+    public Dictionary<int, List<string>> PersonImages { get; set; } = new();
+
     /// <summary>Key = TmdbPersonId → tiểu sử (đã dịch sang tiếng Việt nếu có thể).</summary>
     public Dictionary<int, TmdbPersonDetailDTO?> PersonDetails { get; set; } = new();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// DISCOVER — lọc + tìm kiếm kết hợp khi import từ TMDB (phim & TV show)
+// ════════════════════════════════════════════════════════════════════════════
+
+/// <summary>
+/// Query string của GET /api/admin/tmdb/{kind}/discover.
+/// Query rỗng → /discover (TMDB lọc chính xác). Có Query → /search rồi lọc tiếp ở server.
+/// </summary>
+public class TmdbDiscoverFilterDTO
+{
+    /// <summary>Từ khoá tìm theo tên. Rỗng = chế độ discover.</summary>
+    public string? Query { get; set; }
+
+    /// <summary>Id thể loại TMDB, ngăn cách bằng dấu phẩy, VD: "28,35". Phải khớp TẤT CẢ thể loại.</summary>
+    public string? Genres { get; set; }
+
+    /// <summary>Quốc gia sản xuất — ISO 3166-1 alpha-2, VD: "KR".</summary>
+    public string? Country { get; set; }
+
+    public int? YearFrom { get; set; }
+    public int? YearTo { get; set; }
+
+    /// <summary>Điểm TMDB tối thiểu (0–10).</summary>
+    public decimal? MinRating { get; set; }
+
+    /// <summary>Số lượt vote tối thiểu.</summary>
+    public int? MinVotes { get; set; }
+
+    /// <summary>popular | rating | newest | oldest. Bị bỏ qua khi có Query (xếp theo độ liên quan).</summary>
+    public string Sort { get; set; } = "popular";
+
+    /// <summary>Trang TMDB bắt đầu quét (con trỏ). Dùng NextPage của response trước để sang trang kế.</summary>
+    public int Page { get; set; } = 1;
+}
+
+/// <summary>
+/// 1 item kết quả — dùng chung cho phim và TV show. Tên field cố định (camelCase) để
+/// frontend không phụ thuộc cấu hình serializer: phim dùng ReleaseDate, TV dùng FirstAirDate,
+/// Title và Name luôn cùng giá trị.
+/// </summary>
+public class TmdbDiscoverItemDTO
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Overview { get; set; } = string.Empty;
+    public string? ReleaseDate { get; set; }
+    public string? FirstAirDate { get; set; }
+    public string? PosterUrl { get; set; }
+    public string? BackdropUrl { get; set; }
+    public double VoteAverage { get; set; }
+    public int VoteCount { get; set; }
+    public double Popularity { get; set; }
+    public string? OriginalLanguage { get; set; }
+    public List<int> GenreIds { get; set; } = new();
+    public List<string> OriginCountry { get; set; } = new();
+}
+
+public class TmdbDiscoverResponseDTO
+{
+    public List<TmdbDiscoverItemDTO> Results { get; set; } = new();
+
+    /// <summary>Trang TMDB bắt đầu của lần quét này.</summary>
+    public int Page { get; set; }
+
+    /// <summary>Trang TMDB cần quét tiếp cho lần "Trang sau". NULL = hết.</summary>
+    public int? NextPage { get; set; }
+
+    public int TotalPages { get; set; }
+
+    /// <summary>Tổng kết quả phía TMDB — chỉ chính xác khi IsFiltered = false.</summary>
+    public int TotalResults { get; set; }
+
+    /// <summary>TRUE = kết quả đã bị lọc thêm ở server (TotalResults không còn đúng).</summary>
+    public bool IsFiltered { get; set; }
+
+    /// <summary>Ghi chú hiển thị cho admin (VD: quốc gia được lọc gần đúng theo ngôn ngữ).</summary>
+    public List<string> Notes { get; set; } = new();
 }

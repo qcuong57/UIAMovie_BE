@@ -118,6 +118,11 @@ builder.Services.AddTransient<TmdbRetryHandler>();
 builder.Services.AddHttpClient("tmdb", c => c.Timeout = TimeSpan.FromSeconds(60))
     .AddHttpMessageHandler<TmdbRetryHandler>();
 
+// HttpClient riêng cho dịch thuật: KHÔNG retry (retry 429 sẽ dội thêm request vào Google và bị chặn lâu hơn)
+// và không tự theo redirect (Google chuyển sang /sorry khi nghi ngờ bot).
+builder.Services.AddHttpClient("translate", c => c.Timeout = TimeSpan.FromSeconds(30))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+
 builder.Services.AddScoped<ITmdbService, TmdbService>();
 builder.Services.AddScoped<IRatingReviewService, RatingReviewService>();
 builder.Services.AddScoped<IGenreService, GenreService>();

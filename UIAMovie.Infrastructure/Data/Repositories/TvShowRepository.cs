@@ -124,7 +124,7 @@ public class TvShowRepository : Repository<TvShow>, ITvShowRepository
         // ── 3. FIX: Sắp lên sóng / Đã lên sóng ───────────────────────────────
         // NẾU người dùng đang tìm kiếm theo từ khóa tên -> KHÔNG ĐƯỢC CHẶN SHOW SẮP LÊN SÓNG
         var now = DateTime.UtcNow;
-        if (!hasSearch)
+        if (!hasSearch && !filter.IncludeUpcoming)
         {
             query = filter.IsUpcoming == true
                 ? query.Where(t => t.FirstAirDate.HasValue && t.FirstAirDate.Value > now)
