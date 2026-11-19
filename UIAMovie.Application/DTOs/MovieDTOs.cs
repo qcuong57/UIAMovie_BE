@@ -190,6 +190,8 @@ public class TrendingMoviesDTO
 
 public class MovieCastDTO
 {
+    /// <summary>Id Person trong DB — FE dùng để gọi GET /api/persons/{id}/movies.</summary>
+    public Guid? PersonId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Character { get; set; } = string.Empty;
     public int Order { get; set; }
@@ -203,6 +205,8 @@ public class MovieCastDTO
 
 public class PersonDetailDTO
 {
+    /// <summary>Id Person trong DB — FE dùng để gọi GET /api/persons/{id}/movies.</summary>
+    public Guid? PersonId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? ProfileUrl { get; set; }
     public int? TmdbPersonId { get; set; }

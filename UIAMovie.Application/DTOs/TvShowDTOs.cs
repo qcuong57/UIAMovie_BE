@@ -362,6 +362,7 @@ public class TvShowImageDTO
 
 public class TvShowCastDTO
 {
+    public Guid? PersonId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Character { get; set; } = string.Empty;
     public int Order { get; set; }

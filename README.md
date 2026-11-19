@@ -1,6 +1,6 @@
 # UIAMovie — Movie & TV Streaming Platform (REST API)
 
-A RESTful API backend for a Netflix-style streaming platform, built with ASP.NET Core. It covers account security (email OTP, 2FA, rotating refresh tokens in HttpOnly cookies), movie and TV catalogue management with TMDB import, Cloudinary video hosting, admin-configurable Premium plans (including free trials) paid through VNPay or SePay (with an admin revenue dashboard and Excel export), ad serving with a YouTube-style random scheduler, real-time notifications over SignalR, an AI movie assistant, and Redis caching.
+A RESTful API backend for a Netflix-style streaming platform, built with ASP.NET Core. It covers account security (email OTP, 2FA, rotating refresh tokens in HttpOnly cookies), movie and TV catalogue management with TMDB import, Cloudinary video hosting, admin-curated home page collections, admin-configurable Premium plans (including free trials) paid through VNPay or SePay (with an admin revenue dashboard and Excel export), ad serving with a YouTube-style random scheduler, real-time notifications over SignalR, an AI movie assistant, and Redis caching.
 
 The React frontend (Vite, deployed on Vercel) lives in a separate repository and talks to this API over HTTPS.
 
@@ -16,6 +16,7 @@ The React frontend (Vite, deployed on Vercel) lives in a separate repository and
 - [Subscription Plans](#subscription-plans)
 - [Payments (VNPay & SePay)](#payments-vnpay--sepay)
 - [Advertising & Ad Scheduling](#advertising--ad-scheduling)
+- [Home Collections](#home-collections)
 - [API Endpoints](#api-endpoints)
 - [Security Hardening](#security-hardening)
 - [Installation & Setup](#installation--setup)
@@ -64,6 +65,14 @@ The React frontend (Vite, deployed on Vercel) lives in a separate repository and
 - Search by title or actor; filtering by genre, rating, release date and country; sorting and pagination
 - Trending content, person (cast / director) pages
 
+### Home Collections
+- **Admin-curated home page blocks** ("Bộ sưu tập"): each `HomeSection` has a title, subtitle, a **layout key**, a JSON `config`, a sort order, an on / off switch and an optional display window (`StartAt` / `EndAt`, UTC). The backend holds **no UI**: the layout is only a whitelisted string that the frontend maps to a component (see [Home Collections](#home-collections))
+- Two content sources: **Manual** (admin picks movies / TV shows and their order) and **Auto** (the API queries by a pluggable rule: trending, latest, top rated, by genre, upcoming, by year, by country)
+- **Pluggable rules**: a new automatic rule is one class implementing `IAutoRule` plus one DI line; no change to the service, constants or frontend
+- The public list resolves everything into ready-to-render cards (`HomeContentCardDTO`, including trailer key / uploaded trailer URL), is cached for 5 minutes and filters the display window **after** reading the cache, so scheduling is exact
+- Layouts that show only N items cap the stored / queried limit at N; the frontend learns the caps from `GET /admin/home-sections/meta`
+- Items pointing at a deleted or unpublished title silently disappear; a section with no items is not returned to the public
+
 ### Playback, Premium & Payments
 - `PlaybackService` decides who may watch what; the paywall never returns a playback URL when the viewer is not entitled
 - **Admin-configurable plans** (`SubscriptionPlan` table + `AdminPlanController`): price, original price, duration, features, sort order, "most popular" (only one at a time), sale window (`StartsAt` / `EndsAt`, UTC), purchase limit per user, e-mail domain whitelist (for example a student plan) and a trial flag. Plans are switched on or off, never deleted, because orders reference them by `PlanId` string (no FK) and snapshot their name, price and days (see [Subscription Plans](#subscription-plans))
@@ -91,6 +100,7 @@ The React frontend (Vite, deployed on Vercel) lives in a separate repository and
 - Redis cache (Upstash) with `GetOrSetAsync` and pipeline batch invalidation
 - `AsNoTracking()` on read queries
 - In-memory cache for lightweight content metadata used by heartbeats
+- Home collections: all Manual items of every section are loaded with **two queries in total** (movies + TV shows), and the admin list skips resolving Auto sections entirely
 
 ---
 
@@ -130,7 +140,8 @@ The React frontend (Vite, deployed on Vercel) lives in a separate repository and
 │  Controllers │ SignalR Hubs │ Validators                  │
 │        │                                                  │
 │  Application Services (Auth, Movie, TvShow, Playback,     │
-│  Payment, SubscriptionPlan, Notification, AI, ...)        │
+│  Payment, SubscriptionPlan, HomeSection, Notification,    │
+│  AI, ...)                                                 │
 │        │                       │                          │
 │  Redis cache (Upstash)   Generic / specialised repos      │
 │                          (EF Core + PostgreSQL)           │
@@ -145,7 +156,7 @@ The solution follows Clean Architecture: dependencies point inward (API → Appl
 
 - **Controllers / Hubs** — HTTP routing, request and response shaping, authorization and rate-limit attributes
 - **Services** — business logic, cache management, orchestration
-- **Repositories** — data access via EF Core (`Repository<T>` plus specialised repositories such as `IUserRepository`)
+- **Repositories** — data access via EF Core (`Repository<T>` plus specialised repositories such as `IUserRepository`, `IHomeSectionRepository`)
 - **Middleware** — security headers, global exception handling
 - **Infrastructure** — Redis, Cloudinary, JWT generator, email queue, TMDB / Groq / VNPay / SePay clients
 
@@ -453,6 +464,93 @@ Content-Type: application/json
 
 ---
 
+## Home Collections
+
+Admins build the home page from "collections" (`HomeSection`) without a deploy. Implemented by `HomeSectionService` + `IAutoRule` implementations (Application), `HomeSectionRepository` (Infrastructure), `HomeSection` / `HomeSectionItem` (Domain) and `HomeSectionsController` (API). The backend stores **only data**: the layout is a whitelisted key and the frontend decides how to draw it.
+
+### Data model
+
+| Entity | Field | Meaning |
+|---|---|---|
+| `HomeSection` | `Title`, `Subtitle` | Display text (max 120 / 250 characters) |
+| | `Layout` | Layout **key** (lower-case, whitelisted in `HomeSectionConstants.Layouts`; must match the frontend's registry) |
+| | `ConfigJson` | Layout options as JSON (`jsonb`): `accent`, `columns`, `rows`, `numbered`, `reverse`, … Max length `HomeSectionConstants.MaxConfigLength` |
+| | `SortOrder`, `IsActive` | Position on the page and the on / off switch |
+| | `StartAt`, `EndAt` | Display window in UTC; `null` = unbounded |
+| | `SourceType` | `Manual` or `Auto` |
+| | `AutoRule`, `AutoParam`, `AutoContentType`, `ItemLimit` | Auto source: rule key, rule parameter, `movie` / `tvshow` / `all`, maximum items |
+| `HomeSectionItem` | `ContentType`, `ContentId`, `Order` | A movie or TV show of a Manual section. **No foreign key** (the target is polymorphic); existence is checked on save and dead references are skipped on read |
+
+### Auto rules
+
+Each rule implements `IAutoRule` (`Key`, `Label`, `ParamKind`, `ValidateParam`, `ResolveAsync`). `ResolveAsync` returns `(card, key)` pairs; the service sorts them by `key` descending (so movies and TV shows mix correctly when the type is `all`) and takes the top `limit`.
+
+| Key | Label | Parameter | Order |
+|---|---|---|---|
+| `trending` | Đang thịnh hành | – | Repository trending score |
+| `latest` | Mới phát hành | – | Release / first-air date, newest first |
+| `top_rated` | Đánh giá cao | – | IMDb rating |
+| `genre` | Theo thể loại | `GenreId` (Guid) | Rating |
+| `upcoming` | Sắp chiếu | – | Future release date, nearest first (key is negated) |
+| `year` | Theo năm | Year 1900–2100 | Rating |
+| `country` | Theo quốc gia | ISO 3166-1 alpha-2 (`KR`, `JP`, `US`), stored upper-case | Rating |
+
+Only published titles are returned. `ParamKind` (`none` / `genre` / `year` / `country`) is exposed through `/meta`, so the admin UI renders the right input without hard-coding rules.
+
+**Add a rule**
+1. Create a class implementing `IAutoRule` (or derive from `ParamRatingRuleBase` for "filter + sort by rating")
+2. Register it: `services.AddScoped<IAutoRule, XxxRule>();`
+3. Nothing else: the service, `/meta` and validation pick it up automatically. The admin UI only needs a Vietnamese label if the default `Label` is not enough
+
+### Read path
+
+```
+GET /api/home-sections
+  1. cache "home:sections" (5 min)  →  miss: load active sections + items,
+       Manual items of ALL sections: 2 queries (movies + TV shows),
+       Auto sections: resolved through their rule
+  2. THEN filter by StartAt / EndAt and drop sections with 0 items   ← after the cache, so scheduling is exact
+```
+
+- Manual items pointing at a missing or unpublished title are dropped silently.
+- Auto limits are clamped by the layout's cap (`HomeSectionConstants.EffectiveLimit`), including old rows saved with a larger limit.
+- The admin list (`GET /admin/home-sections`) is **not cached** and does **not resolve Auto sections** (their `items` are empty): each Auto section costs several heavy queries and the page only needs the configuration. `GET /admin/home-sections/{id}` does resolve them.
+- Cards (`HomeContentCardDTO`) carry what the UI needs in one payload: ids, texts, poster / backdrop, rating, release date, origin country, genres, `isPremium`, `isUpcoming`, duration or seasons, and the trailer (`trailerKey` extracted from a YouTube URL of a `trailer` video, or `trailerVideoUrl` of a `trailer_upload` video).
+
+### Write path & validation
+
+Create and update share `ValidateAndNormalizeAsync`; any failure is a `400 { "message": "…" }`.
+
+| Rule | Detail |
+|---|---|
+| Title | Required, trimmed, ≤ 120 characters; subtitle ≤ 250 (empty becomes `null`) |
+| Layout | Trimmed, lower-cased, must be in `HomeSectionConstants.Layouts` |
+| Window | Dates are converted to UTC; `StartAt` must be before `EndAt` |
+| Config | Serialised size ≤ `MaxConfigLength`; `accent` must match `^#[0-9a-fA-F]{6}$` (an empty value removes it), so no arbitrary string ever reaches the home page's inline styles |
+| Manual | Content types `movie` / `tvshow`, non-empty ids, duplicates ignored, ≤ `MaxManualItems`, every id must exist (error lists the missing ids). Order is the order sent |
+| Auto | Rule must exist, `AutoContentType` ∈ `movie` / `tvshow` / `all`, `ValidateParam` must pass (the parameter is dropped when the rule takes none), `ItemLimit` is clamped to the layout cap |
+| Update | Items are replaced as a whole (`ReplaceItems`: remove old, add new explicitly so EF marks them as `Added`, since the Guid keys are already set) |
+
+- **Create** appends at `max(SortOrder) + 1` and answers `201 { id }`.
+- **Reorder** takes every id in the new order and rewrites `SortOrder` as `0..n-1`; unknown ids are skipped.
+- **Active** toggles `IsActive` without touching anything else.
+- Every write removes the cache key `home:sections`, so the next public request rebuilds it.
+
+### Migration
+
+```bash
+dotnet ef migrations add AddHomeSections --project UIAMovie.Infrastructure --startup-project UIAMovie.API
+dotnet ef database update --project UIAMovie.Infrastructure --startup-project UIAMovie.API
+```
+
+### Wiring checklist
+
+- `MovieDbContext`: `DbSet<HomeSection>` and `DbSet<HomeSectionItem>` (cascade delete from section to items; `ConfigJson` as `jsonb`)
+- DI: `IHomeSectionService → HomeSectionService`, `IHomeSectionRepository → HomeSectionRepository`, `IClock`, and **one `IAutoRule` registration per rule** (all seven above). A rule that is not registered is rejected as "AutoRule không hợp lệ" and a stored section pointing to it resolves to an empty list
+- `ICacheService` must be available (Redis in production)
+
+---
+
 ## API Endpoints
 
 ### Auth — `/api/auth`
@@ -535,6 +633,22 @@ Content-Type: application/json
 | PUT | `/{id}` | Admin | Update a plan (Guid `id`; `planId` is immutable) |
 | PATCH | `/{id}/active` | Admin | Switch a plan on / off (`{ "isActive": bool }`) |
 
+### Home collections — `/api/home-sections`, `/api/admin/home-sections`
+
+`HomeSectionsController` declares absolute routes, so both groups live in one controller.
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| GET | `/api/home-sections` | Public | Sections currently visible (active, inside their window, with at least one item), sorted by `SortOrder`, items already resolved into cards. Cached 5 min server-side |
+| GET | `/api/admin/home-sections` | Admin | Every section, including off / expired / empty ones. Auto sections are **not** resolved (`items` empty) |
+| GET | `/api/admin/home-sections/meta` | Admin | `layouts`, `autoRules`, `autoRuleDetails` (`key`, `label`, `paramKind`), `layoutLimits`, `contentTypes`, `autoContentTypes`, `maxManualItems` — everything the admin UI needs for its dropdowns |
+| GET | `/api/admin/home-sections/{id}` | Admin | One section; Auto sources are resolved |
+| POST | `/api/admin/home-sections` | Admin | Create (`UpsertHomeSectionDTO`) → `201 { id }`; validation errors `400` |
+| PUT | `/api/admin/home-sections/{id}` | Admin | Update → `204`; `404` when missing; validation errors `400` |
+| DELETE | `/api/admin/home-sections/{id}` | Admin | Delete a section (its items cascade; the movies are untouched) → `204` |
+| PUT | `/api/admin/home-sections/reorder` | Admin | Body `{ "sectionIds": [Guid, …] }` in the new order → `204` |
+| PATCH | `/api/admin/home-sections/{id}/active` | Admin | Body `{ "isActive": bool }` → `204` |
+
 ### Genres — `/api/genres`
 
 | Method | Endpoint | Auth | Description |
@@ -604,6 +718,7 @@ TV shows, seasons / episodes, subtitles, playback, view tracking (heartbeat), no
 | SePay IPN | No signature, so `X-Secret-Key` is verified before any lock / DB access, `order_status` / `transaction_status` are checked, the amount is compared with the order and the order's provider must be `sepay` |
 | Revenue export | Admin only, audit-logged (who / range / status / rows), formula-injection guard on text cells, hard cap of 50,000 rows |
 | Ad scheduling | Settings and preview are Admin-only; every value is clamped by `AdScheduleOptions.Normalized()`; the public schedule endpoint sends `Cache-Control: no-store` so a random plan is never shared between viewers |
+| Home collections | Every write endpoint is Admin-only; layout, content type, auto rule and parameter are whitelisted / validated server-side; `accent` accepts only `#RRGGBB` and `config` is size-limited, so no free-form string reaches the page's inline styles; Manual ids are verified against the catalogue; the public endpoint returns only published titles |
 | Rate limiting | `auth-strict` 10/min/IP · `auth-refresh` 60/min/IP · `ai` 20/min/user (5/min/IP for guests) · `playback` 30/min · `heartbeat` 20/min/user, 240/min/IP |
 | Proxy headers | `X-Forwarded-*` is trusted only from private networks, so clients cannot spoof their IP |
 | Response headers | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, HSTS and a strict API CSP (non-Development). The UI's CSP is configured in the frontend's `vercel.json` |
@@ -651,9 +766,9 @@ dotnet run --project UIAMovie.API
 
 Swagger is available in Development at `/swagger`. A health message is served at `/`.
 
-**5. Create the first plans**
+**5. Create the first plans and collections**
 
-`GET /api/payments/plans` is empty until a plan exists. Sign in as the seeded admin and create plans in the admin UI (**Plans** page) or with `POST /api/admin/plans` (see [Usage](#usage)).
+`GET /api/payments/plans` is empty until a plan exists, and `GET /api/home-sections` is empty until a collection exists (the frontend then shows only its built-in rows). Sign in as the seeded admin and create them in the admin UI (**Plans** and **Bộ sưu tập** pages) or with `POST /api/admin/plans` / `POST /api/admin/home-sections` (see [Usage](#usage)).
 
 ### Payments & revenue wiring checklist
 
@@ -661,6 +776,12 @@ Swagger is available in Development at `/swagger`. A health message is served at
 - `Program.cs` must register `IRevenueService → RevenueService`, `ISubscriptionPlanService → SubscriptionPlanService`, `IPaymentOrderRepository`, `IPaymentReceiptNotifier`, the SePay / VNPay services, and the hosted service: `builder.Services.AddHostedService<PaymentExpiryWorker>();`.
 - `MovieDbContext` must expose `DbSet<SubscriptionPlan>`, and the migration must be applied.
 - After a pull that moves routes between controllers, check the console for `AmbiguousMatchException` (see [Payments notes](#notes)).
+
+### Home collections wiring checklist
+
+- `IHomeSectionService`, `IHomeSectionRepository`, `IClock` and every `IAutoRule` (`TrendingRule`, `LatestRule`, `TopRatedRule`, `GenreRule`, `UpcomingRule`, `YearRule`, `CountryRule`) registered in DI.
+- `DbSet<HomeSection>` / `DbSet<HomeSectionItem>` and the `AddHomeSections` migration applied.
+- A new layout is a **two-sided change**: add the key to `HomeSectionConstants.Layouts` (and `LayoutLimits` if it shows a fixed number of items) here, and register the component in the frontend's `HOME_LAYOUTS`. An unknown key is rejected on save here, and falls back to `carousel` on the frontend.
 
 ---
 
@@ -726,7 +847,7 @@ Swagger is available in Development at `/swagger`. A health message is served at
 }
 ```
 
-`Groq` and `VNPay` bind to `GroqOptions` and `VnpayOptions`; see those classes for the exact keys. `Sepay` holds the SePay merchant credentials and the IPN secret used by `SepayPaymentService` (see its options class for the exact keys). Subscription plans are **not** configured here: they live in the database and are managed from the admin UI.
+`Groq` and `VNPay` bind to `GroqOptions` and `VnpayOptions`; see those classes for the exact keys. `Sepay` holds the SePay merchant credentials and the IPN secret used by `SepayPaymentService` (see its options class for the exact keys). Subscription plans and home collections are **not** configured here: they live in the database and are managed from the admin UI.
 
 | Key | Description |
 |---|---|
@@ -856,6 +977,68 @@ GET /api/ads/content/Movie/{movieId}?durationSeconds=7200
 ```
 Each call returns a different plan; Fixed mode returns the same one. If `midRoll` is empty, check that `durationSeconds` is present and large enough.
 
+### 9. Build the home page (admin)
+Read the dropdown data first, then create collections:
+```http
+GET /api/admin/home-sections/meta
+Authorization: Bearer <admin-access-token>
+```
+
+A **Manual** collection (the order of `items` is the display order):
+```http
+POST /api/admin/home-sections
+Authorization: Bearer <admin-access-token>
+Content-Type: application/json
+
+{
+  "title": "Phim mới nè",
+  "subtitle": "Phim này cực hay",
+  "layout": "billboard",
+  "config": { "accent": "#e8c97e" },
+  "isActive": true,
+  "startAt": null,
+  "endAt": null,
+  "sourceType": "Manual",
+  "items": [
+    { "contentType": "movie",  "contentId": "<guid>" },
+    { "contentType": "tvshow", "contentId": "<guid>" }
+  ]
+}
+```
+
+An **Auto** collection (here the top-rated Korean content, at most 15 items; `itemLimit` is clamped by the layout's cap):
+```http
+POST /api/admin/home-sections
+Authorization: Bearer <admin-access-token>
+Content-Type: application/json
+
+{
+  "title": "Hàn Quốc đáng xem",
+  "layout": "grid",
+  "config": { "columns": 5, "rows": 2 },
+  "isActive": true,
+  "sourceType": "Auto",
+  "autoRule": "country",
+  "autoParam": "KR",
+  "autoContentType": "all",
+  "itemLimit": 15
+}
+```
+
+Change the order of the blocks and switch one off:
+```http
+PUT /api/admin/home-sections/reorder
+{ "sectionIds": ["<guid-1>", "<guid-2>", "<guid-3>"] }
+
+PATCH /api/admin/home-sections/<guid>/active
+{ "isActive": false }
+```
+Check what visitors get (cached up to 5 minutes, but every write invalidates it):
+```http
+GET /api/home-sections
+```
+A Manual collection with no items, or one outside its `startAt` / `endAt` window, is not returned.
+
 ---
 
 ## Deployment
@@ -864,7 +1047,7 @@ Each call returns a different plan; Fixed mode returns the same one. If `midRoll
 1. Create a **Web Service** from this repository.
 2. Build: `dotnet publish -c Release -o out` — Start: `dotnet out/UIAMovie.API.dll`
 3. Add every setting above as an environment variable. Do not forget `Backend__PublicUrl` and `Frontend__Url` (or `FRONTEND_URL`).
-4. Create a PostgreSQL database and use its connection string, then apply the migrations (including `AddSubscriptionPlans`) and create the first plans.
+4. Create a PostgreSQL database and use its connection string, then apply the migrations (including `AddSubscriptionPlans` and `AddHomeSections`) and create the first plans.
 5. Render's proxy lives in a private network, which is why `ForwardedHeaders` trusts only `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `fc00::/7`. If you put Cloudflare in front, add its ranges.
 
 ### VNPay merchant portal
@@ -889,7 +1072,7 @@ Create a Redis database and copy its TLS URL; copy Cloud Name, API Key and API S
 UIAMovie/
 ├── UIAMovie.API/                  # ASP.NET Core entry point
 │   ├── Controllers/               # AuthController, PaymentController, AdminRevenueController,
-│   │                              # AdminPlanController, MoviesController, ...
+│   │                              # AdminPlanController, HomeSectionsController, MoviesController, ...
 │   ├── Hubs/                      # SignalR (NotificationHub)
 │   ├── Filter/                    # Validation error filter
 │   ├── Middleware/                # Exception handling
@@ -898,25 +1081,29 @@ UIAMovie/
 │
 ├── UIAMovie.Application/          # Business logic
 │   ├── AI/                        # Intent, orchestration, retrieval, tools
+│   ├── AutoRules/                 # Home collection rules: BuiltInAutoRules (Trending, Latest,
+│   │                              # TopRated, Genre, Upcoming, Year, Country), HomeCardMapper
 │   ├── Caching/                   # Cache key definitions (UserCacheKeys)
-│   ├── DTOs/                      # incl. SubscriptionPlanDTO, AdminPlanDTO, UpsertPlanDTO
-│   ├── Interfaces/                # Service and repository contracts
+│   ├── DTOs/                      # incl. SubscriptionPlanDTO, AdminPlanDTO, UpsertPlanDTO,
+│   │                              # HomeSectionDTO, UpsertHomeSectionDTO, HomeContentCardDTO
+│   ├── Interfaces/                # Service and repository contracts (IAutoRule, IHomeSectionRepository)
 │   ├── Mappings/                  # UserMapper (shared User → UserDTO)
 │   ├── Options/                   # AdScheduleOptions (Fixed / Random ad scheduling)
 │   ├── Security/                  # PasswordPolicy, TokenRevocationService (policy, no libraries)
 │   ├── Services/                  # AuthService, UserService, PaymentService, SubscriptionPlanService,
 │   │                              # SubscriptionChecker, RevenueService (+ VnTime), VnpayPaymentService,
-│   │                              # AdService, RandomAdPlanner, ...
+│   │                              # AdService, RandomAdPlanner, HomeSectionService, ...
 │   └── Validators/                # FluentValidation rules
 │
 ├── UIAMovie.Domain/               # Entities and constants (PaymentOrder, UserSubscription,
-│                                  # SubscriptionPlan, Roles)
+│                                  # SubscriptionPlan, HomeSection + HomeSectionItem,
+│                                  # HomeSectionConstants, Roles)
 │
 └── UIAMovie.Infrastructure/       # External integrations and data access
     ├── AI/                        # Groq provider, rate limiter
     ├── Caching/                   # RedisCacheService
     ├── Configuration/             # Cloudinary, TMDB, VNPay options, SessionCleanupWorker
-    ├── Data/                      # DbContext, repositories, migrations
+    ├── Data/                      # DbContext, repositories (incl. HomeSectionRepository), migrations
     ├── Email/                     # EmailService, EmailQueue + worker, payment receipts
     ├── Messaging/                 # Realtime notification sender
     └── Security/                  # JwtTokenGenerator, TwoFactorAuthProvider (library-specific mechanisms)
@@ -939,14 +1126,14 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 | `chore` | Tooling, dependencies, config, migrations housekeeping |
 
 ```bash
-git checkout -b feat/subscription-plans     # work on a branch
+git checkout -b feat/home-collections       # work on a branch
 git status
 git add <files>                             # or: git add -A
-git commit -m "feat(plans): admin-configurable plans with free trials" \
-  -m "- SubscriptionPlan entity, service and /api/admin/plans
-- eligibility rules in create-order and GET /payments/plans
-- free plans activate without a gateway"
-git push -u origin feat/subscription-plans  # then open a pull request into main
+git commit -m "feat(home): admin-curated home collections with pluggable auto rules" \
+  -m "- HomeSection / HomeSectionItem entities, service, repository and controller
+- IAutoRule: trending, latest, top_rated, genre, upcoming, year, country
+- public list cached 5 min, display window filtered after the cache"
+git push -u origin feat/home-collections    # then open a pull request into main
 ```
 
 Schema changes go in their own commit together with the generated migration (`dotnet ef migrations add <Name>`), so a deploy can apply them in one step. Never commit real secrets.
@@ -980,6 +1167,16 @@ Schema changes go in their own commit together with the generated migration (`do
 - [ ] Unit tests for `RandomAdPlanner` (fixed-seed `Random`): pre-roll cap by pool size, mid-roll bounds and spacing, no adjacent repeats, `durationSeconds = 0`
 - [ ] Endpoint to list a content's (or show's) Overrides (the admin UI can only list Global Slots)
 - [ ] Frequency capping per user / per ad and basic impression / skip statistics
+
+**Home collections**
+- [ ] **Invalidate `home:sections` when catalogue data changes.** Only section writes clear the cache today, so a retitled, unpublished or re-trailered movie can stay stale on the home page for up to 5 minutes (the frontend already refetches after an admin movie edit, but receives the cached payload)
+- [ ] Refresh the cache in the background (stale-while-revalidate) so the request that follows an expiry or a write does not pay for resolving every Auto section
+- [ ] Add `Cache-Control: public, max-age=…` (or an `ETag`) to `GET /api/home-sections`
+- [ ] Update the `HomeSection` entity comments: `Layout` still lists only `carousel | grid | hero | ranked | banner` and `AutoRule` only four rules, while the whitelist and the rule set are larger
+- [ ] `ReorderAsync` skips unknown ids silently: return `400` when ids are missing from the database, and reject partial lists so the order stays gap-free
+- [ ] Index `HomeSectionItems (HomeSectionId, Order)` and `HomeSections (IsActive, SortOrder)`
+- [ ] Optional exclusion of titles already shown by an earlier section (de-duplicate Auto rows against each other)
+- [ ] Unit tests: `ValidateAndNormalizeAsync` (accent, limits, duplicates, missing ids), `EffectiveLimit` per layout, window filtering after the cache, and each `IAutoRule` ordering (including the negated `upcoming` key and the mixed movie / TV merge)
 
 **Platform & product**
 - [ ] **Protected video delivery** — Cloudinary `authenticated` type + signed HLS URLs, `DeliveryType` column, re-upload of existing videos (current signed links do not expire on the Free plan)

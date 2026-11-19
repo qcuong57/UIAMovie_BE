@@ -57,6 +57,9 @@ public class MovieDbContext : DbContext
     public DbSet<GlobalAdSlot> GlobalAdSlots { get; set; }
     public DbSet<AdContentOverride> AdContentOverrides { get; set; }
 
+    public DbSet<HomeSection> HomeSections { get; set; }
+    public DbSet<HomeSectionItem> HomeSectionItems { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -652,6 +655,35 @@ public class MovieDbContext : DbContext
                 .WithMany(a => a.Overrides)
                 .HasForeignKey(e => e.AdvertisementId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── HomeSection (khối trang chủ do admin cấu hình) ───────────────────────
+        modelBuilder.Entity<HomeSection>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Title).HasMaxLength(120).IsRequired();
+            entity.Property(e => e.Subtitle).HasMaxLength(250);
+            entity.Property(e => e.Layout).HasMaxLength(32).IsRequired();
+            entity.Property(e => e.SourceType).HasMaxLength(16).IsRequired();
+            entity.Property(e => e.AutoRule).HasMaxLength(32);
+            entity.Property(e => e.AutoParam).HasMaxLength(64);
+            entity.Property(e => e.AutoContentType).HasMaxLength(16).IsRequired();
+            entity.Property(e => e.ConfigJson).HasColumnType("jsonb");
+
+            entity.HasIndex(e => e.SortOrder);
+            entity.HasIndex(e => new { e.IsActive, e.SortOrder });
+
+            entity.HasMany(e => e.Items)
+                .WithOne(i => i.HomeSection)
+                .HasForeignKey(i => i.HomeSectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<HomeSectionItem>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ContentType).HasMaxLength(16).IsRequired();
+            entity.HasIndex(e => new { e.HomeSectionId, e.ContentType, e.ContentId }).IsUnique();
         });
     }
 }

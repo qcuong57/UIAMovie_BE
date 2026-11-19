@@ -706,7 +706,23 @@ public class TvShowsController : ControllerBase
         if (tmdbId == null)
             return BadRequest(new ApiErrorResponseDTO { Message = "TV Show không có TmdbId", StatusCode = 400 });
 
-        var fullData = await _tmdbService.GetFullTvShowAsync(tmdbId.Value);
+        // Sync tập mới chỉ cần detail + season/episode → dùng bản nhẹ,
+        // không gọi credits/images/trailers/person (nguồn gây lỗi SSL reset + quá nhiều request).
+        TmdbFullTvShowDTO? fullData;
+        try
+        {
+            fullData = await _tmdbService.GetTvShowForEpisodeSyncAsync(tmdbId.Value);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // Lỗi mạng tới TMDB (đã retry trong TmdbRetryHandler mà vẫn thất bại)
+            return StatusCode(StatusCodes.Status502BadGateway, new ApiErrorResponseDTO
+            {
+                Message = "Không kết nối được TMDB (lỗi mạng). Vui lòng thử lại sau ít phút.",
+                StatusCode = 502
+            });
+        }
+
         if (fullData == null)
             return BadRequest(new ApiErrorResponseDTO { Message = "Không lấy được data từ TMDB", StatusCode = 400 });
 

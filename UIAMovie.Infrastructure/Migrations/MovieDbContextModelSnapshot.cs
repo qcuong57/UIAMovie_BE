@@ -332,6 +332,105 @@ namespace UIAMovie.Infrastructure.Migrations
                     b.ToTable("GlobalAdSlots");
                 });
 
+            modelBuilder.Entity("UIAMovie.Domain.Entities.HomeSection", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AutoContentType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("AutoParam")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("AutoRule")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("ConfigJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("EndAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("ItemLimit")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Layout")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTime?>("StartAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Subtitle")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SortOrder");
+
+                    b.HasIndex("IsActive", "SortOrder");
+
+                    b.ToTable("HomeSections");
+                });
+
+            modelBuilder.Entity("UIAMovie.Domain.Entities.HomeSectionItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ContentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("HomeSectionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Order")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("HomeSectionId", "ContentType", "ContentId")
+                        .IsUnique();
+
+                    b.ToTable("HomeSectionItems");
+                });
+
             modelBuilder.Entity("UIAMovie.Domain.Entities.Movie", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1538,7 +1637,7 @@ namespace UIAMovie.Infrastructure.Migrations
                             Email = "quoccuong572003@gmail.com",
                             Is2FaEnabled = false,
                             IsActive = true,
-                            PasswordHash = "$2a$11$0XYQ08Vhaw9sNMXfK68a..mBfLL9tSBqE.i4pYX7GgRntzGsFkePe",
+                            PasswordHash = "$2a$11$SmMwgvJEXT2aBXIwki1Ge.Y24wU0In621PVabuXkc/B2BmQCXM.Wy",
                             Role = "Admin",
                             SubscriptionType = "premium",
                             UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
@@ -1714,6 +1813,17 @@ namespace UIAMovie.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Advertisement");
+                });
+
+            modelBuilder.Entity("UIAMovie.Domain.Entities.HomeSectionItem", b =>
+                {
+                    b.HasOne("UIAMovie.Domain.Entities.HomeSection", "HomeSection")
+                        .WithMany("Items")
+                        .HasForeignKey("HomeSectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("HomeSection");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.MovieCast", b =>
@@ -2082,6 +2192,11 @@ namespace UIAMovie.Infrastructure.Migrations
             modelBuilder.Entity("UIAMovie.Domain.Entities.Genre", b =>
                 {
                     b.Navigation("MovieGenres");
+                });
+
+            modelBuilder.Entity("UIAMovie.Domain.Entities.HomeSection", b =>
+                {
+                    b.Navigation("Items");
                 });
 
             modelBuilder.Entity("UIAMovie.Domain.Entities.Movie", b =>

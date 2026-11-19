@@ -16,6 +16,7 @@ using UIAMovie.Application.AI.Intent;
 using UIAMovie.Application.AI.Orchestration;
 using UIAMovie.Application.AI.Retrieval;
 using UIAMovie.Application.AI.Tools;
+using UIAMovie.Application.AutoRules;
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Application.Interfaces.IRepositories;
 using UIAMovie.Application.Interfaces.IServices;
@@ -110,6 +111,13 @@ builder.Services.AddScoped<ITokenRevocationService, TokenRevocationService>();
 builder.Services.AddValidatorsFromAssemblyContaining(typeof(RegisterValidator));
 builder.Services.AddScoped<ICloudinaryService, CloudinaryService>();
 builder.Services.AddHttpClient();
+
+// HttpClient riêng cho TMDB: tự retry khi SSL bị reset / timeout / 5xx / 429.
+// Timeout 60s là tổng thời gian cho cả các lần retry của 1 request.
+builder.Services.AddTransient<TmdbRetryHandler>();
+builder.Services.AddHttpClient("tmdb", c => c.Timeout = TimeSpan.FromSeconds(60))
+    .AddHttpMessageHandler<TmdbRetryHandler>();
+
 builder.Services.AddScoped<ITmdbService, TmdbService>();
 builder.Services.AddScoped<IRatingReviewService, RatingReviewService>();
 builder.Services.AddScoped<IGenreService, GenreService>();
@@ -153,6 +161,15 @@ builder.Services.AddScoped<IViewTrackingService, ViewTrackingService>();
 builder.Services.AddScoped<IViewStatsService, ViewStatsService>();
 builder.Services.AddScoped<IPaymentOrderRepository, PaymentOrderRepository>();
 builder.Services.AddScoped<IRevenueService, RevenueService>();
+builder.Services.AddScoped<IHomeSectionRepository, HomeSectionRepository>();
+builder.Services.AddScoped<IHomeSectionService, HomeSectionService>();
+builder.Services.AddScoped<IAutoRule, TrendingRule>();
+builder.Services.AddScoped<IAutoRule, LatestRule>();
+builder.Services.AddScoped<IAutoRule, TopRatedRule>();  
+builder.Services.AddScoped<IAutoRule, GenreRule>();
+builder.Services.AddScoped<IAutoRule, UpcomingRule>();
+builder.Services.AddScoped<IAutoRule, YearRule>();
+builder.Services.AddScoped<IAutoRule, CountryRule>();
 builder.Services.AddHostedService<PaymentExpiryWorker>();
 
 // Email biên nhận thanh toán (hàng đợi nền, gửi SMTP bằng section "Email")

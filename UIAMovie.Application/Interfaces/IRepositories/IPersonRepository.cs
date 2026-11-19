@@ -1,9 +1,9 @@
-﻿
-namespace UIAMovie.Application.Interfaces.IRepositories;
+﻿// UIAMovie.Infrastructure/Data/Repositories/IPersonRepository.cs
 
-// UIAMovie.Infrastructure/Data/Repositories/IPersonRepository.cs
-
+using UIAMovie.Application.DTOs;
 using UIAMovie.Domain.Entities;
+
+namespace UIAMovie.Application.Interfaces.IRepositories;
 
 /// <summary>
 /// Repository riêng cho Person — mirror IMovieRepository.
@@ -38,4 +38,10 @@ public interface IPersonRepository : IRepository<Person>
     /// Dùng để chặn xóa cứng — PersonsController.Delete trả 400 nếu true.
     /// </summary>
     Task<bool> IsReferencedByAnyMovieAsync(Guid personId);
+
+    /// <summary>
+    /// Danh sách phim của một Person (vai diễn + đạo diễn), gộp theo MovieId,
+    /// sắp xếp theo ngày phát hành mới nhất trước.
+    /// </summary>
+    Task<List<PersonMovieDTO>> GetFilmographyAsync(Guid personId);
 }

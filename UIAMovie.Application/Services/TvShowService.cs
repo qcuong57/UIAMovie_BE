@@ -970,6 +970,7 @@ public class TvShowService : ITvShowService
 
         int newEpisodes = 0;
         int newSeasons = 0;
+        int updatedEpisodes = 0;
 
         foreach (var tmdbSeason in full.SeasonDetails.Values.Where(s => s.SeasonNumber > 0))
         {
@@ -997,7 +998,49 @@ public class TvShowService : ITvShowService
             }
 
             var existingEps = await _episodeRepository.FindAsync(e => e.SeasonId == season.Id);
-            var existingNums = existingEps.Select(e => e.EpisodeNumber).ToHashSet();
+            var existingList = existingEps.ToList();
+            var existingNums = existingList.Select(e => e.EpisodeNumber).ToHashSet();
+
+            // Tập đã có trong DB (thường do import lúc TMDB mới chỉ có tên tập, chưa có ảnh/mô tả/thời lượng):
+            // chỉ LẤP các trường còn trống từ TMDB, không ghi đè dữ liệu admin đã nhập/chỉnh sửa.
+            var tmdbByNumber = tmdbSeason.Episodes
+                .GroupBy(e => e.EpisodeNumber)
+                .ToDictionary(g => g.Key, g => g.First());
+            var seasonUpdated = 0;
+
+            foreach (var existing in existingList)
+            {
+                if (!tmdbByNumber.TryGetValue(existing.EpisodeNumber, out var tep)) continue;
+
+                var changed = false;
+
+                if (string.IsNullOrWhiteSpace(existing.Overview) && !string.IsNullOrWhiteSpace(tep.Overview))
+                { existing.Overview = tep.Overview; changed = true; }
+
+                if (string.IsNullOrWhiteSpace(existing.StillUrl) && !string.IsNullOrWhiteSpace(tep.StillUrl))
+                { existing.StillUrl = tep.StillUrl; changed = true; }
+
+                if (!(existing.Runtime > 0) && tep.Runtime > 0)
+                { existing.Runtime = tep.Runtime; changed = true; }
+
+                if ((existing.Rating == null || existing.Rating == 0) && tep.VoteAverage > 0)
+                { existing.Rating = (decimal)tep.VoteAverage; changed = true; }
+
+                if (existing.AirDate == null && DateTime.TryParse(tep.AirDate ?? string.Empty, out var fillAd))
+                { existing.AirDate = DateTime.SpecifyKind(fillAd, DateTimeKind.Utc); changed = true; }
+
+                if (changed)
+                {
+                    _episodeRepository.Update(existing);
+                    seasonUpdated++;
+                }
+            }
+
+            if (seasonUpdated > 0)
+            {
+                await _episodeRepository.SaveChangesAsync();
+                updatedEpisodes += seasonUpdated;
+            }
 
             var episodesToInsert = tmdbSeason.Episodes.Where(e => !existingNums.Contains(e.EpisodeNumber)).ToList();
 
@@ -1035,7 +1078,7 @@ public class TvShowService : ITvShowService
 
         await InvalidateTvShowCachesAsync(id, genreIdsAlways, syncedSeasonNumbers);
 
-        if (newEpisodes > 0 || newSeasons > 0)
+        if (newEpisodes > 0 || newSeasons > 0 || updatedEpisodes > 0)
         {
             show.NumberOfSeasons = full.Detail.NumberOfSeasons;
             show.NumberOfEpisodes = full.Detail.NumberOfEpisodes;
@@ -1053,7 +1096,8 @@ public class TvShowService : ITvShowService
             Success = true,
             NewEpisodes = newEpisodes,
             NewSeasons = newSeasons,
-            Message = $"Sync thành công: Cập nhật thêm {newSeasons} season mới, {newEpisodes} tập mới",
+            Message = $"Sync thành công: Cập nhật thêm {newSeasons} season mới, {newEpisodes} tập mới"
+                    + (updatedEpisodes > 0 ? $", bổ sung dữ liệu cho {updatedEpisodes} tập đã có" : string.Empty),
             InvalidatedSeasons = syncedSeasonNumbers
         };
     }
@@ -1414,7 +1458,7 @@ public class TvShowService : ITvShowService
             .FirstOrDefault(),
         Cast = t.TvShowCasts?.OrderBy(c => c.Order).Where(c => c.Person != null).Take(6).Select(c => new TvShowCastDTO
         {
-            Name = c.Person!.Name, Character = c.Character, Order = c.Order, ProfileUrl = c.Person.ProfileUrl,
+            PersonId = c.Person!.Id, Name = c.Person.Name, Character = c.Character, Order = c.Order, ProfileUrl = c.Person.ProfileUrl,
             TmdbPersonId = c.Person.TmdbPersonId, Biography = c.Person.Biography, Birthday = c.Person.Birthday,
             PlaceOfBirth = c.Person.PlaceOfBirth,
             ProfileImages = c.Person.Images.OrderByDescending(i => i.CreatedAt).Select(i => i.Url).ToList()
@@ -1422,7 +1466,7 @@ public class TvShowService : ITvShowService
         Director = t.TvShowDirectors?.Where(d => d.Person != null).Select(d => d.Person?.Name).FirstOrDefault(),
         DirectorDetail = t.TvShowDirectors?.Where(d => d.Person != null).Select(d => new PersonDetailDTO
         {
-            Name = d.Person!.Name, ProfileUrl = d.Person.ProfileUrl, TmdbPersonId = d.Person.TmdbPersonId,
+            PersonId = d.Person!.Id, Name = d.Person.Name, ProfileUrl = d.Person.ProfileUrl, TmdbPersonId = d.Person.TmdbPersonId,
             Biography = d.Person.Biography, Birthday = d.Person.Birthday, PlaceOfBirth = d.Person.PlaceOfBirth,
             ProfileImages = d.Person.Images.OrderByDescending(i => i.CreatedAt).Select(i => i.Url).ToList()
         }).FirstOrDefault(),

@@ -912,14 +912,14 @@ public class MovieService : IMovieService
         TrailerVideoUrl = m.MovieVideos?.Where(v => v.VideoType == "trailer_upload" && !string.IsNullOrEmpty(v.VideoUrl)).Select(v => v.VideoUrl).FirstOrDefault(),
         Cast = m.MovieCasts?.OrderBy(c => c.Order).Where(c => c.Person != null).Take(6).Select(c => new MovieCastDTO
         {
-            Name = c.Person!.Name, Character = c.Character, Order = c.Order, ProfileUrl = c.Person.ProfileUrl,
+            PersonId = c.Person!.Id, Name = c.Person.Name, Character = c.Character, Order = c.Order, ProfileUrl = c.Person.ProfileUrl,
             TmdbPersonId = c.Person.TmdbPersonId, Biography = c.Person.Biography, Birthday = c.Person.Birthday,
             PlaceOfBirth = c.Person.PlaceOfBirth, ProfileImages = c.Person.Images.OrderByDescending(i => i.CreatedAt).Select(i => i.Url).ToList()
         }).ToList() ?? new(),
         Director = m.MovieDirectors?.Select(d => d.Person?.Name).FirstOrDefault(),
         DirectorDetail = m.MovieDirectors?.Where(d => d.Person != null).Select(d => new PersonDetailDTO
         {
-            Name = d.Person!.Name, ProfileUrl = d.Person.ProfileUrl, TmdbPersonId = d.Person.TmdbPersonId,
+            PersonId = d.Person!.Id, Name = d.Person.Name, ProfileUrl = d.Person.ProfileUrl, TmdbPersonId = d.Person.TmdbPersonId,
             Biography = d.Person.Biography, Birthday = d.Person.Birthday, PlaceOfBirth = d.Person.PlaceOfBirth,
             ProfileImages = d.Person.Images.OrderByDescending(i => i.CreatedAt).Select(i => i.Url).ToList()
         }).FirstOrDefault(),

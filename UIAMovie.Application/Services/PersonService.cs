@@ -4,14 +4,13 @@
 //   MovieService đã có UpsertPersonAsync() riêng (private) dùng cho luồng import phim
 //   (ưu tiên PersonId FE chọn -> TmdbPersonId -> match theo tên -> tạo mới). PersonService
 //   ở đây KHÔNG đụng vào luồng đó — nó là service riêng phục vụ PersonsController:
-//   search/CRUD trực tiếp trên Person, và 2 endpoint dedup/merge cho admin.
+//   search/CRUD trực tiếp trên Person, filmography, và 2 endpoint dedup/merge cho admin.
 //   Cả hai cùng ghi qua chung MovieDbContext (qua các Repository khác nhau) nên không xung đột.
 
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Application.Interfaces.IRepositories;
 using UIAMovie.Domain.Entities;
-using UIAMovie.Application.Interfaces.IRepositories;
 
 namespace UIAMovie.Application.Services;
 
@@ -19,6 +18,7 @@ public interface IPersonService
 {
     Task<PaginatedDTO<PersonDTO>> SearchPersonsAsync(string? query, int page, int pageSize);
     Task<PersonDTO?> GetPersonByIdAsync(Guid id);
+    Task<IEnumerable<PersonMovieDTO>?> GetPersonMoviesAsync(Guid id);
     Task<Guid> CreatePersonAsync(CreatePersonDTO dto);
     Task<bool> UpdatePersonAsync(Guid id, UpdatePersonDTO dto);
     Task<bool> DeletePersonAsync(Guid id);
@@ -32,17 +32,23 @@ public class PersonService : IPersonService
     private readonly IRepository<PersonImage> _personImageRepository;
     private readonly IRepository<MovieCast> _castRepository;
     private readonly IRepository<MovieDirector> _directorRepository;
+    private readonly IRepository<TvShowCast> _tvCastRepository;
+    private readonly IRepository<TvShowDirector> _tvDirectorRepository;
 
     public PersonService(
         IPersonRepository personRepository,
         IRepository<PersonImage> personImageRepository,
         IRepository<MovieCast> castRepository,
-        IRepository<MovieDirector> directorRepository)
+        IRepository<MovieDirector> directorRepository,
+        IRepository<TvShowCast> tvCastRepository,
+        IRepository<TvShowDirector> tvDirectorRepository)
     {
         _personRepository = personRepository;
         _personImageRepository = personImageRepository;
         _castRepository = castRepository;
         _directorRepository = directorRepository;
+        _tvCastRepository = tvCastRepository;
+        _tvDirectorRepository = tvDirectorRepository;
     }
 
     // ─── Search / CRUD ──────────────────────────────────────────────────────
@@ -64,6 +70,18 @@ public class PersonService : IPersonService
     {
         var person = await _personRepository.GetByIdWithImagesAsync(id);
         return person == null ? null : MapToDTO(person);
+    }
+
+    /// <summary>
+    /// Filmography (Movie + TvShow) của Person. Trả null nếu Person không tồn tại (controller → 404),
+    /// trả danh sách rỗng nếu Person tồn tại nhưng chưa gắn tác phẩm nào.
+    /// </summary>
+    public async Task<IEnumerable<PersonMovieDTO>?> GetPersonMoviesAsync(Guid id)
+    {
+        var person = await _personRepository.GetByIdAsync(id);
+        if (person == null) return null;
+
+        return await _personRepository.GetFilmographyAsync(id);
     }
 
     public async Task<Guid> CreatePersonAsync(CreatePersonDTO dto)
@@ -125,7 +143,7 @@ public class PersonService : IPersonService
         var person = await _personRepository.GetByIdAsync(id);
         if (person == null) return false;
 
-        // Chặn xóa cứng nếu Person đang gắn với phim — PersonsController trả 400
+        // Chặn xóa cứng nếu Person đang gắn với phim / TV show — PersonsController trả 400
         // "Đang gắn với phim, không thể xóa" đúng như message đã viết sẵn trong controller.
         if (await _personRepository.IsReferencedByAnyMovieAsync(id))
             return false;
@@ -153,8 +171,8 @@ public class PersonService : IPersonService
     }
 
     /// <summary>
-    /// Chuyển toàn bộ MovieCast/MovieDirector/PersonImage từ các Person trùng sang
-    /// Primary, bù các field còn thiếu ở Primary, rồi xóa các Person trùng.
+    /// Chuyển toàn bộ MovieCast/MovieDirector/TvShowCast/TvShowDirector/PersonImage từ các
+    /// Person trùng sang Primary, bù các field còn thiếu ở Primary, rồi xóa các Person trùng.
     /// </summary>
     public async Task<bool> MergePersonsAsync(MergePersonsDTO dto)
     {
@@ -190,6 +208,23 @@ public class PersonService : IPersonService
                 else dir.PersonId = primary.Id;
             }
 
+            // Chuyển TV cast / director — cùng quy tắc chống trùng
+            foreach (var cast in await _tvCastRepository.FindAsync(c => c.PersonId == dupId))
+            {
+                var exists =
+                    await _tvCastRepository.FindOneAsync(c => c.TvShowId == cast.TvShowId && c.PersonId == primary.Id);
+                if (exists != null) _tvCastRepository.Remove(cast);
+                else cast.PersonId = primary.Id;
+            }
+
+            foreach (var dir in await _tvDirectorRepository.FindAsync(d => d.PersonId == dupId))
+            {
+                var exists =
+                    await _tvDirectorRepository.FindOneAsync(d => d.TvShowId == dir.TvShowId && d.PersonId == primary.Id);
+                if (exists != null) _tvDirectorRepository.Remove(dir);
+                else dir.PersonId = primary.Id;
+            }
+
             var primaryUrls = (await _personImageRepository.FindAsync(i => i.PersonId == primary.Id))
                 .Select(i => i.Url).ToHashSet();
             foreach (var img in await _personImageRepository.FindAsync(i => i.PersonId == dupId))
@@ -204,6 +239,8 @@ public class PersonService : IPersonService
         _personRepository.Update(primary);
         await _castRepository.SaveChangesAsync();
         await _directorRepository.SaveChangesAsync();
+        await _tvCastRepository.SaveChangesAsync();
+        await _tvDirectorRepository.SaveChangesAsync();
         await _personImageRepository.SaveChangesAsync();
         await _personRepository.SaveChangesAsync();
         return true;

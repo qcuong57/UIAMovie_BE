@@ -1,7 +1,7 @@
-﻿using Microsoft.AspNetCore.Authorization; // FIX: thiếu using này -> [Authorize] không compile
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using UIAMovie.Application.DTOs;
-using UIAMovie.Application.Services;       // FIX: IPersonService nằm ở đây
+using UIAMovie.Application.Services;
 using UIAMovie.Domain.Constants;
 
 namespace UIAMovie.Controllers;
@@ -28,6 +28,16 @@ public class PersonsController : ControllerBase
         return person == null
             ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy", StatusCode = 404 })
             : Ok(new ApiResponseDTO<object> { Data = person, Message = "Thành công" });
+    }
+
+    /// <summary>Danh sách phim (diễn viên + đạo diễn) của một Person.</summary>
+    [HttpGet("{id:guid}/movies")]
+    public async Task<IActionResult> GetMovies(Guid id)
+    {
+        var movies = await _personService.GetPersonMoviesAsync(id);
+        return movies == null
+            ? NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy", StatusCode = 404 })
+            : Ok(new ApiResponseDTO<object> { Data = movies, Message = "Thành công" });
     }
 
     [HttpPost]
