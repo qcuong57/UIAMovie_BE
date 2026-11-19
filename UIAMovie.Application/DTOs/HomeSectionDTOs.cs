@@ -21,7 +21,7 @@ public static class HomeSectionConstants
     public static readonly Dictionary<string, int> LayoutLimits = new()
     {
         ["hero"] = 5, ["billboard"] = 5, ["spotlight"] = 8,
-        ["mosaic"] = 5, ["accordion"] = 6, ["split"] = 6, ["ranked"] = 10
+        ["mosaic"] = 5, ["accordion"] = 6, ["split"] = 10, ["ranked"] = 10
     };
 
     /// <summary>Kẹp số lượng theo trần của layout (và MaxManualItems). requested &lt;= 0 → dùng trần.</summary>
