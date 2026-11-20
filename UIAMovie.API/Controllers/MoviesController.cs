@@ -27,19 +27,22 @@ public class MoviesController : ControllerBase
     private readonly ICloudinaryService _cloudinaryService;
     private readonly IGenreService _genreService;
     private readonly ISubscriptionChecker _subscriptionChecker;
+    private readonly TmdbImportJobs _importJobs;
 
     public MoviesController(
         IMovieService movieService,
         ITmdbService tmdbService,
         ICloudinaryService cloudinaryService,
         IGenreService genreService,
-        ISubscriptionChecker subscriptionChecker)
+        ISubscriptionChecker subscriptionChecker,
+        TmdbImportJobs importJobs)
     {
         _movieService = movieService;
         _tmdbService = tmdbService;
         _cloudinaryService = cloudinaryService;
         _genreService = genreService;
         _subscriptionChecker = subscriptionChecker;
+        _importJobs = importJobs;
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -237,85 +240,9 @@ public class MoviesController : ControllerBase
             return Conflict(new ApiErrorResponseDTO
                 { Message = $"Phim này đã được import rồi (ID: {existing.Id})", StatusCode = 409 });
 
-        var full = await _tmdbService.GetFullMovieAsync(tmdbId);
-        if (full == null)
-            return NotFound(new ApiErrorResponseDTO { Message = "Không tìm thấy phim trên TMDB", StatusCode = 404 });
-
-        var genreIds = await _genreService.ResolveGenreIdsFromTmdbAsync(
-            full.Detail.Genres.Select(g => g.Id));
-
-        var dto = new CreateMovieDTO
-        {
-            TmdbId = full.Detail.Id,
-            Title = full.Detail.Title,
-            Description = string.IsNullOrEmpty(full.Detail.Overview) ? full.Detail.Title : full.Detail.Overview,
-            ReleaseDate = DateTime.TryParse(full.Detail.ReleaseDate, out var d)
-                ? DateTime.SpecifyKind(d, DateTimeKind.Utc)
-                : null,
-            PosterUrl = full.Detail.PosterUrl,
-            BackdropUrl = full.Detail.BackdropUrl,
-            Duration = full.Detail.Runtime,
-            ImdbRating = (decimal?)full.Detail.VoteAverage,
-            ContentRating = null,
-            OriginCountry = full.Detail.OriginCountry.FirstOrDefault(),
-            IsPremium = false, // Import mặc định Free — Admin tự set Premium sau
-            GenreIds = genreIds,
-
-            Cast = full.Cast.Take(10).Select(c => new ImportCastDTO
-            {
-                TmdbPersonId = c.Id,
-                Name = c.Name,
-                Character = c.Character,
-                Order = c.Order,
-                ProfileUrl = c.ProfileUrl,
-                Biography = full.PersonDetails.TryGetValue(c.Id, out var pd) ? pd?.Biography : null,
-                Birthday = full.PersonDetails.TryGetValue(c.Id, out var pd2) ? pd2?.Birthday : null,
-                PlaceOfBirth = full.PersonDetails.TryGetValue(c.Id, out var pd3) ? pd3?.PlaceOfBirth : null,
-                ProfileImages = full.PersonImages.TryGetValue(c.Id, out var imgs) ? imgs.ToList() : new()
-            }).ToList(),
-
-            Director = full.Director == null
-                ? null
-                : new ImportDirectorDTO
-                {
-                    TmdbPersonId = full.Director.Id,
-                    Name = full.Director.Name,
-                    ProfileUrl = full.Director.ProfileUrl,
-                    Biography = full.PersonDetails.TryGetValue(full.Director.Id, out var dpd) ? dpd?.Biography : null,
-                    Birthday = full.PersonDetails.TryGetValue(full.Director.Id, out var dpd2) ? dpd2?.Birthday : null,
-                    PlaceOfBirth = full.PersonDetails.TryGetValue(full.Director.Id, out var dpd3)
-                        ? dpd3?.PlaceOfBirth
-                        : null,
-                    ProfileImages = full.PersonImages.TryGetValue(full.Director.Id, out var dimgs)
-                        ? dimgs.ToList()
-                        : new()
-                },
-
-            Images = full.Backdrops.Select(i => new ImportImageDTO { Url = i.Url!, ImageType = "backdrop" })
-                .Concat(full.Posters.Select(i => new ImportImageDTO { Url = i.Url!, ImageType = "poster" }))
-                .ToList(),
-
-            Trailers = full.Trailers
-                .Select(t => new ImportTrailerDTO { YoutubeUrl = t.YoutubeUrl, Name = t.Name })
-                .ToList()
-        };
-
-        var movieId = await _movieService.CreateMovieAsync(dto);
-
-        return CreatedAtAction(nameof(GetById), new { id = movieId }, new ApiResponseDTO<object>
-        {
-            Data = new
-            {
-                movieId,
-                genreCount = genreIds.Count,
-                castCount = dto.Cast.Count,
-                imageCount = dto.Images.Count,
-                hasDirector = dto.Director != null,
-                personBioCount = full.PersonDetails.Count(kv => !string.IsNullOrEmpty(kv.Value?.Biography)),
-                personImageCount = full.PersonImages.Count(kv => kv.Value.Any())
-            },
-            Message = "Import thành công"
-        });
+        // Import chạy nền; FE poll GET /api/admin/tmdb/import-jobs/{jobId}
+        var job = _importJobs.Start("movie", tmdbId);
+        return Accepted(new ApiResponseDTO<object> { Data = new { jobId = job.Id }, Message = "Đang import" });
     }
 
     // ═══════════════════════════════════════════════════════════════════

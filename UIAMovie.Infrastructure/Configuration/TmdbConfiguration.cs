@@ -228,7 +228,14 @@ public class TmdbService : ITmdbService
                 var enResult = JsonSerializer.Deserialize<TmdbPersonDetailDTO>(enContent, _jsonOptions);
 
                 if (enResult != null && !string.IsNullOrWhiteSpace(enResult.Biography))
-                    result.Biography = await TranslateTextAsync(enResult.Biography);
+                {
+                    // Translation:TranslateBiographies = false → giữ tiểu sử tiếng Anh, không tốn lượt dịch
+                    var translateBio = !string.Equals(
+                        _configuration["Translation:TranslateBiographies"], "false", StringComparison.OrdinalIgnoreCase);
+                    result.Biography = translateBio
+                        ? await TranslateTextAsync(enResult.Biography)
+                        : enResult.Biography;
+                }
             }
         }
 
@@ -516,9 +523,20 @@ public class TmdbService : ITmdbService
 
         if (pending.Count > 0)
         {
-            var translated = await TranslateManyAsync(pending.Select(x => x.En).ToList());
-            for (var i = 0; i < pending.Count; i++)
-                pending[i].Ep.Overview = translated[i];
+            // Translation:TranslateEpisodes = false → dùng luôn overview en-US, bỏ qua bước dịch (nhanh hơn nhiều khi import show dài tập)
+            var translateEpisodes = !string.Equals(
+                _configuration["Translation:TranslateEpisodes"], "false", StringComparison.OrdinalIgnoreCase);
+
+            if (translateEpisodes)
+            {
+                var translated = await TranslateManyAsync(pending.Select(x => x.En).ToList());
+                for (var i = 0; i < pending.Count; i++)
+                    pending[i].Ep.Overview = translated[i];
+            }
+            else
+            {
+                foreach (var (ep, en) in pending) ep.Overview = en;
+            }
         }
 
         return result;
@@ -557,9 +575,17 @@ public class TmdbService : ITmdbService
             .Select(s => s.SeasonNumber)
             .ToList();
 
-        var seasonTasks = seasonNumbers.ToDictionary(
-            n => n,
-            n => GetTvSeasonDetailAsync(tmdbId, n));
+        // Giới hạn 3 season chạy cùng lúc: tránh bắn hàng chục request tới TMDB → dính 429 → retry backoff chậm hơn
+        using var seasonGate = new SemaphoreSlim(3);
+
+        async Task<TmdbSeasonDetailDTO?> LoadSeasonAsync(int n)
+        {
+            await seasonGate.WaitAsync();
+            try { return await GetTvSeasonDetailAsync(tmdbId, n); }
+            finally { seasonGate.Release(); }
+        }
+
+        var seasonTasks = seasonNumbers.ToDictionary(n => n, n => LoadSeasonAsync(n));
 
         await Task.WhenAll(seasonTasks.Values);
 
@@ -703,11 +729,12 @@ public class TmdbService : ITmdbService
             return (title, overview);
         }
 
-        // Overview: tiếng Anh → tiếng Việt
-        if (!string.IsNullOrWhiteSpace(enOverview))
-            overview = await TranslateTextAsync(enOverview);
+        // Overview và tên dịch SONG SONG (trước đây nối tiếp nhau)
+        var overviewTask = !string.IsNullOrWhiteSpace(enOverview)
+            ? TranslateTextAsync(enOverview)
+            : Task.FromResult(overview);
 
-        // Tên
+        var titleTask = Task.FromResult(title);
         if (!string.IsNullOrWhiteSpace(enTitle) && !NonLatinTitle.IsMatch(enTitle))
         {
             var viIsRealVietnamese =
@@ -718,11 +745,12 @@ public class TmdbService : ITmdbService
             if (!viIsRealVietnamese)
             {
                 var translateTitles = !string.Equals(_configuration["Translation:TranslateTitles"], "false", StringComparison.OrdinalIgnoreCase);
-                title = translateTitles ? await TranslateTextAsync(enTitle) : enTitle;
+                titleTask = translateTitles ? TranslateTextAsync(enTitle) : Task.FromResult(enTitle);
             }
         }
 
-        return (title, overview);
+        await Task.WhenAll(overviewTask, titleTask);
+        return (titleTask.Result, overviewTask.Result);
     }
 
     private void NormalizeTvItem(TmdbTvDTO tv)

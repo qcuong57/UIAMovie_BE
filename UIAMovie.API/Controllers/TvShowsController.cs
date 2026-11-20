@@ -22,19 +22,22 @@ public class TvShowsController : ControllerBase
     private readonly IGenreService _genreService;
     private readonly ICloudinaryService _cloudinaryService;
     private readonly ISubscriptionChecker _subscriptionChecker;
+    private readonly TmdbImportJobs _importJobs;
 
     public TvShowsController(
         ITvShowService tvShowService,
         ITmdbService tmdbService,
         IGenreService genreService,
         ICloudinaryService cloudinaryService,
-        ISubscriptionChecker subscriptionChecker)
+        ISubscriptionChecker subscriptionChecker,
+        TmdbImportJobs importJobs)
     {
         _tvShowService = tvShowService;
         _tmdbService = tmdbService;
         _genreService = genreService;
         _cloudinaryService = cloudinaryService;
         _subscriptionChecker = subscriptionChecker;
+        _importJobs = importJobs;
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -326,137 +329,11 @@ public class TvShowsController : ControllerBase
         var existing = await _tvShowService.GetTvShowByTmdbIdAsync(tmdbId);
         if (existing != null)
             return Conflict(new ApiErrorResponseDTO
-            {
-                Message = $"TV show này đã được import rồi (ID: {existing.Id})",
-                StatusCode = 409
-            });
+                { Message = $"TV show này đã được import rồi (ID: {existing.Id})", StatusCode = 409 });
 
-        var full = await _tmdbService.GetFullTvShowAsync(tmdbId);
-        if (full == null)
-            return NotFound(new ApiErrorResponseDTO
-            {
-                Message = "Không tìm thấy TV show trên TMDB",
-                StatusCode = 404
-            });
-
-        var genreIds = await _genreService.ResolveGenreIdsFromTmdbAsync(
-            full.Detail.Genres.Select(g => g.Id));
-
-        var cast = full.Cast
-            .Take(10)
-            .Select(c =>
-            {
-                full.PersonImages.TryGetValue(c.Id, out var imgs);
-                full.PersonDetails.TryGetValue(c.Id, out var detail);
-                return new ImportCastDTO
-                {
-                    TmdbPersonId = c.Id,
-                    Name = c.Name,
-                    Character = c.Character,
-                    Order = c.Order,
-                    ProfileUrl = c.ProfileUrl,
-                    Biography = detail?.Biography,
-                    Birthday = detail?.Birthday,
-                    PlaceOfBirth = detail?.PlaceOfBirth,
-                    ProfileImages = imgs ?? new()
-                };
-            }).ToList();
-
-        ImportDirectorDTO? directorDto = null;
-        if (full.Director != null)
-        {
-            full.PersonImages.TryGetValue(full.Director.Id, out var dirImgs);
-            full.PersonDetails.TryGetValue(full.Director.Id, out var dirDetail);
-            directorDto = new ImportDirectorDTO
-            {
-                TmdbPersonId = full.Director.Id,
-                Name = full.Director.Name,
-                ProfileUrl = full.Director.ProfileUrl,
-                Biography = dirDetail?.Biography,
-                Birthday = dirDetail?.Birthday,
-                PlaceOfBirth = dirDetail?.PlaceOfBirth,
-                ProfileImages = dirImgs ?? new()
-            };
-        }
-
-        var images = full.Backdrops
-            .Take(10)
-            .Select(b => new ImportImageDTO { Url = b.Url ?? "", ImageType = "backdrop" })
-            .Concat(full.Posters
-                .Take(10)
-                .Select(p => new ImportImageDTO { Url = p.Url ?? "", ImageType = "poster" }))
-            .Where(i => !string.IsNullOrEmpty(i.Url))
-            .ToList();
-
-        var trailers = full.Trailers
-            .Select(t => new ImportTrailerDTO { YoutubeUrl = t.YoutubeUrl, Name = t.Name })
-            .ToList();
-
-        var seasons = full.SeasonDetails.Values
-            .Where(s => s.SeasonNumber > 0)
-            .OrderBy(s => s.SeasonNumber)
-            .Select(s => new CreateSeasonDTO
-            {
-                SeasonNumber = s.SeasonNumber,
-                Name = s.Name,
-                Overview = string.IsNullOrEmpty(s.Overview) ? null : s.Overview,
-                PosterUrl = s.PosterUrl,
-                AirDate = DateTime.TryParse(s.AirDate, out var ad) ? ad : null,
-                Episodes = s.Episodes
-                    .OrderBy(e => e.EpisodeNumber)
-                    .Select(e => new CreateEpisodeDTO
-                    {
-                        EpisodeNumber = e.EpisodeNumber,
-                        Title = e.Title,
-                        Overview = string.IsNullOrEmpty(e.Overview) ? null : e.Overview,
-                        StillUrl = e.StillUrl,
-                        Runtime = e.Runtime,
-                        Rating = e.VoteAverage > 0 ? (decimal)e.VoteAverage : null,
-                        AirDate = DateTime.TryParse(e.AirDate, out var ea) ? ea : null
-                    }).ToList()
-            }).ToList();
-
-        var dto = new CreateTvShowDTO
-        {
-            TmdbId = full.Detail.Id,
-            Title = full.Detail.Name,
-            Description = full.Detail.Overview,
-            FirstAirDate = DateTime.TryParse(full.Detail.FirstAirDate, out var fad) ? fad : null,
-            LastAirDate = DateTime.TryParse(full.Detail.LastAirDate, out var lad) ? lad : null,
-            PosterUrl = full.Detail.PosterUrl,
-            BackdropUrl = full.Detail.BackdropUrl,
-            EpisodeRuntime = full.Detail.EpisodeRuntime,
-            ImdbRating = full.Detail.VoteAverage > 0 ? (decimal)full.Detail.VoteAverage : null,
-            OriginCountry = full.Detail.OriginCountry.FirstOrDefault(),
-            Status = full.Detail.Status,
-            NumberOfSeasons = full.Detail.NumberOfSeasons,
-            NumberOfEpisodes = full.Detail.NumberOfEpisodes,
-            GenreIds = genreIds,
-            Cast = cast,
-            Director = directorDto,
-            Images = images,
-            Trailers = trailers,
-            Seasons = seasons
-        };
-
-        var showId = await _tvShowService.CreateTvShowAsync(dto);
-
-        return CreatedAtAction(nameof(GetById), new { id = showId }, new ApiResponseDTO<object>
-        {
-            Data = new
-            {
-                showId,
-                genreCount = genreIds.Count,
-                castCount = cast.Count,
-                imageCount = images.Count,
-                seasonCount = seasons.Count,
-                episodeCount = seasons.Sum(s => s.Episodes.Count),
-                hasDirector = directorDto != null,
-                personBioCount = full.PersonDetails.Count(kv => !string.IsNullOrEmpty(kv.Value?.Biography)),
-                personImageCount = full.PersonImages.Count(kv => kv.Value.Any())
-            },
-            Message = "Import TV show thành công"
-        });
+        // Import chạy nền; FE poll GET /api/admin/tmdb/import-jobs/{jobId}
+        var job = _importJobs.Start("tv", tmdbId);
+        return Accepted(new ApiResponseDTO<object> { Data = new { jobId = job.Id }, Message = "Đang import" });
     }
 
     // ═══════════════════════════════════════════════════════════════════

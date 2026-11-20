@@ -84,6 +84,7 @@ builder.Services.AddScoped<IRepository<MovieImage>, Repository<MovieImage>>();
 builder.Services.AddScoped<IViewSessionRepository, ViewSessionRepository>(); // Infrastructure.Data.Repositories
 builder.Services.AddScoped<IViewStatsRepository, ViewStatsRepository>();
 
+builder.Services.AddSingleton<TmdbImportJobs>();
 
 // Authentication
 builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
