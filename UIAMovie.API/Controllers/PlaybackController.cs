@@ -2,9 +2,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using UIAMovie.API.Controllers;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces.IRepositories;
 using UIAMovie.Application.Interfaces.IServices;
+using UIAMovie.Application.Services;
 using UIAMovie.Domain.Entities;
 
 namespace UIAMovie.Controllers;
@@ -16,15 +18,18 @@ public class PlaybackController : ControllerBase
     private readonly IPlaybackService _playbackService;
     private readonly IRepository<Season> _seasonRepository;
     private readonly IRepository<Episode> _episodeRepository;
+    private readonly IPlaySessionService _playSessions;
 
     public PlaybackController(
         IPlaybackService playbackService,
         IRepository<Season> seasonRepository,
-        IRepository<Episode> episodeRepository)
+        IRepository<Episode> episodeRepository,
+        IPlaySessionService playSessions)
     {
         _playbackService = playbackService;
         _seasonRepository = seasonRepository;
         _episodeRepository = episodeRepository;
+        _playSessions = playSessions;
     }
 
     // ============================================================
@@ -65,6 +70,12 @@ public class PlaybackController : ControllerBase
                 code = result.BlockReason,
                 data = result
             });
+        }
+
+        if (result.CanWatch)
+        {
+            var gate = await RequirePlaySessionAsync(AdContentType.Movie, movieId);
+            if (gate != null) return gate;
         }
 
         return Ok(result);
@@ -110,6 +121,13 @@ public class PlaybackController : ControllerBase
             });
         }
 
+        if (result.CanWatch)
+        {
+            // ContentId của session với tập phim = EpisodeId
+            var gate = await RequirePlaySessionAsync(AdContentType.Episode, episodeId);
+            if (gate != null) return gate;
+        }
+
         return Ok(result);
     }
 
@@ -139,6 +157,26 @@ public class PlaybackController : ControllerBase
         }
 
         return await GetEpisodePlayback(tvShowId, episode.Id);
+    }
+
+    /// <summary>
+    /// Chỉ cấp link phim khi có play session hợp lệ của đúng người xem + đúng nội dung và pre-roll đã xem xong.
+    /// Trả null = cho qua.
+    /// </summary>
+    private async Task<IActionResult?> RequirePlaySessionAsync(AdContentType type, Guid contentId)
+    {
+        var (userId, guestId) = PlayerIdentity.Resolve(this);
+        var sid = Request.Headers["X-Play-Session"].FirstOrDefault();
+        var gate = await _playSessions.AuthorizeContentAsync(
+            sid, PlaySessionService.OwnerKeyOf(userId, guestId), type, contentId);
+
+        if (gate == PlaySessionResult.Ok) return null;
+
+        if (gate == PlaySessionResult.AdsPending || gate == PlaySessionResult.NoSession)
+            return StatusCode(428, new { message = "Vui lòng xem hết quảng cáo trước khi phát phim.", code = "ADS_REQUIRED" });
+
+        return StatusCode(StatusCodes.Status403Forbidden,
+            new { message = "Phiên phát không hợp lệ.", code = "PLAY_SESSION_INVALID" });
     }
 
     private Guid? GetCurrentUserId()

@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Caching.Memory;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces.IServices;
+using UIAMovie.Application.Services;
+using UIAMovie.Domain.Entities;
 
 namespace UIAMovie.API.Controllers;
 
@@ -27,11 +29,32 @@ public class ViewTrackingController : ControllerBase
 
     private readonly IViewTrackingService _service;
     private readonly IMemoryCache _cache;
+    private readonly IPlaySessionService _playSessions;
 
-    public ViewTrackingController(IViewTrackingService service, IMemoryCache cache)
+    public ViewTrackingController(IViewTrackingService service, IMemoryCache cache, IPlaySessionService playSessions)
     {
         _service = service;
         _cache = cache;
+        _playSessions = playSessions;
+    }
+
+    /// <summary>
+    /// Heartbeat chỉ được đếm khi gắn với play session thật: đúng người xem, đúng nội dung, đã được cấp link,
+    /// và mọi mid-roll đã trôi qua đều đã xem. null = cho qua.
+    /// 410 = session hết hạn/không có (client dừng gửi), 428 = còn quảng cáo chưa xem (bỏ beat này).
+    /// </summary>
+    private async Task<IActionResult?> CheckPlaySessionAsync(
+        Guid? userId, string? guestId, AdContentType type, Guid contentId, string? sessionId, int? positionSeconds)
+    {
+        var r = await _playSessions.ValidateHeartbeatAsync(
+            sessionId, PlaySessionService.OwnerKeyOf(userId, guestId), type, contentId, positionSeconds);
+        return r switch
+        {
+            PlaySessionResult.Ok => null,
+            PlaySessionResult.NoSession => StatusCode(StatusCodes.Status410Gone),
+            PlaySessionResult.AdsPending => StatusCode(428),
+            _ => StatusCode(StatusCodes.Status403Forbidden)
+        };
     }
 
     /// <summary>Heartbeat đếm view phim. Cho phép guest; có JWT thì dùng UserId.</summary>
@@ -44,6 +67,8 @@ public class ViewTrackingController : ControllerBase
 
         var (userId, guestId) = ResolveIdentity();
         if (!AllowGuest(userId, guestId)) return StatusCode(StatusCodes.Status429TooManyRequests);
+        var denied = await CheckPlaySessionAsync(userId, guestId, AdContentType.Movie, dto.MovieId, dto.PlaySessionId, dto.PositionSeconds);
+        if (denied != null) return denied;
         try { return Ok(await _service.RecordMovieHeartbeatAsync(userId, guestId, dto)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(StatusCodes.Status403Forbidden); }
@@ -55,9 +80,13 @@ public class ViewTrackingController : ControllerBase
     public async Task<IActionResult> TvShowHeartbeat([FromBody] TvShowHeartbeatDTO dto)
     {
         if (dto.TvShowId == Guid.Empty) return BadRequest();
+        // Session của tập phim gắn với EpisodeId nên bắt buộc phải có
+        if (dto.EpisodeId is null || dto.EpisodeId == Guid.Empty) return BadRequest();
 
         var (userId, guestId) = ResolveIdentity();
         if (!AllowGuest(userId, guestId)) return StatusCode(StatusCodes.Status429TooManyRequests);
+        var denied = await CheckPlaySessionAsync(userId, guestId, AdContentType.Episode, dto.EpisodeId!.Value, dto.PlaySessionId, dto.PositionSeconds);
+        if (denied != null) return denied;
         try { return Ok(await _service.RecordTvShowHeartbeatAsync(userId, guestId, dto)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(StatusCodes.Status403Forbidden); }
@@ -70,7 +99,7 @@ public class ViewTrackingController : ControllerBase
     {
         if (userId.HasValue || guestId is null) return true;
 
-        var ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
+        var ip = IpKey(HttpContext.Connection.RemoteIpAddress);
         var ids = _cache.GetOrCreate("guest-ids:" + ip, e =>
         {
             e.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(24);
@@ -84,6 +113,19 @@ public class ViewTrackingController : ControllerBase
             ids.Add(guestId);
             return true;
         }
+    }
+
+    /// <summary>
+    /// Khoá theo IP. IPv6: gom theo /64 (một nhà/một thuê bao có cả dải /64) — nếu dùng nguyên địa chỉ thì kẻ gian
+    /// xoay địa chỉ trong dải của mình để né giới hạn và làm phình bộ nhớ cache.
+    /// </summary>
+    private static string IpKey(System.Net.IPAddress? ip)
+    {
+        if (ip is null) return "anonymous";
+        if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+        if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+            return Convert.ToHexString(ip.GetAddressBytes(), 0, 8);
+        return ip.ToString();
     }
 
     /// <summary>

@@ -62,6 +62,9 @@ public class AdPlaybackDTO
     public int? SkipAfterSeconds { get; set; }
     public string? ClickThroughUrl { get; set; }
 
+    /// <summary>Mã do play session cấp; client gửi lại khi báo start/complete. NULL khi trả từ endpoint cũ.</summary>
+    public string? GrantRef { get; set; }
+
     // Slot info (player cần biết để xử lý mid-roll)
     public Guid SlotId { get; set; }
     public AdPosition Position { get; set; }

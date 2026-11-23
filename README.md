@@ -87,8 +87,9 @@ The React frontend (Vite, deployed on Vercel) lives in a separate repository and
 - `Premium` can only be set through payment, a free trial or `admin/grant-subscription`, so every Premium user has a `UserSubscription` row (what `SubscriptionChecker` reads)
 - Payment receipt e-mails are queued after a successful activation (paid or trial); a mail failure never fails the activation
 - Admin tools to grant or revoke subscriptions, plus a revenue dashboard (summary, chart, by-plan, order list) whose dates are computed in **Vietnam time (GMT+7)** and filtered in the database, and an **Excel export** (3 sheets) with an audit log line
-- Watch history with progress, heartbeat-based view tracking and view statistics
+- Watch history with progress, heartbeat-based view tracking and view statistics. A view is counted only for a heartbeat that belongs to a real [play session](#play-sessions-ad-enforcement); per-session locking and a real-time clamp stop parallel or inflated heartbeats from farming views
 - **Advertisements** for Free users: pre-roll / mid-roll / post-roll, either **Fixed** (the slots an admin attached) or **Random** (YouTube-style schedule built per view, front-loaded). Admins switch the mode and tune every parameter at runtime and can preview a sample schedule (see [Advertising & Ad Scheduling](#advertising--ad-scheduling))
+- **Server-side ad enforcement (play sessions):** the server freezes the ad schedule for a view, measures how long each ad was really watched, and only issues the movie link (and counts the view) after the required ads were completed (see [Play sessions](#play-sessions-ad-enforcement))
 
 ### Social & Realtime
 - Reviews and ratings (1–10) with statistics and moderation
@@ -409,7 +410,7 @@ Implemented by `RevenueService` (Application) and `AdminRevenueController` + `Re
 
 ## Advertising & Ad Scheduling
 
-Implemented by `AdService` + `RandomAdPlanner` (Application), `AdScheduleOptions` (Application/Options) and `AdsController` (API). Only Free users receive ads; the player asks for a schedule before playback starts.
+Implemented by `AdService` + `RandomAdPlanner` (Application), `AdScheduleOptions` (Application/Options) and `AdsController` (API). Only Free users receive ads; the player opens a [play session](#play-sessions-ad-enforcement) before playback starts and the schedule comes back inside it.
 
 ### Scheduling modes
 
@@ -450,6 +451,8 @@ The random plan is never cached (each view differs); only the pool (global slots
 
 The player must call `GET /api/ads/content/{contentType}/{contentId}?durationSeconds=<seconds>` (episodes also send `&parentId=<showId>`). The service passes it to the planner; without it Random mode produces pre-/post-roll only.
 
+> The player no longer calls this endpoint. `POST /api/playback/session` resolves the duration from the database (movie runtime, or the episode's runtime with the show's as fallback), so a client cannot send `durationSeconds=1` to avoid mid-rolls. The endpoint stays public for tooling and debugging, but it only *describes* a schedule: it grants nothing.
+
 ### Admin preview
 
 `POST /api/ads/schedule-preview` uses the options in the request body (unsaved values) or the saved ones. `contentType` omitted / `null` = **all formats** (movies + episodes). In `Random` mode it runs the real planner; in `Fixed` mode it returns the fixed schedule. The response is `{ mode, durationSeconds, pool: [{ adId, title, durationSeconds }], schedule: { preRoll, midRoll, postRoll } }` — `pool` is the list of ads the scheduler may draw from (empty = nothing will play). Nothing is stored.
@@ -461,6 +464,37 @@ Content-Type: application/json
 
 { "contentType": "Movie", "durationSeconds": 7200, "options": { "mode": "Random", "midRollIntervalRatio": 0.2 } }
 ```
+
+### Play sessions (ad enforcement)
+
+Implemented by `PlaySessionService` (Application), `PlaySessionController` and `PlayerIdentity` (API). The ad schedule alone only *asks* the client to show ads; a play session makes the server the source of truth for "has this viewer watched the ads?".
+
+```
+1. POST /api/playback/session { contentType, contentId, parentId? }
+        → server freezes the schedule, returns { playSessionId, requiresAds, ads{preRoll,midRoll,postRoll}, planDurationSeconds, expiresInSeconds }
+2. per ad:  POST /api/playback/session/{id}/ads/{grantRef}/start
+            POST /api/playback/session/{id}/ads/{grantRef}/complete   (server measures the real elapsed time)
+3. GET  /api/playback/movie/{id}  (or the episode routes) with header  X-Play-Session: {id}
+        → 428 ADS_REQUIRED until every pre-roll is complete, then the playback URL
+4. POST /api/playback/heartbeat[/tvshow]  { …, playSessionId, positionSeconds }
+        → counted only if every mid-roll at or before positionSeconds is complete
+```
+
+| Rule | Behaviour |
+|---|---|
+| Who gets ads | `requiresAds = false` when the viewer is signed in and `ISubscriptionChecker.CanWatchPremiumContentAsync` is true. Everyone else gets the schedule |
+| Duration | Taken from the database, never from the client. Offsets are returned with `planDurationSeconds`; the player rescales them to the real file duration |
+| Required watch time | `min(SkipAfterSeconds, DurationSeconds)`, or the full duration when the ad cannot be skipped, with a 2 s tolerance. Reporting `complete` earlier answers `409 TOO_EARLY` |
+| Order | Pre-rolls must be started and completed in order (`409 OUT_OF_ORDER`). Mid-/post-rolls can only start after the movie link was issued |
+| Owner | The session is bound to the user id, or to the guest id (`X-Guest-Id` header, then the `guest_id` cookie). Another viewer using the id gets `403` |
+| Binding | The session is bound to one content item. For episodes `contentId` is the **episode id** and `parentId` the show id |
+| Lifetime | Stored in the cache service under `playsession:{id}` (128-bit random id), TTL 6 h refreshed on every write. Expired or missing → `410` on ad and heartbeat calls, `428` on the playback link (the player opens a new session) |
+| Heartbeat | `410` = session gone (client stops sending), `428` = a mid-roll before `positionSeconds` was not watched (beat ignored), `403` = wrong owner or content. A heartbeat without `positionSeconds` is treated as "at the end of the movie" |
+| Episode heartbeat | `EpisodeId` is required (the session is bound to the episode) |
+
+Status codes of `POST …/ads/{ref}/start|complete`: `200`, `400 UNKNOWN_AD`, `403 FORBIDDEN`, `409 OUT_OF_ORDER | TOO_EARLY`, `410 NO_SESSION`.
+
+**What this does not do.** Once a signed link has been issued it can be played anywhere until it expires, and mid-rolls are still played by the client: the server only enforces them where it can see them (issuing the link and counting the view). Hard enforcement needs expiring signed URLs (see [Roadmap](#roadmap)) or server-side ad insertion. Session state and the per-session locks live in one process, so several instances need a distributed lock.
 
 ---
 
@@ -562,9 +596,9 @@ dotnet ef database update --project UIAMovie.Infrastructure --startup-project UI
 | POST | `/login` | Public | auth-strict | Login; returns access token (+ cookie) or an OTP prompt |
 | POST | `/otp/send` | Public | auth-strict | Resend the login OTP |
 | POST | `/otp/verify` | Public | auth-strict | Verify the OTP → access token (+ cookie) |
-| POST | `/2fa/enable` | User | — | Send an OTP to enable 2FA |
-| POST | `/2fa/confirm` | User | — | Confirm the OTP and enable 2FA |
-| POST | `/2fa/disable` | User | — | Verify the OTP and disable 2FA |
+| POST | `/2fa/enable` | User | auth-strict | Send an OTP to enable 2FA |
+| POST | `/2fa/confirm` | User | auth-strict | Confirm the OTP and enable 2FA |
+| POST | `/2fa/disable` | User | auth-strict | Verify the OTP and disable 2FA |
 | POST | `/forgot-password` | Public | auth-strict | Send a reset OTP (always answers the same) |
 | POST | `/reset-password` | Public | auth-strict | Reset the password with the OTP; revokes all sessions |
 | POST | `/refresh-token` | Cookie | auth-refresh | Rotate the refresh token, issue a new access token |
@@ -678,7 +712,7 @@ dotnet ef database update --project UIAMovie.Infrastructure --startup-project UI
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| GET | `/content/{contentType}/{contentId}?durationSeconds=&parentId=` | Public | Player: ads grouped as `preRoll` / `midRoll` / `postRoll` for one view. Fixed or Random per the current mode; `no-store` |
+| GET | `/content/{contentType}/{contentId}?durationSeconds=&parentId=` | Public | Player: ads grouped as `preRoll` / `midRoll` / `postRoll` for one view. Fixed or Random per the current mode; `no-store`; rate limit `playback`. Describes a schedule only — the player uses a play session instead |
 | GET | `/` | Admin | Paged ad list (filters) |
 | GET | `/{id}` | Admin | Ad detail with its global slots |
 | POST | `/` | Admin | Create an ad (`multipart/form-data`: video upload or external URL, brand image) |
@@ -694,6 +728,20 @@ dotnet ef database update --project UIAMovie.Infrastructure --startup-project UI
 | PUT | `/schedule-settings` | Admin | Save mode and parameters (clamped by `Normalized()`) |
 | POST | `/schedule-preview` | Admin | Sample schedule (+ ad pool) for a format (or all) + duration, using unsaved or saved options; stores nothing |
 
+### Playback & play sessions — `/api/playback`
+
+| Method | Endpoint | Auth | Rate limit | Description |
+|---|---|---|---|---|
+| POST | `/session` | Public | playback | Start a view: freezes the ad schedule, returns `playSessionId` + ads with a `grantRef` each |
+| POST | `/session/{id}/ads/{grantRef}/start` | Public | heartbeat | The viewer started this ad (in order for pre-rolls) |
+| POST | `/session/{id}/ads/{grantRef}/complete` | Public | heartbeat | The ad ended or was skipped; `409 TOO_EARLY` if less than the required time passed |
+| GET | `/movie/{movieId}` | Public | playback | Playback URL. Header `X-Play-Session`; `428 ADS_REQUIRED` while pre-rolls are pending, `403 PLAY_SESSION_INVALID` for a foreign / wrong-content session |
+| GET | `/tv/{tvShowId}/episode/{episodeId}` | Public | playback | Same, for an episode (also reachable through `/tv/{id}/season/{n}/episode/{m}`) |
+| POST | `/heartbeat` | Public | heartbeat | Movie view heartbeat. Body: `movieId`, `secondsSinceLastBeat`, `playSessionId`, `positionSeconds` |
+| POST | `/heartbeat/tvshow` | Public | heartbeat | Episode heartbeat. Body: `tvShowId`, `episodeId` (required), `secondsSinceLastBeat`, `playSessionId`, `positionSeconds` |
+
+"Public" means anonymous requests are allowed; a valid access token is used when present. Premium content still requires a signed-in viewer with an active plan.
+
 ### Other modules
 
 TV shows, seasons / episodes, subtitles, playback, view tracking (heartbeat), notifications, the AI assistant (`/api/ai/chat`) and the SignalR hub (`/hubs/notifications`) follow the same conventions. Run the API in Development and open Swagger for the full, current list.
@@ -705,7 +753,7 @@ TV shows, seasons / episodes, subtitles, playback, view tracking (heartbeat), no
 | Area | What is in place |
 |---|---|
 | Refresh token | HttpOnly + Secure cookie, `Path=/api/auth`, rotated on every use, stored hashed, absent from response bodies |
-| CSRF on refresh / logout | `Origin` must be in the CORS whitelist (the cookie is `SameSite=None` while FE and BE are on different domains) |
+| CSRF on refresh / logout | `Origin` must be in the CORS whitelist (the cookie is `SameSite=None` while FE and BE are on different domains). A request without `Origin` is rejected when the browser marks it `Sec-Fetch-Site: cross-site` |
 | Access token | Configurable (default 15 min, max 60), `ClockSkew = 0`, kept in memory by the frontend, revocable per user |
 | Revocation | Per-user Redis mark checked on every request; triggered by ban, delete, role change, password change / reset |
 | Passwords | BCrypt (work factor 12), shared `PasswordPolicy`, new password validated before the OTP is consumed |
@@ -718,14 +766,19 @@ TV shows, seasons / episodes, subtitles, playback, view tracking (heartbeat), no
 | SePay IPN | No signature, so `X-Secret-Key` is verified before any lock / DB access, `order_status` / `transaction_status` are checked, the amount is compared with the order and the order's provider must be `sepay` |
 | Revenue export | Admin only, audit-logged (who / range / status / rows), formula-injection guard on text cells, hard cap of 50,000 rows |
 | Ad scheduling | Settings and preview are Admin-only; every value is clamped by `AdScheduleOptions.Normalized()`; the public schedule endpoint sends `Cache-Control: no-store` so a random plan is never shared between viewers |
+| Ad content | `ClickThroughUrl`, `VideoUrl` and `BrandImageUrl` must be absolute `http` / `https` URLs (a `javascript:` link would run in the viewer's browser when clicked); URLs are validated **before** anything is uploaded; replaced files are deleted from Cloudinary only after the database save; the stored public id is the full path including the folder, so deletes do not leave orphans |
+| Play sessions | Server-frozen schedule, per-ad timing measured with the server clock, session bound to one viewer and one content item, 128-bit random id (see [Play sessions](#play-sessions-ad-enforcement)). The link is only issued once pre-rolls are complete |
+| View counting | Heartbeat seconds are clamped to 0–30 and to the real time elapsed since the previous beat; heartbeats of the same viewer / content are serialised so parallel requests cannot each add 30 s; Premium content is counted only for entitled signed-in viewers; unpublished titles cannot be counted |
+| Guest identity | `X-Guest-Id` header, then the HttpOnly `guest_id` cookie. One IP may use at most 100 different guest ids per 24 h; IPv6 addresses are grouped by `/64`, so rotating addresses inside one subscriber's range does not bypass the limit |
+| Response data | `PlaybackResponseDTO.PublicId` is `[JsonIgnore]`, so the Cloudinary public id never appears in a response, not even in the body of a `401` / `403` |
 | Home collections | Every write endpoint is Admin-only; layout, content type, auto rule and parameter are whitelisted / validated server-side; `accent` accepts only `#RRGGBB` and `config` is size-limited, so no free-form string reaches the page's inline styles; Manual ids are verified against the catalogue; the public endpoint returns only published titles |
-| Rate limiting | `auth-strict` 10/min/IP · `auth-refresh` 60/min/IP · `ai` 20/min/user (5/min/IP for guests) · `playback` 30/min · `heartbeat` 20/min/user, 240/min/IP |
+| Rate limiting | `auth-strict` 10/min/IP (including `/2fa/*`) · `auth-refresh` 60/min/IP · `ai` 20/min/user (5/min/IP for guests) · `playback` 30/min (playback links, `POST /playback/session`, `GET /ads/content`) · `heartbeat` 20/min/user, 240/min/IP (heartbeats, ad start / complete) |
 | Proxy headers | `X-Forwarded-*` is trusted only from private networks, so clients cannot spoof their IP |
 | Response headers | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, HSTS and a strict API CSP (non-Development). The UI's CSP is configured in the frontend's `vercel.json` |
 | Request size | No global body-size limit; upload endpoints declare their own `[RequestSizeLimit]` |
 | Email queue | Bounded (1000), at most 8 concurrent sends, 3 attempts each; dropped items are logged |
 
-> Rate-limit counters are kept in memory per instance. Running N instances multiplies the effective limit by N.
+> Rate-limit counters, the guest-id-per-IP limit and the per-session locks of `PlaySessionService` / `ViewTrackingService` are kept in memory per instance. Running N instances multiplies the effective limits by N and weakens the locks; use Redis-based limits / locks before scaling out.
 
 ---
 
@@ -782,6 +835,15 @@ Swagger is available in Development at `/swagger`. A health message is served at
 - `IHomeSectionService`, `IHomeSectionRepository`, `IClock` and every `IAutoRule` (`TrendingRule`, `LatestRule`, `TopRatedRule`, `GenreRule`, `UpcomingRule`, `YearRule`, `CountryRule`) registered in DI.
 - `DbSet<HomeSection>` / `DbSet<HomeSectionItem>` and the `AddHomeSections` migration applied.
 - A new layout is a **two-sided change**: add the key to `HomeSectionConstants.Layouts` (and `LayoutLimits` if it shows a fixed number of items) here, and register the component in the frontend's `HOME_LAYOUTS`. An unknown key is rejected on save here, and falls back to `carousel` on the frontend.
+
+### Play sessions wiring checklist
+
+- `builder.Services.AddScoped<IPlaySessionService, PlaySessionService>();` — it needs `ICacheService`, `IAdService`, `IContentMetaProvider` and `ISubscriptionChecker`, which are already registered. A missing registration shows up as a `500` on `POST /api/playback/session`.
+- `PlaybackController` and `ViewTrackingController` take `IPlaySessionService` in their constructors.
+- `HeartbeatDTO` / `TvShowHeartbeatDTO` carry `PlaySessionId` and `PositionSeconds`; `AdPlaybackDTO` carries `GrantRef`.
+- CORS must allow the request headers `X-Play-Session` and `X-Guest-Id` (`AllowAnyHeader()` or an explicit list), otherwise the browser's preflight fails.
+- Use a Redis-backed `ICacheService` in production: with the in-memory cache every session is lost on restart (viewers then get `410` / `428` and the player opens a new session).
+- Both `AdContentType` references must resolve to `UIAMovie.Domain.Entities.AdContentType`.
 
 ---
 
@@ -977,7 +1039,24 @@ GET /api/ads/content/Movie/{movieId}?durationSeconds=7200
 ```
 Each call returns a different plan; Fixed mode returns the same one. If `midRoll` is empty, check that `durationSeconds` is present and large enough.
 
-### 9. Build the home page (admin)
+### 9. Verify ad enforcement (play session)
+Use a Free account or no account (a guest id is enough), a published movie, and at least one pre-roll attached to a Global Slot in **Fixed** mode.
+```bash
+G=$(uuidgen); H="X-Guest-Id: $G"; API=http://localhost:5000/api
+
+curl -i $API/playback/movie/$MOVIE_ID -H "$H"                          # 428 ADS_REQUIRED (no session)
+curl -s -X POST $API/playback/session -H "$H" -H 'Content-Type: application/json' \
+     -d '{"contentType":"Movie","contentId":"'$MOVIE_ID'"}'            # note playSessionId and grantRef ("pre-0", ...)
+curl -i $API/playback/movie/$MOVIE_ID -H "$H" -H "X-Play-Session: $SID" # 428 (pre-roll not watched)
+curl -X POST $API/playback/session/$SID/ads/pre-0/start    -H "$H"
+curl -i -X POST $API/playback/session/$SID/ads/pre-0/complete -H "$H"   # 409 TOO_EARLY
+# wait for the ad's duration (or SkipAfterSeconds), then:
+curl -X POST $API/playback/session/$SID/ads/pre-0/complete -H "$H"      # 200
+curl -i $API/playback/movie/$MOVIE_ID -H "$H" -H "X-Play-Session: $SID" # 200 + playbackUrl
+```
+Using the same session id with another `X-Guest-Id` must answer `403`; a heartbeat without `playSessionId` must answer `410`. A signed-in Premium viewer gets `requiresAds: false` and the link immediately.
+
+### 10. Build the home page (admin)
 Read the dropdown data first, then create collections:
 ```http
 GET /api/admin/home-sections/meta
@@ -1058,7 +1137,7 @@ In my.sepay.vn → payment gateway → configuration, set the IPN URL to `https:
 
 ### Frontend on Vercel
 - Set `VITE_API_URL=https://<api-domain>/api`.
-- Add the Vercel domain to `Cors:AllowedOrigins`.
+- Add the Vercel domain to `Cors:AllowedOrigins`, and allow the custom request headers `X-Guest-Id` and `X-Play-Session` in the CORS policy.
 - When a same-domain `/api` rewrite is introduced, the refresh cookie can move from `SameSite=None` to `Lax`. Large uploads and SignalR should still go straight to the API.
 
 ### Upstash / Cloudinary
@@ -1072,7 +1151,8 @@ Create a Redis database and copy its TLS URL; copy Cloud Name, API Key and API S
 UIAMovie/
 ├── UIAMovie.API/                  # ASP.NET Core entry point
 │   ├── Controllers/               # AuthController, PaymentController, AdminRevenueController,
-│   │                              # AdminPlanController, HomeSectionsController, MoviesController, ...
+│   │                              # AdminPlanController, HomeSectionsController, PlaybackController, PlaySessionController (+ PlayerIdentity),
+│   │                              # ViewTrackingController, MoviesController, ...
 │   ├── Hubs/                      # SignalR (NotificationHub)
 │   ├── Filter/                    # Validation error filter
 │   ├── Middleware/                # Exception handling
@@ -1085,14 +1165,15 @@ UIAMovie/
 │   │                              # TopRated, Genre, Upcoming, Year, Country), HomeCardMapper
 │   ├── Caching/                   # Cache key definitions (UserCacheKeys)
 │   ├── DTOs/                      # incl. SubscriptionPlanDTO, AdminPlanDTO, UpsertPlanDTO,
-│   │                              # HomeSectionDTO, UpsertHomeSectionDTO, HomeContentCardDTO
+│   │                              # HomeSectionDTO, UpsertHomeSectionDTO, HomeContentCardDTO,
+│   │                              # PlaySessionDTOs (start / progress), ViewTrackingDTOs
 │   ├── Interfaces/                # Service and repository contracts (IAutoRule, IHomeSectionRepository)
 │   ├── Mappings/                  # UserMapper (shared User → UserDTO)
 │   ├── Options/                   # AdScheduleOptions (Fixed / Random ad scheduling)
 │   ├── Security/                  # PasswordPolicy, TokenRevocationService (policy, no libraries)
 │   ├── Services/                  # AuthService, UserService, PaymentService, SubscriptionPlanService,
 │   │                              # SubscriptionChecker, RevenueService (+ VnTime), VnpayPaymentService,
-│   │                              # AdService, RandomAdPlanner, HomeSectionService, ...
+│   │                              # AdService, RandomAdPlanner, PlaySessionService, ViewTrackingService, HomeSectionService, ...
 │   └── Validators/                # FluentValidation rules
 │
 ├── UIAMovie.Domain/               # Entities and constants (PaymentOrder, UserSubscription,
@@ -1178,8 +1259,13 @@ Schema changes go in their own commit together with the generated migration (`do
 - [ ] Optional exclusion of titles already shown by an earlier section (de-duplicate Auto rows against each other)
 - [ ] Unit tests: `ValidateAndNormalizeAsync` (accent, limits, duplicates, missing ids), `EffectiveLimit` per layout, window filtering after the cache, and each `IAutoRule` ordering (including the negated `upcoming` key and the mixed movie / TV merge)
 
+- [ ] **Play sessions on several instances** — move the per-session lock and read-modify-write in `PlaySessionService` (and the semaphores in `ViewTrackingService`) to Redis, or make the ad progress an atomic Redis operation
+- [ ] Unit tests for `PlaySessionService`: `AdsPending` while a pre-roll is open, `TooEarly`, `OutOfOrder`, foreign owner → `Forbidden`, mid-roll blocking `ValidateHeartbeatAsync`, Premium → `RequiresAds = false`
+- [ ] Decide what a seek or resume past a mid-roll should do: today that view is not counted until the skipped ad is played
+- [ ] Server-side ad insertion (or short-lived segment links) so mid-rolls cannot be bypassed on the CDN
+
 **Platform & product**
-- [ ] **Protected video delivery** — Cloudinary `authenticated` type + signed HLS URLs, `DeliveryType` column, re-upload of existing videos (current signed links do not expire on the Free plan)
+- [ ] **Protected video delivery** — Cloudinary `authenticated` type + signed HLS URLs, `DeliveryType` column, re-upload of existing videos (current signed links do not expire on the Free plan, so the play session only controls when a link is *issued*, not how long it works)
 - [ ] Unified response envelope and camelCase keys across all controllers
 - [ ] Recommendation engine based on watch history and ratings
 - [ ] Admin analytics dashboard

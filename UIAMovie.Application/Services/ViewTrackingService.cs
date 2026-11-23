@@ -25,6 +25,15 @@ public class ViewTrackingService : IViewTrackingService
     private const int SHORT_CONTENT_SECONDS  = 2400;
     private const double SHORT_CONTENT_RATIO = 0.05;
 
+    // Khoá theo (người xem, nội dung): 2 heartbeat SONG SONG của cùng 1 session phải chạy lần lượt. Nếu không, cả hai
+    // cùng đọc LastHeartbeatAt cũ, cùng được cộng tới 30s → vài request đồng thời là đủ ngưỡng 120s (bơm view trong vài giây).
+    // Chỉ có hiệu lực trong 1 instance; chạy nhiều instance cần khoá phân tán (Redis) hoặc cộng giây nguyên tử trong SQL.
+    private static readonly SemaphoreSlim[] SessionLocks =
+        Enumerable.Range(0, 256).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+
+    private static SemaphoreSlim LockFor(string key)
+        => SessionLocks[(uint)key.GetHashCode() % (uint)SessionLocks.Length];
+
     private readonly IViewSessionRepository _sessionRepository;
     private readonly IContentMetaProvider _meta;
     private readonly ISubscriptionChecker _subscriptionChecker;
@@ -52,20 +61,29 @@ public class ViewTrackingService : IViewTrackingService
         if (movie is null || !movie.IsPublished)
             throw new KeyNotFoundException("Movie not found");
 
-        var (session, isNew) = await GetOrCreateMovieSessionAsync(userId, guestId, dto.MovieId, _clock.Today, movie.IsPremium);
+        var gate = LockFor($"m:{userId?.ToString() ?? guestId}:{dto.MovieId}");
+        await gate.WaitAsync();
+        try
+        {
+            var (session, isNew) = await GetOrCreateMovieSessionAsync(userId, guestId, dto.MovieId, _clock.Today, movie.IsPremium);
 
-        var add = ClampSeconds(dto.SecondsSinceLastBeat, isNew ? null : session.LastHeartbeatAt);
-        await _sessionRepository.AddMovieSecondsAsync(session.Id, add); // 1 UPDATE nguyên tử, không SELECT lại
+            var add = ClampSeconds(dto.SecondsSinceLastBeat, isNew ? null : session.LastHeartbeatAt);
+            await _sessionRepository.AddMovieSecondsAsync(session.Id, add); // 1 UPDATE nguyên tử, không SELECT lại
 
-        // Tổng ước lượng từ snapshot + phần vừa cộng. Nếu 2 heartbeat chồng nhau, lần này có thể thấp hơn DB
-        // một chút → chỉ trễ đúng 1 heartbeat khi qua ngưỡng; ViewCount vẫn chính xác (claim nguyên tử).
-        var total = session.AccumulatedSeconds + add;
-        var counted = session.IsCountedAsView || total >= ComputeThreshold(movie.DurationMinutes * 60);
+            // Tổng ước lượng từ snapshot + phần vừa cộng. Heartbeat của cùng session đã được xếp hàng ở trên
+            // nên snapshot luôn là bản mới nhất; ViewCount vẫn chính xác (claim nguyên tử).
+            var total = session.AccumulatedSeconds + add;
+            var counted = session.IsCountedAsView || total >= ComputeThreshold(movie.DurationMinutes * 60);
 
-        if (counted && !session.IsCountedAsView)
-            await _sessionRepository.TryClaimMovieViewAsync(session);
+            if (counted && !session.IsCountedAsView)
+                await _sessionRepository.TryClaimMovieViewAsync(session);
 
-        return new HeartbeatResultDTO { AccumulatedSeconds = total, IsCountedAsView = counted };
+            return new HeartbeatResultDTO { AccumulatedSeconds = total, IsCountedAsView = counted };
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private async Task<(MovieViewSession Session, bool IsNew)> GetOrCreateMovieSessionAsync(
@@ -107,18 +125,27 @@ public class ViewTrackingService : IViewTrackingService
         if (dto.EpisodeId.HasValue)
             runtimeMinutes = await _meta.GetEpisodeRuntimeMinutesAsync(dto.TvShowId, dto.EpisodeId.Value) ?? runtimeMinutes;
 
-        var (session, isNew) = await GetOrCreateTvShowSessionAsync(userId, guestId, dto.TvShowId, _clock.Today, show.IsPremium);
+        var gate = LockFor($"t:{userId?.ToString() ?? guestId}:{dto.TvShowId}");
+        await gate.WaitAsync();
+        try
+        {
+            var (session, isNew) = await GetOrCreateTvShowSessionAsync(userId, guestId, dto.TvShowId, _clock.Today, show.IsPremium);
 
-        var add = ClampSeconds(dto.SecondsSinceLastBeat, isNew ? null : session.LastHeartbeatAt);
-        await _sessionRepository.AddTvShowSecondsAsync(session.Id, add);
+            var add = ClampSeconds(dto.SecondsSinceLastBeat, isNew ? null : session.LastHeartbeatAt);
+            await _sessionRepository.AddTvShowSecondsAsync(session.Id, add);
 
-        var total = session.AccumulatedSeconds + add;
-        var counted = session.IsCountedAsView || total >= ComputeThreshold(runtimeMinutes * 60);
+            var total = session.AccumulatedSeconds + add;
+            var counted = session.IsCountedAsView || total >= ComputeThreshold(runtimeMinutes * 60);
 
-        if (counted && !session.IsCountedAsView)
-            await _sessionRepository.TryClaimTvShowViewAsync(session);
+            if (counted && !session.IsCountedAsView)
+                await _sessionRepository.TryClaimTvShowViewAsync(session);
 
-        return new HeartbeatResultDTO { AccumulatedSeconds = total, IsCountedAsView = counted };
+            return new HeartbeatResultDTO { AccumulatedSeconds = total, IsCountedAsView = counted };
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private async Task<(TvShowViewSession Session, bool IsNew)> GetOrCreateTvShowSessionAsync(

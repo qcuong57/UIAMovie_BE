@@ -9,6 +9,12 @@ public class HeartbeatDTO
 
     /// <summary>Số giây xem thực sự kể từ heartbeat trước (FE gửi 15). Server chặn ngoài 0–30.</summary>
     public int SecondsSinceLastBeat { get; set; }
+
+    /// <summary>Id play session (POST /api/playback/session). Thiếu = không đếm view.</summary>
+    public string? PlaySessionId { get; set; }
+
+    /// <summary>currentTime của PHIM (không phải quảng cáo), đã quy về thang thời lượng server dùng dựng lịch.</summary>
+    public int? PositionSeconds { get; set; }
 }
 
 /// <summary>Body cho POST /api/playback/heartbeat/tvshow.</summary>
@@ -20,6 +26,12 @@ public class TvShowHeartbeatDTO
     public Guid? EpisodeId { get; set; }
 
     public int SecondsSinceLastBeat { get; set; }
+
+    /// <summary>Id play session (POST /api/playback/session). Thiếu = không đếm view.</summary>
+    public string? PlaySessionId { get; set; }
+
+    /// <summary>currentTime của PHIM (không phải quảng cáo), đã quy về thang thời lượng server dùng dựng lịch.</summary>
+    public int? PositionSeconds { get; set; }
 }
 
 public class HeartbeatResultDTO

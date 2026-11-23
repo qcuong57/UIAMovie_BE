@@ -134,6 +134,8 @@ builder.Services.AddScoped<ISubscriptionPlanService, SubscriptionPlanService>();
 builder.Services.Configure<GroqOptions>(builder.Configuration.GetSection("Groq"));
 builder.Services.AddSingleton<IAiRateLimiter, SlidingWindowAiRateLimiter>();
 builder.Services.AddHttpClient<IAiProvider, GroqProvider>();
+
+
 builder.Services.AddScoped<IMovieRetriever, MovieRetriever>();
 builder.Services.AddScoped<ITvShowRetriever, TvShowRetriever>();
 builder.Services.AddScoped<ISiteKnowledgeRetriever, SiteKnowledgeRetriever>();
@@ -163,6 +165,7 @@ builder.Services.AddScoped<IAdService, AdService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IVnpayPaymentService, VnpayPaymentService>();
 builder.Services.AddScoped<IPlaybackService, PlaybackService>();
+builder.Services.AddScoped<IPlaySessionService, PlaySessionService>();
 builder.Services.AddScoped<IViewTrackingService, ViewTrackingService>();
 builder.Services.AddScoped<IViewStatsService, ViewStatsService>();
 builder.Services.AddScoped<IPaymentOrderRepository, PaymentOrderRepository>();

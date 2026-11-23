@@ -1,4 +1,6 @@
-﻿namespace UIAMovie.Application.DTOs;
+﻿using System.Text.Json.Serialization;
+
+namespace UIAMovie.Application.DTOs;
 
 /// <summary>
 /// Response thống nhất cho hệ thống Playback.
@@ -76,8 +78,10 @@ public class PlaybackResponseDTO
     public string? Provider { get; set; }
 
     /// <summary>
-    /// Cloudinary PublicId.
+    /// Cloudinary PublicId. Chỉ dùng nội bộ ở server: [JsonIgnore] để không bao giờ lộ ra response
+    /// (kể cả body 401/403 `data = result`). PublicId là khoá để dựng link phát.
     /// </summary>
+    [JsonIgnore]
     public string? PublicId { get; set; }
 
     /// <summary>

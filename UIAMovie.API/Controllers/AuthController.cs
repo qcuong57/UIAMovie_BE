@@ -138,6 +138,7 @@ public class AuthController : ControllerBase
 
     [HttpPost("2fa/enable")]
     [Authorize]
+    [EnableRateLimiting("auth-strict")]
     public async Task<IActionResult> Enable2FA()
     {
         var result = await _authService.SendTwoFactorOtpAsync(GetUserId());
@@ -150,6 +151,7 @@ public class AuthController : ControllerBase
 
     [HttpPost("2fa/confirm")]
     [Authorize]
+    [EnableRateLimiting("auth-strict")]
     public async Task<IActionResult> ConfirmEnable2FA([FromBody] VerifyOtpDTO dto)
     {
         var (success, message) = await _authService.ConfirmEnable2FAAsync(GetUserId(), dto.Code);
@@ -161,6 +163,7 @@ public class AuthController : ControllerBase
 
     [HttpPost("2fa/disable")]
     [Authorize]
+    [EnableRateLimiting("auth-strict")]
     public async Task<IActionResult> Disable2FA([FromBody] VerifyOtpDTO dto)
     {
         var (success, message) = await _authService.Disable2FAAsync(GetUserId(), dto.Code);
@@ -319,9 +322,12 @@ public class AuthController : ControllerBase
     {
         var origin = Request.Headers.Origin.ToString();
 
-        // Không có Origin (request cùng origin hoặc không phải từ trình duyệt) thì cho qua.
-        return string.IsNullOrEmpty(origin)
-            || _allowedOrigins.Values.Contains(origin, StringComparer.OrdinalIgnoreCase);
+        // Không có Origin (request cùng origin hoặc không phải từ trình duyệt) thì cho qua,
+        // trừ khi trình duyệt tự khai đây là request cross-site (Sec-Fetch-Site) mà lại không gửi Origin.
+        if (string.IsNullOrEmpty(origin))
+            return !string.Equals(Request.Headers["Sec-Fetch-Site"].ToString(), "cross-site", StringComparison.OrdinalIgnoreCase);
+
+        return _allowedOrigins.Values.Contains(origin, StringComparer.OrdinalIgnoreCase);
     }
 
     private static CookieOptions RefreshCookieOptions(string path) => new()

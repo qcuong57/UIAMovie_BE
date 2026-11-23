@@ -2,6 +2,7 @@
 
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using UIAMovie.Application.DTOs;
 using UIAMovie.Application.Interfaces;
 using UIAMovie.Application.Interfaces.IServices;
@@ -47,8 +48,12 @@ public class AdsController : ControllerBase
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> CreateAd([FromForm] CreateAdDTO dto)
     {
-        var id = await _adService.CreateAdAsync(dto);
-        return CreatedAtAction(nameof(GetAd), new { id }, new { id });
+        try
+        {
+            var id = await _adService.CreateAdAsync(dto);
+            return CreatedAtAction(nameof(GetAd), new { id }, new { id });
+        }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     /// <summary>Cập nhật thông tin ad / thay video.</summary>
@@ -57,8 +62,12 @@ public class AdsController : ControllerBase
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UpdateAd(Guid id, [FromForm] UpdateAdDTO dto)
     {
-        var ok = await _adService.UpdateAdAsync(id, dto);
-        return ok ? NoContent() : NotFound();
+        try
+        {
+            var ok = await _adService.UpdateAdAsync(id, dto);
+            return ok ? NoContent() : NotFound();
+        }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     /// <summary>Xóa ad và file Cloudinary liên quan.</summary>
@@ -214,6 +223,7 @@ public class AdsController : ControllerBase
     /// </summary>
     [HttpGet("content/{contentType}/{contentId:guid}")]
     [AllowAnonymous]
+    [EnableRateLimiting("playback")] // endpoint public, chạm DB/Redis: dùng chung policy với playback (user hoặc IP)
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)] // lịch random: không để browser/CDN cache
     public async Task<IActionResult> GetAdsForContent(
         AdContentType contentType,
@@ -221,6 +231,9 @@ public class AdsController : ControllerBase
         [FromQuery] int? durationSeconds = null,
         [FromQuery] Guid? parentId = null)   // Episode: id của bộ (TvShow) để áp override của cả bộ
     {
+        if (!Enum.IsDefined(contentType) || contentId == Guid.Empty)
+            return BadRequest(new { error = "Tham số không hợp lệ." });
+
         var result = await _adService.GetAdsForContentAsync(contentType, contentId, durationSeconds, parentId);
         return Ok(result);
     }

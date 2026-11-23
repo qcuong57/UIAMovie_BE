@@ -74,24 +74,24 @@ public class AdService : IAdService
         if (dto.BrandImageFile == null && string.IsNullOrWhiteSpace(dto.BrandImageUrl))
             throw new ArgumentException("Phải cung cấp BrandImageFile hoặc BrandImageUrl (ảnh nhãn hiệu).");
 
-        string? videoUrl = dto.VideoUrl;
+        // Kiểm tra URL TRƯỚC khi upload để lỗi đầu vào không để lại file mồ côi trên Cloudinary
+        var clickUrl = RequireHttpUrl(dto.ClickThroughUrl, "ClickThroughUrl");
+        string? videoUrl = dto.VideoFile == null ? RequireHttpUrl(dto.VideoUrl, "VideoUrl") : null;
+        string? brandImageUrl = dto.BrandImageFile == null ? RequireHttpUrl(dto.BrandImageUrl, "BrandImageUrl") : null;
+
         string? cloudinaryPublicId = null;
+        string? brandImageCloudinaryPublicId = null;
 
         if (dto.VideoFile != null)
         {
             videoUrl = await _cloudinary.UploadVideoAsync(dto.VideoFile, "uiamovie/ads");
-            cloudinaryPublicId = Path.GetFileNameWithoutExtension(
-                new Uri(videoUrl).AbsolutePath.Split('/').Last());
+            cloudinaryPublicId = ExtractAssetId(videoUrl);
         }
-
-        string? brandImageUrl = dto.BrandImageUrl;
-        string? brandImageCloudinaryPublicId = null;
 
         if (dto.BrandImageFile != null)
         {
             brandImageUrl = await _cloudinary.UploadImageAsync(dto.BrandImageFile, "uiamovie/ads/brand");
-            brandImageCloudinaryPublicId = Path.GetFileNameWithoutExtension(
-                new Uri(brandImageUrl).AbsolutePath.Split('/').Last());
+            brandImageCloudinaryPublicId = ExtractAssetId(brandImageUrl);
         }
 
         var ad = new Advertisement
@@ -103,7 +103,7 @@ public class AdService : IAdService
             BrandImageCloudinaryPublicId = brandImageCloudinaryPublicId,
             DurationSeconds = dto.DurationSeconds,
             SkipAfterSeconds = dto.SkipAfterSeconds,
-            ClickThroughUrl = dto.ClickThroughUrl?.Trim()
+            ClickThroughUrl = clickUrl
         };
 
         return await _adRepo.AddAsync(ad);
@@ -114,62 +114,46 @@ public class AdService : IAdService
         var ad = await _adRepo.GetByIdAsync(id);
         if (ad == null) return false;
 
+        // Kiểm tra đầu vào TRƯỚC khi upload / xoá bất cứ thứ gì
+        var newClickUrl = dto.ClickThroughUrl != null ? RequireHttpUrl(dto.ClickThroughUrl, "ClickThroughUrl") : null;
+        var newVideoUrl = dto.VideoFile == null && !string.IsNullOrWhiteSpace(dto.VideoUrl)
+            ? RequireHttpUrl(dto.VideoUrl, "VideoUrl") : null;
+        var newBrandUrl = dto.BrandImageFile == null && !string.IsNullOrWhiteSpace(dto.BrandImageUrl)
+            ? RequireHttpUrl(dto.BrandImageUrl, "BrandImageUrl") : null;
+
         if (dto.Title != null) ad.Title = dto.Title.Trim();
         if (dto.IsActive != null) ad.IsActive = dto.IsActive.Value;
-        if (dto.ClickThroughUrl != null)
-            ad.ClickThroughUrl = string.IsNullOrWhiteSpace(dto.ClickThroughUrl)
-                ? null
-                : dto.ClickThroughUrl.Trim();
-
+        if (dto.ClickThroughUrl != null) ad.ClickThroughUrl = newClickUrl; // rỗng → null
         if (dto.DurationSeconds != null) ad.DurationSeconds = dto.DurationSeconds.Value;
         if (dto.SkipAfterSeconds != null) ad.SkipAfterSeconds = dto.SkipAfterSeconds;
 
+        // File cũ chỉ bị xoá SAU khi đã lưu DB: upload mới lỗi thì ad vẫn còn video cũ (trước đây xoá trước → ad mất video).
+        string? oldVideoId = null;
+        string? oldBrandId = null;
+
         if (dto.VideoFile != null)
         {
-            if (!string.IsNullOrEmpty(ad.CloudinaryPublicId))
-            {
-                try
-                {
-                    await _cloudinary.DeleteFileAsync(ad.CloudinaryPublicId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[AdService] Không xóa được Cloudinary file {Id}", ad.CloudinaryPublicId);
-                }
-            }
-
+            oldVideoId = ad.CloudinaryPublicId;
             ad.VideoUrl = await _cloudinary.UploadVideoAsync(dto.VideoFile, "uiamovie/ads");
-            ad.CloudinaryPublicId = Path.GetFileNameWithoutExtension(
-                new Uri(ad.VideoUrl).AbsolutePath.Split('/').Last());
+            ad.CloudinaryPublicId = ExtractAssetId(ad.VideoUrl);
         }
-        else if (!string.IsNullOrWhiteSpace(dto.VideoUrl))
+        else if (newVideoUrl != null)
         {
-            ad.VideoUrl = dto.VideoUrl.Trim();
+            oldVideoId = ad.CloudinaryPublicId; // chuyển sang URL ngoài → file cũ không còn dùng
+            ad.VideoUrl = newVideoUrl;
             ad.CloudinaryPublicId = null;
         }
 
         if (dto.BrandImageFile != null)
         {
-            if (!string.IsNullOrEmpty(ad.BrandImageCloudinaryPublicId))
-            {
-                try
-                {
-                    await _cloudinary.DeleteFileAsync(ad.BrandImageCloudinaryPublicId, "image");
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[AdService] Không xóa được ảnh nhãn hiệu cũ trên Cloudinary {Id}",
-                        ad.BrandImageCloudinaryPublicId);
-                }
-            }
-
+            oldBrandId = ad.BrandImageCloudinaryPublicId;
             ad.BrandImageUrl = await _cloudinary.UploadImageAsync(dto.BrandImageFile, "uiamovie/ads/brand");
-            ad.BrandImageCloudinaryPublicId = Path.GetFileNameWithoutExtension(
-                new Uri(ad.BrandImageUrl).AbsolutePath.Split('/').Last());
+            ad.BrandImageCloudinaryPublicId = ExtractAssetId(ad.BrandImageUrl);
         }
-        else if (!string.IsNullOrWhiteSpace(dto.BrandImageUrl))
+        else if (newBrandUrl != null)
         {
-            ad.BrandImageUrl = dto.BrandImageUrl.Trim();
+            oldBrandId = ad.BrandImageCloudinaryPublicId;
+            ad.BrandImageUrl = newBrandUrl;
             ad.BrandImageCloudinaryPublicId = null;
         }
 
@@ -177,6 +161,9 @@ public class AdService : IAdService
 
         // Invalidate cache toàn bộ contentType (vì global ad thay đổi ảnh hưởng tất cả)
         await InvalidateGlobalCacheAsync();
+
+        await TryDeleteCloudinaryAsync(oldVideoId, "video");
+        await TryDeleteCloudinaryAsync(oldBrandId, "image");
 
         return true;
     }
@@ -540,6 +527,41 @@ public class AdService : IAdService
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Chỉ cho phép URL http/https. ClickThroughUrl được FE render thành &lt;a href&gt;, nên "javascript:..." = XSS khi người xem bấm.
+    /// Rỗng → null. Sai định dạng → ArgumentException (controller trả 400).
+    /// </summary>
+    private static string? RequireHttpUrl(string? raw, string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var value = raw.Trim();
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            throw new ArgumentException($"{fieldName} phải là URL http/https hợp lệ.");
+        return value;
+    }
+
+    /// <summary>
+    /// Public id đầy đủ (gồm cả folder) suy ra từ URL — nguồn sự thật cho việc xoá file.
+    /// Trước đây chỉ lấy đoạn cuối của path nên DeleteFileAsync không xoá được file nằm trong folder (file mồ côi).
+    /// </summary>
+    private string? ExtractAssetId(string url)
+        => _cloudinary.ExtractPublicId(url)
+           ?? Path.GetFileNameWithoutExtension(new Uri(url).AbsolutePath.Split('/').Last());
+
+    private async Task TryDeleteCloudinaryAsync(string? publicId, string resourceType)
+    {
+        if (string.IsNullOrEmpty(publicId)) return;
+        try
+        {
+            await _cloudinary.DeleteFileAsync(publicId, resourceType);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[AdService] Không xóa được file Cloudinary {Id}", publicId);
+        }
+    }
 
     /// <summary>
     /// Global slot áp dụng cho 1 loại content. Tập phim (Episode) nhận thêm các slot phạm vi TvShow
