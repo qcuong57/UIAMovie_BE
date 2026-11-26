@@ -100,6 +100,9 @@ public class CreatePaymentOrderDTO
 
     /// <summary>URL frontend redirect sau thanh toán (optional — dùng default nếu null)</summary>
     public string? ReturnUrl { get; set; }
+
+    /// <summary>Banner dẫn tới đơn (từ ?banner= trên URL trang gói). Server kiểm tra lại, sai thì bỏ qua.</summary>
+    public Guid? BannerId { get; set; }
 }
 
 /// <summary>Response sau khi tạo order — frontend chuyển user sang cổng thanh toán (xem PaymentMethod)</summary>

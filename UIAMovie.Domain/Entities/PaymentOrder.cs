@@ -45,6 +45,9 @@ public class PaymentOrder
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime ExpiredAt { get; set; } // Hết hạn sau 15 phút nếu chưa thanh toán
     public DateTime? PaidAt { get; set; }
+
+    /// <summary>Banner đã dẫn user tới đơn này (null = không đến từ banner). Không có FK để xoá banner không mất lịch sử đơn.</summary>
+    public Guid? BannerId { get; set; }
 }
 
 /// <summary>

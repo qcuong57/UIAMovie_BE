@@ -162,6 +162,9 @@ builder.Services.AddScoped<IRepository<Episode>, Repository<Episode>>();
 builder.Services.AddScoped<ISubscriptionChecker, SubscriptionChecker>();
 builder.Services.AddScoped<IAdRepository, AdRepository>();
 builder.Services.AddScoped<IAdService, AdService>();
+builder.Services.AddScoped<IBannerRepository, BannerRepository>();
+builder.Services.AddScoped<IBannerService, BannerService>();
+builder.Services.AddScoped<IBannerContextProvider, BannerContextProvider>(); // Infrastructure.Data
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IVnpayPaymentService, VnpayPaymentService>();
 builder.Services.AddScoped<IPlaybackService, PlaybackService>();
@@ -308,6 +311,11 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("heartbeat", c => UserId(c) is { } uid
         ? RateLimitPartition.GetFixedWindowLimiter("u:" + uid, _ => Fixed(20))
         : RateLimitPartition.GetFixedWindowLimiter("ip:" + Ip(c), _ => Fixed(240)));
+
+    // Tracking view/click banner (FE gom lô bằng sendBeacon). Guest theo IP (thoáng hơn vì NAT dùng chung).
+    options.AddPolicy("banner-events", c => UserId(c) is { } uid
+        ? RateLimitPartition.GetFixedWindowLimiter("u:" + uid, _ => Fixed(60))
+        : RateLimitPartition.GetFixedWindowLimiter("ip:" + Ip(c), _ => Fixed(120)));
 });
 
 // Chạy sau reverse proxy (Render): chỉ tin X-Forwarded-* từ proxy trong mạng riêng,

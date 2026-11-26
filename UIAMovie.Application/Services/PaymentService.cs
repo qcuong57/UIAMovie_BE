@@ -116,6 +116,7 @@ public class PaymentService : IPaymentService
     private readonly ISubscriptionPlanService _plans;
     private readonly ICacheService _cache;
     private readonly IPaymentReceiptNotifier _receipts;
+    private readonly IBannerService _banners;
     private readonly ILogger<PaymentService> _logger;
 
     private const string SUB_CACHE_KEY = "subscription:{0}";
@@ -133,6 +134,7 @@ public class PaymentService : IPaymentService
         ISubscriptionPlanService plans,
         ICacheService cache,
         IPaymentReceiptNotifier receipts,
+        IBannerService banners,
         ILogger<PaymentService> logger)
     {
         _orderRepo = orderRepo;
@@ -144,6 +146,7 @@ public class PaymentService : IPaymentService
         _plans = plans;
         _cache = cache;
         _receipts = receipts;
+        _banners = banners;
         _logger = logger;
     }
 
@@ -225,9 +228,12 @@ public class PaymentService : IPaymentService
         if (CheckEligibility(plan, ctx, now) is { } reason)
             throw new ArgumentException(reason);
 
+        // 1a. Attribution banner: server kiểm tra lại (banner phải tồn tại và gắn đúng gói), sai thì bỏ qua
+        var bannerId = await _banners.ResolveAttributionAsync(dto.BannerId, plan.PlanId);
+
         // 1b. Gói 0đ (dùng thử): không qua cổng thanh toán
         if (plan.PriceVnd == 0)
-            return await ActivateFreePlanAsync(userId, plan);
+            return await ActivateFreePlanAsync(userId, plan, bannerId);
 
         // 2. Validate provider — hỗ trợ vnpay và sepay (chỉ cần cho gói trả phí)
         var provider = (dto.PaymentProvider ?? string.Empty).ToLowerInvariant();
@@ -254,7 +260,8 @@ public class PaymentService : IPaymentService
             Amount = plan.PriceVnd,
             Provider = provider,
             Status = PaymentStatus.Pending,
-            ExpiredAt = expiredAt
+            ExpiredAt = expiredAt,
+            BannerId = bannerId
         };
 
         await _orderRepo.AddAsync(order);
@@ -318,7 +325,7 @@ public class PaymentService : IPaymentService
     /// Gói 0đ: tạo đơn Success (Provider = "free", Amount = 0) và nâng gói trong MỘT lần SaveChanges.
     /// Đơn này là bằng chứng "đã dùng thử" cho CheckEligibility (đếm đơn Success theo PlanId).
     /// </summary>
-    private async Task<PaymentOrderResponseDTO> ActivateFreePlanAsync(Guid userId, SubscriptionPlan plan)
+    private async Task<PaymentOrderResponseDTO> ActivateFreePlanAsync(Guid userId, SubscriptionPlan plan, Guid? bannerId)
     {
         // Chặn bấm đúp / gọi song song: INCR nguyên tử (cùng kiểu khóa với ConfirmOrderAsync).
         // Kiểm tra điều kiện ở trên chạy TRƯỚC khóa, nên request thứ hai hoặc thấy đơn đã lưu (bị chặn
@@ -338,7 +345,8 @@ public class PaymentService : IPaymentService
             Provider = PaymentProviders.Free,
             Status = PaymentStatus.Success,
             PaidAt = now,
-            ExpiredAt = now
+            ExpiredAt = now,
+            BannerId = bannerId
         };
 
         await _orderRepo.AddAsync(order);

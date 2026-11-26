@@ -1,6 +1,6 @@
 # UIAMovie — Movie & TV Streaming Platform (REST API)
 
-A RESTful API backend for a Netflix-style streaming platform, built with ASP.NET Core. It covers account security (email OTP, 2FA, rotating refresh tokens in HttpOnly cookies), movie and TV catalogue management with TMDB import, Cloudinary video hosting, admin-curated home page collections, admin-configurable Premium plans (including free trials) paid through VNPay or SePay (with an admin revenue dashboard and Excel export), ad serving with a YouTube-style random scheduler, real-time notifications over SignalR, an AI movie assistant, and Redis caching.
+A RESTful API backend for a Netflix-style streaming platform, built with ASP.NET Core. It covers account security (email OTP, 2FA, rotating refresh tokens in HttpOnly cookies), movie and TV catalogue management with TMDB import, Cloudinary video hosting, admin-curated home page collections, admin-managed promotional banners (audience / schedule / plan targeting with click and revenue attribution), admin-configurable Premium plans (including free trials) paid through VNPay or SePay (with an admin revenue dashboard and Excel export), ad serving with a YouTube-style random scheduler, real-time notifications over SignalR, an AI movie assistant, and Redis caching.
 
 The React frontend (Vite, deployed on Vercel) lives in a separate repository and talks to this API over HTTPS.
 
@@ -17,6 +17,7 @@ The React frontend (Vite, deployed on Vercel) lives in a separate repository and
 - [Payments (VNPay & SePay)](#payments-vnpay--sepay)
 - [Advertising & Ad Scheduling](#advertising--ad-scheduling)
 - [Home Collections](#home-collections)
+- [Banners](#banners)
 - [API Endpoints](#api-endpoints)
 - [Security Hardening](#security-hardening)
 - [Installation & Setup](#installation--setup)
@@ -72,6 +73,15 @@ The React frontend (Vite, deployed on Vercel) lives in a separate repository and
 - The public list resolves everything into ready-to-render cards (`HomeContentCardDTO`, including trailer key / uploaded trailer URL), is cached for 5 minutes and filters the display window **after** reading the cache, so scheduling is exact
 - Layouts that show only N items cap the stored / queried limit at N; the frontend learns the caps from `GET /admin/home-sections/meta`
 - Items pointing at a deleted or unpublished title silently disappear; a section with no items is not returned to the public
+
+### Banners
+- **Admin-managed promotional banners** at 8 placements (home hero / middle, pricing page, player page, popup, movie detail, browse, sticky bottom). Text, badge and CTA are data, so the frontend renders them on top of the image instead of baking them into it (see [Banners](#banners))
+- **Targeting:** audience (`All` / `Guest` / `Free` / `Premium`), display window (`StartAt` / `EndAt`, no background job), device, genres, target pages and an A/B group
+- **Plan-linked banners:** a banner can promote a `SubscriptionPlan`; it hides itself when the plan is switched off, outside its sale window, or the viewer cannot buy it, and can return the live price / discount for the frontend to render
+- **Popup controls:** delay, close cooldown, CTA cooldown, max shows and interval, with defaults applied by the backend so the frontend hard-codes nothing
+- The active list is cached per placement for 5 minutes and filtered **after** the cache (time window, audience, plan), so scheduling and eligibility are exact
+- **Tracking and attribution:** view / click / dismiss / conversion events in batches, plus `PaymentOrder.BannerId`, so the admin stats show CTR, orders created, orders paid and revenue per banner
+- Images are uploaded to Cloudinary (or pasted as an https URL), with an optional separate mobile image; everything is validated **before** the upload, and replaced files are deleted only after the database save
 
 ### Playback, Premium & Payments
 - `PlaybackService` decides who may watch what; the paywall never returns a playback URL when the viewer is not entitled
@@ -585,6 +595,125 @@ dotnet ef database update --project UIAMovie.Infrastructure --startup-project UI
 
 ---
 
+## Banners
+
+Admins create promotional banners (offers, events, plan discounts) without a deploy. Implemented by `BannerService` (Application), `IBannerContextProvider` → `BannerContextProvider` (Infrastructure: viewer and plan lookups), `BannerRepository` (Infrastructure), `Banner` / `BannerEvent` (Domain), `BannerDTOs` (Application) and `BannersController` (API). As with Home Collections, the backend holds **data and rules only**; the frontend draws the banner.
+
+### Data model
+
+| Group | Fields | Meaning |
+|---|---|---|
+| Content | `Title` (≤ 150, required), `Subtitle` (≤ 300), `CtaText` (≤ 40), `BadgeText` (≤ 20), `AltText` (≤ 200, falls back to `Title`) | Text rendered by the frontend on top of the image |
+| Image | `ImageUrl`, `ImageWidth`, `ImageHeight`, `MobileImageUrl` (+ width / height), `*CloudinaryPublicId`, `BackgroundColor` (`#RRGGBB`), `FitMode` (`contain` \| `cover`), `MaxHeight` (80–2000 px) | Desktop image is required; the mobile one is optional (null = use the desktop image). `BackgroundColor` fills the box while the image loads |
+| Link | `LinkUrl`, `OpenInNewTab` | `http(s)` URL or an internal path `/...`. Empty + `PlanId` → deep link to the plan (see below) |
+| Placement | `Placement`, `DisplayOrder` | Where it shows and the order inside that placement |
+| Audience | `Audience` | `All`, `Guest` (not signed in), `Free` (signed in, no active Premium), `Premium` (active Premium) |
+| Schedule | `StartAt`, `EndAt` (UTC), `IsActive` | `null` = unbounded |
+| Plan | `PlanId`, `ShowPlanPrice` | Promoted `SubscriptionPlan.PlanId`; `ShowPlanPrice` returns the live price block |
+| Targeting hints | `Device` (`all` \| `desktop` \| `mobile`), `TargetGenres` (CSV, ≤ 10), `TargetPages` (CSV of internal path prefixes, ≤ 20), `AbGroup` (≤ 40) | Returned to the frontend, which applies them (see the table below) |
+| Popup behaviour | `DisplayDelaySeconds` (0–300), `DismissCooldownHours`, `InteractionCooldownHours` (0–8760), `MaxShows` (1–20), `ShowIntervalHours` (0–8760) | `Popup` placement only. The public API fills the defaults from `BannerPopupDefaults`: 8 s delay, 24 h after a close, 168 h (7 days) after a CTA click |
+
+### Placements
+
+`GET /api/banners/placements` returns the recommended image size and the maximum number of banners for each placement (used by the admin form). `BannerPlacementRules.MaxItems` also caps what the public list returns.
+
+| Placement | Desktop | Mobile | Max items | Note |
+|---|---|---|---|---|
+| `HomeHero` | 1920×720 | 960×1200 | 8 | Carousel at the top of the home page |
+| `HomeMiddle` | 1920×400 | 960×480 | 3 | |
+| `PricingPage` | 1600×500 | 960×600 | 3 | |
+| `PlayerPage` | 970×250 | 640×200 | 2 | |
+| `Popup` | 1080×1080 | 1080×1080 | 5 | Returns up to 5 candidates by priority; the frontend shows one per session and skips campaigns that hit a frequency limit |
+| `MovieDetail` | 1600×400 | 960×480 | 2 | |
+| `Browse` | 1920×300 | 960×360 | 2 | |
+| `StickyBottom` | 960×120 | 960×120 | 1 | Mobile bar fixed to the bottom |
+
+### Read path
+
+```
+GET /api/banners?placement=HomeHero      (guests and signed-in users)
+  1. cache "banners:active:{placement}" (5 min) → miss: all IsActive banners of that placement,
+       ordered by DisplayOrder then newest first. NOT filtered by viewer or time
+  2. filter in memory, per request:
+       a. StartAt / EndAt window                        (no background job needed)
+       b. Audience vs the viewer (guest / free / premium)
+       c. attached plan: off / outside its sale window / deleted / not eligible → banner hidden
+  3. map to the public DTO, take at most BannerPlacementRules.MaxItems(placement)
+```
+
+- The cached value is the full admin DTO; the public DTO is built afterwards, so the admin-only fields never leave the service.
+- The result depends on the viewer, so the controller answers `Cache-Control: public, max-age=60` for guests (CDN friendly), `private, max-age=60` for signed-in users, and always `Vary: Authorization`.
+- **Every write** (create, update, activate, delete) removes the cache keys of **all** placements, because a banner can change placement.
+
+### What the backend filters and what the frontend applies
+
+| Rule | Where | Notes |
+|---|---|---|
+| Active flag, `StartAt` / `EndAt` | **Backend** | Exact, evaluated on every request |
+| `Audience` | **Backend** | `Guest` / `Free` / `Premium` from the token and `UserSubscription.ExpiredAt` |
+| Attached plan state and eligibility | **Backend** | Same rules as `create-order` (see [Plan-linked banners](#plan-linked-banners)) |
+| Max items per placement | **Backend** | `BannerPlacementRules` |
+| `Device` | Frontend | The backend returns the field; the frontend hides non-matching banners |
+| `TargetPages` | Frontend | Prefix match against `location.pathname` |
+| `TargetGenres` | Frontend | Compared with the genres of the current movie |
+| `AbGroup` | Frontend | Banners of the same group and placement: show one per viewer, chosen at random |
+| `MaxShows`, `ShowIntervalHours`, delay, cooldowns | Frontend | Stored per browser; the backend only supplies the numbers |
+
+### Plan-linked banners
+
+Setting `PlanId` ties the banner to a subscription plan:
+
+- **Visibility:** the banner is hidden when the plan is switched off, outside `StartsAt` / `EndsAt`, no longer exists, or the signed-in viewer is not eligible (purchase limit reached, trial while Premium is active, e-mail domain not allowed). Guests are always treated as eligible, because `create-order` checks again after sign-in. `BannerContextProvider.IsEligible` mirrors the rules of `create-order`; keep the two in sync when one changes.
+- **Price block:** with `ShowPlanPrice = true` the public DTO carries `plan` (`BannerPlanDTO`): `priceVnd`, `priceDisplay` (`69.000đ`, or `Miễn phí` for 0), `originalPriceDisplay`, `discountPercent`, `durationDays`, `isTrial`, `endsAt` (for a countdown). Without it the field is `null`. The price always comes from the plan row, so changing the plan changes the banner immediately.
+- `ShowPlanPrice` requires a `PlanId`, and the plan must exist when the banner is saved.
+
+### Links and attribution
+
+`LinkUrl` in the public DTO is already resolved (`RawLinkUrl` is what the admin typed; it is returned to admins only):
+
+- empty link + `PlanId` → `/packages?plan={PlanId}` (the frontend preselects the plan)
+- any internal link (`/...`) gets `banner={id}` appended
+
+The frontend remembers that `banner` id and sends it back when it creates an order. `ResolveAttributionAsync(bannerId, planId)` returns the id only if the banner exists **and** its `PlanId` equals the ordered plan (case-insensitive); otherwise `null`, so a forged id cannot credit revenue to another banner. A banner that has since been switched off or expired still counts, so a payment made after a campaign ended is still attributed.
+
+### Write path & validation
+
+Create and update validate **everything first** and upload afterwards; any failure is `400 { "error": "…" }`.
+
+| Rule | Detail |
+|---|---|
+| Image | Send `ImageFile` **or** `ImageUrl`; if both are sent the file wins. URLs must be `https` (avoids mixed content) and ≤ 2000 characters. Width / height 1–8000 |
+| Link | Internal path `/...` (not `//host`, no `\`) or `http(s)` URL; `javascript:` and similar are rejected |
+| Time | `StartAt` / `EndAt` accept ISO with an offset. A value **without** `Z` / offset is read as **Vietnam time**, independent of the server's time zone. `EndAt` must not be before `StartAt` |
+| Enums | `Placement` and `Audience` must be defined values |
+| Text | Trimmed, length-limited (see the data model); empty optional text becomes `null` |
+| Genres / pages | Split by comma, trimmed, de-duplicated. Pages must look like `/path` (≤ 40 characters, no spaces, no `//`, no `\`) |
+| Plan | Must exist; `ShowPlanPrice` without `PlanId` is rejected |
+| Frequency | Ranges as in the data model table |
+| Failure cleanup | If the upload or the database save fails, files uploaded in that call are deleted |
+
+**Update semantics (`PUT`, multipart):** a field left out (`null`) is kept; an empty string `""` clears `Subtitle`, `CtaText`, `BadgeText`, `AltText`, `BackgroundColor`, `PlanId`, `TargetGenres`, `TargetPages` and `AbGroup`. Fields that cannot be expressed as an empty string use flags: `ClearStartAt`, `ClearEndAt`, `ClearLink`, `ClearMaxHeight`, `ClearMobileImage`, `ClearFrequency` (resets max shows, interval, delay and both cooldowns to the defaults). The old Cloudinary file is deleted only **after** the database save; a failed delete is logged and never fails the request. Deleting a banner also deletes its events (cascade) and its Cloudinary files.
+
+The admin list returns a computed `status`: `inactive`, `scheduled`, `live` or `expired`.
+
+### Tracking & statistics
+
+- `POST /api/banners/events` accepts batches of `{ bannerId, type, sessionId }` with `type` ∈ `view`, `click`, `dismiss`, `conversion`. Limits: body ≤ 16 KB, ≤ 50 events per batch, rate limit policy `banner-events`; `sessionId` is cut to 64 characters. Within one batch, duplicates of the same banner + type + session are dropped (React StrictMode / retries), and events for banners that do not exist are ignored. The endpoint is anonymous; `UserId` is stored when a valid token is present. It always answers `204`.
+- `GET /api/banners/admin/stats?from&to` returns one row per banner (including banners with no events), sorted by revenue then views: `views`, `clicks`, `dismisses`, `conversions`, `ctr = clicks / views`, `ordersCreated`, `ordersPaid`, `revenue`, `conversionRate = ordersPaid / clicks` (ratios are 0..1, rounded to 4 decimals, `0` when the denominator is 0).
+- `from` / `to` are **dates, both inclusive**, but they are read as **UTC** days (unlike the [revenue reports](#revenue-reporting--excel-export), which use Vietnam time).
+- `ordersPaid` counts `success` orders with `Amount > 0`; `revenue` is the sum of `success` order amounts (before gateway fees). Orders are the ones whose `BannerId` is set (see [Links and attribution](#links-and-attribution)).
+
+### Migration
+
+```bash
+dotnet ef migrations add AddBanners --project UIAMovie.Infrastructure --startup-project UIAMovie.API
+dotnet ef database update --project UIAMovie.Infrastructure --startup-project UIAMovie.API
+```
+
+The migration adds `Banners`, `BannerEvents` (cascade delete from the banner) and `PaymentOrders.BannerId`. Enums (`Placement`, `Audience`) are stored as strings.
+
+---
+
 ## API Endpoints
 
 ### Auth — `/api/auth`
@@ -683,6 +812,21 @@ dotnet ef database update --project UIAMovie.Infrastructure --startup-project UI
 | PUT | `/api/admin/home-sections/reorder` | Admin | Body `{ "sectionIds": [Guid, …] }` in the new order → `204` |
 | PATCH | `/api/admin/home-sections/{id}/active` | Admin | Body `{ "isActive": bool }` → `204` |
 
+### Banners — `/api/banners`
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| GET | `/?placement=` | Public | Banners visible to the current viewer for one placement (time window, audience, plan state applied). `public` cache for guests, `private` for signed-in users |
+| GET | `/placements` | Public | Recommended image sizes and max items per placement (cached 1 h) |
+| POST | `/events` | Public | Batch of `view` / `click` / `dismiss` / `conversion` events. Rate limit `banner-events`, body ≤ 16 KB, always `204` |
+| GET | `/admin` | Admin | Paged list (`isActive`, `placement`, `search`, `page`, `pageSize` 1–100) with computed `status` |
+| GET | `/admin/stats?from&to` | Admin | Views, clicks, dismisses, conversions, CTR, orders, revenue per banner |
+| GET | `/{id}` | Admin | One banner (admin DTO) |
+| POST | `/` | Admin | Create (`multipart/form-data`, ≤ 20 MB) → `201 { id }`; validation errors `400 { "error" }` |
+| PUT | `/{id}` | Admin | Update (`multipart/form-data`, ≤ 20 MB) → `204`; `404` when missing; `400` on validation |
+| PATCH | `/{id}/active` | Admin | Body `{ "isActive": bool }` → `204` |
+| DELETE | `/{id}` | Admin | Delete the banner, its events and its Cloudinary images → `204` |
+
 ### Genres — `/api/genres`
 
 | Method | Endpoint | Auth | Description |
@@ -772,6 +916,7 @@ TV shows, seasons / episodes, subtitles, playback, view tracking (heartbeat), no
 | Guest identity | `X-Guest-Id` header, then the HttpOnly `guest_id` cookie. One IP may use at most 100 different guest ids per 24 h; IPv6 addresses are grouped by `/64`, so rotating addresses inside one subscriber's range does not bypass the limit |
 | Response data | `PlaybackResponseDTO.PublicId` is `[JsonIgnore]`, so the Cloudinary public id never appears in a response, not even in the body of a `401` / `403` |
 | Home collections | Every write endpoint is Admin-only; layout, content type, auto rule and parameter are whitelisted / validated server-side; `accent` accepts only `#RRGGBB` and `config` is size-limited, so no free-form string reaches the page's inline styles; Manual ids are verified against the catalogue; the public endpoint returns only published titles |
+| Banners | Every write endpoint is Admin-only; text, enums, colours, device, genres and pages are validated server-side; image URLs must be `https`; click links must be `http(s)` or an internal `/path` (no `//host`, `\` or `javascript:`); everything is validated **before** the Cloudinary upload and orphan files are cleaned up on failure; the public DTO omits admin-only fields; plan-linked banners respect plan state and eligibility; attribution is accepted only when the banner's `PlanId` equals the ordered plan; the event endpoint is rate-limited, size-limited (16 KB, 50 events), de-duplicated per batch and ignores unknown banner ids |
 | Rate limiting | `auth-strict` 10/min/IP (including `/2fa/*`) · `auth-refresh` 60/min/IP · `ai` 20/min/user (5/min/IP for guests) · `playback` 30/min (playback links, `POST /playback/session`, `GET /ads/content`) · `heartbeat` 20/min/user, 240/min/IP (heartbeats, ad start / complete) |
 | Proxy headers | `X-Forwarded-*` is trusted only from private networks, so clients cannot spoof their IP |
 | Response headers | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, HSTS and a strict API CSP (non-Development). The UI's CSP is configured in the frontend's `vercel.json` |
@@ -835,6 +980,14 @@ Swagger is available in Development at `/swagger`. A health message is served at
 - `IHomeSectionService`, `IHomeSectionRepository`, `IClock` and every `IAutoRule` (`TrendingRule`, `LatestRule`, `TopRatedRule`, `GenreRule`, `UpcomingRule`, `YearRule`, `CountryRule`) registered in DI.
 - `DbSet<HomeSection>` / `DbSet<HomeSectionItem>` and the `AddHomeSections` migration applied.
 - A new layout is a **two-sided change**: add the key to `HomeSectionConstants.Layouts` (and `LayoutLimits` if it shows a fixed number of items) here, and register the component in the frontend's `HOME_LAYOUTS`. An unknown key is rejected on save here, and falls back to `carousel` on the frontend.
+
+### Banners wiring checklist
+
+- DI: `IBannerService → BannerService`, `IBannerRepository → BannerRepository`, `IBannerContextProvider → BannerContextProvider`; `ICloudinaryService` and `ICacheService` are already registered.
+- `MovieDbContext`: `DbSet<Banner>` and `DbSet<BannerEvent>` (cascade delete from banner to events, enums stored as strings), `PaymentOrder.BannerId` (nullable), and the `AddBanners` migration applied.
+- Rate limiter: define the `banner-events` policy, otherwise `POST /api/banners/events` fails at startup / request time.
+- `create-order` must pass the banner id through `IBannerService.ResolveAttributionAsync` and store the result in `PaymentOrder.BannerId`.
+- `BannerContextProvider` assumes `SubscriptionPlan` (`PlanId`, `Name`, `PriceVnd`, `OriginalPriceVnd`, `DurationDays`, `IsActive`, `IsTrial`, `MaxPerUser`, `AllowedEmailDomains`, `StartsAt`, `EndsAt`), `User` (`Id`, `Email`) and `UserSubscription` (`UserId`, `SubscriptionType`, `ExpiredAt`); adjust the class if your entities differ.
 
 ### Play sessions wiring checklist
 
@@ -1118,6 +1271,31 @@ GET /api/home-sections
 ```
 A Manual collection with no items, or one outside its `startAt` / `endAt` window, is not returned.
 
+### 11. Create a banner (admin)
+Banners are `multipart/form-data` (image upload or an https `imageUrl`). This one promotes a plan on the pricing page, shows the live price and runs until the end of the year (Vietnam time):
+```bash
+curl -X POST "$API/banners" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -F "title=Premium giảm 30%" \
+  -F "subtitle=Ưu đãi tháng 12" \
+  -F "ctaText=Đăng ký ngay" \
+  -F "badgeText=-30%" \
+  -F "placement=PricingPage" \
+  -F "audience=Free" \
+  -F "planId=monthly_premium" \
+  -F "showPlanPrice=true" \
+  -F "startAt=2026-12-01T00:00:00+07:00" \
+  -F "endAt=2026-12-31T23:59:59+07:00" \
+  -F "imageFile=@banner-1600x500.jpg"
+```
+Check what a visitor gets, then the numbers:
+```http
+GET /api/banners?placement=PricingPage
+
+GET /api/banners/admin/stats?from=2026-12-01&to=2026-12-31
+Authorization: Bearer <admin-access-token>
+```
+Leave `linkUrl` empty and the link becomes `/packages?plan=monthly_premium&banner=<id>`. To clear a value on update send an empty string (`subtitle=`) or a flag (`clearEndAt=true`).
+
 ---
 
 ## Deployment
@@ -1126,7 +1304,7 @@ A Manual collection with no items, or one outside its `startAt` / `endAt` window
 1. Create a **Web Service** from this repository.
 2. Build: `dotnet publish -c Release -o out` — Start: `dotnet out/UIAMovie.API.dll`
 3. Add every setting above as an environment variable. Do not forget `Backend__PublicUrl` and `Frontend__Url` (or `FRONTEND_URL`).
-4. Create a PostgreSQL database and use its connection string, then apply the migrations (including `AddSubscriptionPlans` and `AddHomeSections`) and create the first plans.
+4. Create a PostgreSQL database and use its connection string, then apply the migrations (including `AddSubscriptionPlans`, `AddHomeSections` and `AddBanners`) and create the first plans.
 5. Render's proxy lives in a private network, which is why `ForwardedHeaders` trusts only `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `fc00::/7`. If you put Cloudflare in front, add its ranges.
 
 ### VNPay merchant portal
@@ -1151,7 +1329,7 @@ Create a Redis database and copy its TLS URL; copy Cloud Name, API Key and API S
 UIAMovie/
 ├── UIAMovie.API/                  # ASP.NET Core entry point
 │   ├── Controllers/               # AuthController, PaymentController, AdminRevenueController,
-│   │                              # AdminPlanController, HomeSectionsController, PlaybackController, PlaySessionController (+ PlayerIdentity),
+│   │                              # AdminPlanController, HomeSectionsController, BannersController, PlaybackController, PlaySessionController (+ PlayerIdentity),
 │   │                              # ViewTrackingController, MoviesController, ...
 │   ├── Hubs/                      # SignalR (NotificationHub)
 │   ├── Filter/                    # Validation error filter
@@ -1173,18 +1351,20 @@ UIAMovie/
 │   ├── Security/                  # PasswordPolicy, TokenRevocationService (policy, no libraries)
 │   ├── Services/                  # AuthService, UserService, PaymentService, SubscriptionPlanService,
 │   │                              # SubscriptionChecker, RevenueService (+ VnTime), VnpayPaymentService,
-│   │                              # AdService, RandomAdPlanner, PlaySessionService, ViewTrackingService, HomeSectionService, ...
+│   │                              # AdService, RandomAdPlanner, PlaySessionService, ViewTrackingService, HomeSectionService,
+│   │                              # BannerService, ...
 │   └── Validators/                # FluentValidation rules
 │
 ├── UIAMovie.Domain/               # Entities and constants (PaymentOrder, UserSubscription,
 │                                  # SubscriptionPlan, HomeSection + HomeSectionItem,
-│                                  # HomeSectionConstants, Roles)
+│                                  # HomeSectionConstants, Banner + BannerEvent, Roles)
 │
 └── UIAMovie.Infrastructure/       # External integrations and data access
     ├── AI/                        # Groq provider, rate limiter
     ├── Caching/                   # RedisCacheService
     ├── Configuration/             # Cloudinary, TMDB, VNPay options, SessionCleanupWorker
-    ├── Data/                      # DbContext, repositories (incl. HomeSectionRepository), migrations
+    ├── Data/                      # DbContext, repositories (incl. HomeSectionRepository, BannerRepository),
+    │                              # BannerContextProvider (viewer + plan eligibility for banners), migrations
     ├── Email/                     # EmailService, EmailQueue + worker, payment receipts
     ├── Messaging/                 # Realtime notification sender
     └── Security/                  # JwtTokenGenerator, TwoFactorAuthProvider (library-specific mechanisms)
@@ -1258,6 +1438,16 @@ Schema changes go in their own commit together with the generated migration (`do
 - [ ] Index `HomeSectionItems (HomeSectionId, Order)` and `HomeSections (IsActive, SortOrder)`
 - [ ] Optional exclusion of titles already shown by an earlier section (de-duplicate Auto rows against each other)
 - [ ] Unit tests: `ValidateAndNormalizeAsync` (accent, limits, duplicates, missing ids), `EffectiveLimit` per layout, window filtering after the cache, and each `IAutoRule` ordering (including the negated `upcoming` key and the mixed movie / TV merge)
+
+**Banners**
+- [ ] Event de-duplication across requests (today only within one batch; the frontend sends one `view` per banner per session). Consider a unique index on `(BannerId, Type, SessionId)` for `view`
+- [ ] Index `BannerEvents (BannerId, Type, CreatedAt)` and `Banners (Placement, IsActive, DisplayOrder)`
+- [ ] `BannerRepository.GetStatsAsync` looks up each banner with `FirstOrDefault` over the aggregate lists (O(banners × rows)); join in the database or use dictionaries
+- [ ] Interpret the stats `from` / `to` as Vietnam dates (as the revenue reports do) instead of UTC
+- [ ] Server-side A/B selection, device and genre filtering, so the public list is already final and the frontend only renders
+- [ ] Server-side frequency capping for signed-in users (today it lives in the browser)
+- [ ] Unify the error shape: banners return `{ "error": … }`, the rest of the API returns `{ "message": … }`
+- [ ] Unit tests: `AudienceMatches`, time window filtering after the cache, `ToUtc` (Utc / Local / Unspecified = Vietnam time), `ResolveLink`, `ResolveAttributionAsync`, `BannerContextProvider.IsEligible` (kept in sync with `create-order`), `NormalizeGenres` / `NormalizeTargetPages`, update semantics (`""` vs `null` vs `Clear*`)
 
 - [ ] **Play sessions on several instances** — move the per-session lock and read-modify-write in `PlaySessionService` (and the semaphores in `ViewTrackingService`) to Redis, or make the ad progress an atomic Redis operation
 - [ ] Unit tests for `PlaySessionService`: `AdsPending` while a pre-roll is open, `TooEarly`, `OutOfOrder`, foreign owner → `Forbidden`, mid-roll blocking `ValidateHeartbeatAsync`, Premium → `RequiresAds = false`

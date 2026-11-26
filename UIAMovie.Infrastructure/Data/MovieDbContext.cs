@@ -54,6 +54,8 @@ public class MovieDbContext : DbContext
     public DbSet<EpisodeSubtitle> EpisodeSubtitles { get; set; }
 
     public DbSet<Advertisement> Advertisements { get; set; }
+    public DbSet<Banner> Banners { get; set; }
+    public DbSet<BannerEvent> BannerEvents { get; set; }
     public DbSet<GlobalAdSlot> GlobalAdSlots { get; set; }
     public DbSet<AdContentOverride> AdContentOverrides { get; set; }
 
@@ -685,5 +687,45 @@ public class MovieDbContext : DbContext
             entity.Property(e => e.ContentType).HasMaxLength(16).IsRequired();
             entity.HasIndex(e => new { e.HomeSectionId, e.ContentType, e.ContentId }).IsUnique();
         });
+        modelBuilder.Entity<Banner>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Title).HasMaxLength(150).IsRequired();
+            entity.Property(e => e.Subtitle).HasMaxLength(300);
+            entity.Property(e => e.CtaText).HasMaxLength(40);
+            entity.Property(e => e.BadgeText).HasMaxLength(20);
+            entity.Property(e => e.AltText).HasMaxLength(200);
+            entity.Property(e => e.BackgroundColor).HasMaxLength(7);
+            entity.Property(e => e.ImageUrl).HasMaxLength(500).IsRequired();
+            entity.Property(e => e.ImageCloudinaryPublicId).HasMaxLength(200);
+            entity.Property(e => e.MobileImageUrl).HasMaxLength(500);
+            entity.Property(e => e.MobileImageCloudinaryPublicId).HasMaxLength(200);
+            entity.Property(e => e.LinkUrl).HasMaxLength(500);
+            entity.Property(e => e.PlanId).HasMaxLength(100);
+            entity.Property(e => e.Placement).HasConversion<string>().HasMaxLength(20);
+            entity.Property(e => e.Audience).HasConversion<string>().HasMaxLength(20)
+                  .HasDefaultValue(BannerAudience.All); // banner cũ -> All
+            entity.Property(e => e.FitMode).HasMaxLength(10).IsRequired()
+                  .HasDefaultValue(BannerFitModes.Contain); // banner cũ -> contain
+            entity.Property(e => e.Device).HasMaxLength(10).IsRequired()
+                  .HasDefaultValue(BannerDevices.All);      // banner cũ -> mọi thiết bị
+            entity.Property(e => e.TargetGenres).HasMaxLength(300);
+            entity.Property(e => e.AbGroup).HasMaxLength(40);
+            entity.Property(e => e.TargetPages).HasMaxLength(1000);
+
+            entity.HasIndex(e => new { e.Placement, e.IsActive, e.DisplayOrder });
+            entity.HasIndex(e => e.PlanId);
+        });
+
+        modelBuilder.Entity<BannerEvent>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Type).HasMaxLength(10).IsRequired();
+            entity.Property(e => e.SessionId).HasMaxLength(64);
+            entity.HasOne<Banner>().WithMany().HasForeignKey(e => e.BannerId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(e => new { e.BannerId, e.Type, e.CreatedAt });
+        });
+
+        modelBuilder.Entity<PaymentOrder>().HasIndex(o => o.BannerId);
     }
 }
